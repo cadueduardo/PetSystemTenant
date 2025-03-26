@@ -230,14 +230,23 @@ function AuthenticatedLayout({ children, currentPageName }) {
 
   const validateAndLoadTenant = async () => {
     try {
-      const tenantId = localStorage.getItem('current_tenant');
+      const accessUrl = localStorage.getItem('current_tenant');
       
       if (publicPages.includes(currentPageName)) {
         setIsLoading(false);
         return;
       }
 
-      if (!tenantId) {
+      // Verificar autenticação
+      const isAuthenticated = await checkAuth();
+      if (!isAuthenticated) {
+        console.log('Usuário não autenticado, redirecionando para login');
+        navigate(createPageUrl("Login"));
+        setIsLoading(false);
+        return;
+      }
+
+      if (!accessUrl) {
         if (currentPageName !== "Dashboard" && currentPageName !== "Settings") {
           navigate(createPageUrl("Landing"));
         }
@@ -246,7 +255,7 @@ function AuthenticatedLayout({ children, currentPageName }) {
       }
 
       try {
-        const tenant = await Tenant.get(tenantId);
+        const tenant = await Tenant.get(accessUrl);
         if (tenant) {
           setTenant(tenant);
           setSelectedModules(tenant.selected_modules || []);
@@ -255,8 +264,8 @@ function AuthenticatedLayout({ children, currentPageName }) {
           setIsLoading(false);
         } else {
           const newTenant = {
-            id: tenantId,
-            company_name: tenantId,
+            access_url: accessUrl,
+            company_name: accessUrl,
             selected_modules: ["clinic_management", "petshop"]
           };
           await Tenant.create(newTenant);
@@ -266,7 +275,7 @@ function AuthenticatedLayout({ children, currentPageName }) {
           localStorage.setItem('tenant_modules', JSON.stringify(newTenant.selected_modules));
 
           const defaultCustomization = {
-            id: tenantId,
+            tenant_id: newTenant.id,
             primary_color: '#3B82F6',
             secondary_color: '#1E40AF',
             use_logo_in_header: false,
@@ -279,27 +288,30 @@ function AuthenticatedLayout({ children, currentPageName }) {
         }
       } catch (error) {
         console.error("Erro ao carregar tenant específico:", error);
-        const newTenant = {
-          id: tenantId,
-          company_name: tenantId,
-          selected_modules: ["clinic_management", "petshop"]
-        };
-        await Tenant.create(newTenant);
-        setTenant(newTenant);
-        setSelectedModules(newTenant.selected_modules);
-        localStorage.setItem('tenant_name', newTenant.company_name);
-        localStorage.setItem('tenant_modules', JSON.stringify(newTenant.selected_modules));
+        if (error.message === 'Usuário não autenticado') {
+          navigate(createPageUrl("Login"));
+        } else {
+          const newTenant = {
+            access_url: accessUrl,
+            company_name: accessUrl,
+            selected_modules: ["clinic_management", "petshop"]
+          };
+          await Tenant.create(newTenant);
+          setTenant(newTenant);
+          setSelectedModules(newTenant.selected_modules);
+          localStorage.setItem('tenant_name', newTenant.company_name);
+          localStorage.setItem('tenant_modules', JSON.stringify(newTenant.selected_modules));
 
-        const defaultCustomization = {
-          id: tenantId,
-          primary_color: '#3B82F6',
-          secondary_color: '#1E40AF',
-          use_logo_in_header: false,
-          company_logo_url: null
-        };
-        await Customization.create(defaultCustomization);
-        setCustomization(defaultCustomization);
-        
+          const defaultCustomization = {
+            tenant_id: newTenant.id,
+            primary_color: '#3B82F6',
+            secondary_color: '#1E40AF',
+            use_logo_in_header: false,
+            company_logo_url: null
+          };
+          await Customization.create(defaultCustomization);
+          setCustomization(defaultCustomization);
+        }
         setIsLoading(false);
       }
     } catch (error) {
