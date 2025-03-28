@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -29,6 +28,7 @@ import { ptBR } from "date-fns/locale";
 
 import PetForm from "../pets/PetForm";
 import PetImageModal from "../pets/PetImageModal";
+import { Pet } from "@/lib/models/pet";
 
 export default function PetList({ pets, customerId, tenantId, onPetAdded }) {
   const navigate = useNavigate();
@@ -124,35 +124,32 @@ export default function PetList({ pets, customerId, tenantId, onPetAdded }) {
   const handleFormSubmit = async (petData) => {
     setIsAddingPet(true);
     
-    // Se for loja demo, adicionar o pet direto à lista
-    if (storeParam === 'demo') {
-      const demoPet = {
-        ...petData,
-        id: `demo-pet-${Date.now()}`,
-        tenant_id: "demo-tenant",
-        owner_id: customerId
-      };
-      
-      setTimeout(() => {
-        onPetAdded(demoPet);
-        setShowPetForm(false);
-        setIsAddingPet(false);
-        
-        toast({
-          title: "Pet adicionado com sucesso!",
-          description: `${petData.name} foi adicionado à lista de pets.`
-        });
-      }, 1000);
-      
-      return;
-    }
-    
-    // Lógica para ambiente real
     try {
-      // Código para salvar o pet real
-      // ...
+      let newPet;
       
-      // Se chegou até aqui, assumimos que funcionou
+      // Se for loja demo, adicionar o pet direto à lista
+      if (storeParam === 'demo') {
+        newPet = {
+          ...petData,
+          id: `demo-pet-${Date.now()}`,
+          tenant_id: "demo-tenant",
+          owner_id: customerId
+        };
+      } else {
+        // Lógica para ambiente real
+        newPet = await Pet.create({
+          ...petData,
+          owner_id: customerId,
+          tenant_id: tenantId
+        });
+      }
+      
+      // Atualiza a lista de pets
+      if (onPetAdded) {
+        await onPetAdded(newPet);
+      }
+      
+      // Fecha o modal
       setShowPetForm(false);
       
       toast({
@@ -270,25 +267,21 @@ export default function PetList({ pets, customerId, tenantId, onPetAdded }) {
         </div>
       )}
 
-      {showPetForm && (
-        <Dialog open={showPetForm} onOpenChange={setShowPetForm}>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Adicionar Novo Pet</DialogTitle>
-              <DialogDescription>
-                Preencha os dados do pet do cliente.
-              </DialogDescription>
-            </DialogHeader>
-            <PetForm 
-              customerId={customerId}
-              tenantId={tenantId || (storeParam === 'demo' ? "demo-tenant" : null)}
-              onSubmit={handleFormSubmit}
-              onCancel={() => setShowPetForm(false)}
-              isSubmitting={isAddingPet}
-            />
-          </DialogContent>
-        </Dialog>
-      )}
+      <Dialog open={showPetForm} onOpenChange={setShowPetForm}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Adicionar Novo Pet</DialogTitle>
+            <DialogDescription>
+              Preencha os dados do pet para cadastrá-lo.
+            </DialogDescription>
+          </DialogHeader>
+          <PetForm
+            customerId={customerId}
+            onSubmit={handleFormSubmit}
+            onCancel={() => setShowPetForm(false)}
+          />
+        </DialogContent>
+      </Dialog>
 
       {showImageModal && (
         <PetImageModal

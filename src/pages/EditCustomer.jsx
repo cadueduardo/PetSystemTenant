@@ -118,14 +118,32 @@ export default function EditCustomerPage() {
     loadData();
   };
 
-  const handlePetSave = () => {
-    setShowAddPetDialog(false);
-    setEditingPet(null);
-    loadPets();
-    toast({
-      title: "Pet salvo",
-      description: "As informações do pet foram salvas com sucesso."
-    });
+  const handlePetSave = async (newPet) => {
+    try {
+      // Atualiza a lista de pets imediatamente
+      if (newPet) {
+        setPets(prevPets => [...prevPets, newPet]);
+      } else {
+        // Se não houver novo pet (caso de edição), recarrega a lista
+        await loadPets();
+      }
+      
+      // Fecha o modal
+      setShowAddPetDialog(false);
+      setEditingPet(null);
+      
+      toast({
+        title: "Pet salvo",
+        description: "As informações do pet foram salvas com sucesso."
+      });
+    } catch (error) {
+      console.error("Erro ao salvar pet:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível salvar o pet.",
+        variant: "destructive"
+      });
+    }
   };
 
   const handleEditPet = (pet) => {
@@ -196,6 +214,9 @@ export default function EditCustomerPage() {
             <CardContent>
               <PetList 
                 pets={pets} 
+                customerId={customerId}
+                tenantId={currentTenant?.id}
+                onPetAdded={handlePetSave}
                 onEditPet={handleEditPet} 
                 onPetClick={handlePetClick}
               />

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -23,6 +22,7 @@ import { Pet } from "@/api/entities";
 import { HealthPlan } from "@/api/entities";
 import { toast } from "@/components/ui/use-toast";
 import { Loader2 } from "lucide-react"; // Adicionado para o loader
+import { uploadFile } from "@/api/upload";
 
 const breedsBySpecies = {
   dog: [
@@ -77,27 +77,30 @@ const breedsBySpecies = {
   ]
 };
 
-export default function PetForm({ onSuccess, customerId }) {
+export default function PetForm({ pet, onSubmit, onCancel, customerId }) {
   const [isLoading, setIsLoading] = useState(false);
   const [healthPlans, setHealthPlans] = useState([]);
   const [dateInputValue, setDateInputValue] = useState("");
   const [formData, setFormData] = useState({
-    name: "",
-    species: "",
-    breed: "",
-    gender: "",
-    birth_date: "",
-    health_plan_id: "",
-    image_url: "",
-    owner_id: customerId,
+    name: pet?.name || "",
+    species: pet?.species || "",
+    breed: pet?.breed || "",
+    gender: pet?.gender || "",
+    birth_date: pet?.birth_date || "",
+    health_plan_id: pet?.health_plan_id || "",
+    image_url: pet?.image_url || "",
+    owner_id: pet?.owner_id || customerId,
     tenant_id: localStorage.getItem('current_tenant')
   });
-  const [imagePreview, setImagePreview] = useState(null);
+  const [imagePreview, setImagePreview] = useState(pet?.image_url || null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
   useEffect(() => {
     loadHealthPlans();
-  }, []);
+    if (pet?.birth_date) {
+      setDateInputValue(format(new Date(pet.birth_date), 'dd/MM/yyyy'));
+    }
+  }, [pet]);
 
   const loadHealthPlans = async () => {
     try {
@@ -127,19 +130,20 @@ export default function PetForm({ onSuccess, customerId }) {
 
     setIsUploadingImage(true);
     try {
-      const { UploadFile } = await import("@/api/integrations");
-      const response = await UploadFile({ file });
-      
-      setFormData(prev => ({
-        ...prev,
-        image_url: response.file_url
-      }));
-      
+      // Primeiro vamos criar o preview da imagem
       const reader = new FileReader();
       reader.onloadend = () => {
         setImagePreview(reader.result);
       };
       reader.readAsDataURL(file);
+
+      // Agora vamos fazer o upload
+      const response = await uploadFile(file);
+      
+      setFormData(prev => ({
+        ...prev,
+        image_url: response.file_url
+      }));
 
       toast({
         title: "Sucesso",
@@ -152,6 +156,8 @@ export default function PetForm({ onSuccess, customerId }) {
         description: "Não foi possível fazer upload da imagem.",
         variant: "destructive"
       });
+      // Limpa o preview em caso de erro
+      setImagePreview(null);
     } finally {
       setIsUploadingImage(false);
     }
@@ -199,15 +205,21 @@ export default function PetForm({ onSuccess, customerId }) {
         tenant_id: localStorage.getItem('current_tenant')
       };
 
-      await Pet.create(petData);
+      if (onSubmit) {
+        await onSubmit(petData);
+      } else {
+        // Se não houver onSubmit, significa que é uma criação
+        await Pet.create(petData);
+      }
       
       toast({
         title: "Sucesso",
-        description: "Pet cadastrado com sucesso!"
+        description: "Pet salvo com sucesso!"
       });
 
-      if (onSuccess) {
-        onSuccess();
+      // Se houver onCancel, chama para fechar o modal
+      if (onCancel) {
+        onCancel();
       }
     } catch (error) {
       console.error("Erro ao salvar pet:", error);
