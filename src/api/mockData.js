@@ -38,63 +38,63 @@ const initialData = {
   ],
   services: [
     {
-      id: "serv1",
-      name: "Banho Completo",
-      category: "banho",
-      description: "Banho completo com shampoo e condicionador premium",
-      price: 80.00,
+      id: 'serv1',
+      name: 'Banho Completo',
+      category: 'banho',
+      description: 'Banho completo com shampoo e condicionador premium',
+      price: 80,
       duration: 60,
-      points: 8,
-      tenant_id: "default",
-      module: "petshop"
+      module: 'petshop',
+      tenant_id: 'default'
     },
     {
-      id: "serv2",
-      name: "Tosa Higiênica",
-      category: "tosa",
-      description: "Tosa das regiões íntimas, patas e face",
-      price: 50.00,
+      id: 'serv2',
+      name: 'Tosa Higiênica',
+      category: 'tosa',
+      description: 'Tosa das regiões íntimas, patas e face',
+      price: 50,
       duration: 30,
-      points: 5,
-      tenant_id: "default",
-      module: "petshop"
+      module: 'petshop',
+      tenant_id: 'default'
     },
     {
-      id: "serv3",
-      name: "Consulta Veterinária",
-      category: "consulta",
-      description: "Consulta de rotina com veterinário",
-      price: 120.00,
-      duration: 60,
-      points: 12,
-      tenant_id: "default",
-      module: "clinica"
-    },
-    {
-      id: "serv4",
-      name: "Vacinação",
-      category: "vacina",
-      description: "Aplicação de vacinas",
-      price: 70.00,
+      id: 'serv3',
+      name: 'Consulta Veterinária',
+      category: 'consulta',
+      description: 'Consulta de rotina com veterinário',
+      price: 120,
       duration: 30,
-      points: 7,
-      tenant_id: "default",
-      module: "clinica"
+      module: 'clinica',
+      tenant_id: 'default'
     },
     {
-      id: "serv5",
-      name: "Exame de Sangue",
-      category: "exame",
-      description: "Coleta e análise de sangue",
-      price: 150.00,
-      duration: 45,
-      points: 15,
-      tenant_id: "default",
-      module: "clinica"
+      id: 'serv4',
+      name: 'Vacinação',
+      category: 'vacina',
+      description: 'Aplicação de vacinas',
+      price: 70,
+      duration: 15,
+      module: 'clinica',
+      tenant_id: 'default'
+    },
+    {
+      id: 'serv5',
+      name: 'Exame de Sangue',
+      category: 'exame',
+      description: 'Coleta e análise de sangue',
+      price: 150,
+      duration: 30,
+      module: 'clinica',
+      tenant_id: 'default'
     }
   ],
   appointments: [],
-  queueServices: []
+  queueServices: [],
+  allergies: [],
+  vaccines: [],
+  medications: [],
+  petshopData: [],
+  medicalRecords: []
 };
 
 // Inicializa o armazenamento se não existir
@@ -580,13 +580,19 @@ export const ServiceMock = {
 
     // Se não houver tenant_id no filtro, usa o tenant atual
     const tenantId = filters.tenant_id || localStorage.getItem('current_tenant') || "default";
+    console.log('Filtrando serviços para tenant:', tenantId);
     filteredServices = filteredServices.filter(s => s.tenant_id === tenantId);
+    console.log('Serviços após filtro de tenant:', filteredServices);
 
     // Filtra por módulo (clinica ou petshop)
     if (filters.module) {
+      console.log('Filtrando por módulo:', filters.module);
       filteredServices = filteredServices.filter(s => s.module === filters.module);
-      console.log(`Filtrado por módulo: ${filters.module}, resultados: ${filteredServices.length}`);
+      console.log('Serviços após filtro de módulo:', filteredServices);
     }
+
+    // Remove serviços sem ID para evitar duplicatas
+    filteredServices = filteredServices.filter(s => s.id);
 
     return filteredServices;
   },

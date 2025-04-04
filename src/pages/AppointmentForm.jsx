@@ -1,14 +1,11 @@
-import React, { useState, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
-import { format, addHours } from "date-fns";
-import { ptBR } from "date-fns/locale";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { format } from "date-fns";
 import { createPageUrl } from "@/utils";
 import { Appointment } from "@/api/entities";
 import { QueueService } from "@/api/entities";
-import { Service } from "@/api/entities";
 import { Pet } from "@/api/entities";
-import { Customer } from "@/api/entities";
-import { STORAGE_KEY, getMockData } from "@/api/mockData";
+import useCustomerStore from "@/stores/customerStore";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -43,21 +40,17 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/components/ui/use-toast";
 import { CalendarIcon, Loader2 } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Label } from "@/components/ui/label";
+import { getMockData } from "@/api/mockData";
 
 export default function AppointmentForm() {
   const navigate = useNavigate();
-  const location = useLocation();
   const [isLoading, setIsLoading] = useState(false);
   const [pets, setPets] = useState([]);
-  const [customers, setCustomers] = useState([]);
   const [services, setServices] = useState([]);
-  const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [addToQueue, setAddToQueue] = useState(true);
-  const [appointmentDuration, setAppointmentDuration] = useState(60); // 60 minutos como padrão
+  const [appointmentDuration, setAppointmentDuration] = useState(60);
   const [isEditing, setIsEditing] = useState(false);
   const [appointmentId, setAppointmentId] = useState(null);
-  const [serviceType, setServiceType] = useState("clinica");
 
   // Obter parâmetros da URL
   const urlParams = new URLSearchParams(window.location.search);
@@ -65,16 +58,8 @@ export default function AppointmentForm() {
   const customerIdParam = urlParams.get('customer_id');
   const storeParam = urlParams.get('store') || localStorage.getItem('current_tenant');
 
-  const [formData, setFormData] = useState({
-    date: "",
-    time: "",
-    customer_id: "",
-    pet_id: "",
-    service_id: "",
-    notes: "",
-    tenant_id: localStorage.getItem('current_tenant') || "",
-    service_type: "clinica" // Novo campo para tipo de serviço
-  });
+  // Usando as stores Zustand
+  const { customers, fetchCustomers } = useCustomerStore();
 
   const form = useForm({
     defaultValues: {
@@ -93,7 +78,6 @@ export default function AppointmentForm() {
     console.log('Valor inicial do service_type:', form.getValues("service_type"));
     
     loadData();
-    loadServices(); // Carrega os serviços inicialmente
 
     // Se temos customer_id na URL, carregar os pets desse cliente
     if (customerIdParam) {
@@ -103,7 +87,6 @@ export default function AppointmentForm() {
     // Adicionar listener para mudanças no localStorage
     const handleStorageChange = () => {
       loadData();
-      loadServices(); // Recarrega os serviços quando o localStorage muda
     };
 
     window.addEventListener('storage', handleStorageChange);
@@ -121,10 +104,6 @@ export default function AppointmentForm() {
     };
   }, []);
 
-  useEffect(() => {
-    loadServices();
-  }, [serviceType]);
-
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -141,19 +120,8 @@ export default function AppointmentForm() {
         return;
       }
       
-      // Carregar clientes usando a entidade Customer
-      const customersData = await Customer.filter({ tenant_id: tenantId });
-      const serviceType = form.getValues("service_type");
-      const servicesData = await Service.filter({ 
-        tenant_id: tenantId,
-        module: serviceType
-      });
-      
-      console.log('Clientes carregados:', customersData);
-      console.log('Serviços carregados:', servicesData);
-      
-      setCustomers(customersData);
-      setServices(servicesData);
+      // Carregando dados usando as stores
+      await fetchCustomers({ tenant_id: tenantId });
       
     } catch (error) {
       console.error("Erro ao carregar dados:", error);
@@ -164,29 +132,6 @@ export default function AppointmentForm() {
       });
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const loadServices = async () => {
-    try {
-      const tenantId = localStorage.getItem('current_tenant');
-      console.log('Carregando serviços para:', { tenantId, serviceType });
-      
-      // Carrega serviços usando o entity Service
-      const servicesData = await Service.filter({ 
-        tenant_id: tenantId,
-        module: serviceType
-      });
-      
-      console.log('Serviços carregados:', servicesData);
-      setServices(servicesData);
-    } catch (error) {
-      console.error("Erro ao carregar serviços:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível carregar os serviços.",
-        variant: "destructive"
-      });
     }
   };
 
@@ -206,16 +151,11 @@ export default function AppointmentForm() {
     }
   };
 
-  const handleServiceChange = (serviceId) => {
-    form.setValue("service_id", serviceId);
-  };
-
   const handleServiceTypeChange = (type) => {
     console.log('Mudando tipo de serviço para:', type);
     form.setValue("service_type", type);
     form.setValue("service_id", ""); // Limpa o serviço selecionado
-    setServiceType(type);
-    console.log('Estado serviceType atualizado para:', type);
+    loadServices(); // Carrega os serviços após atualizar o estado
   };
 
   const loadAppointment = async (id) => {
@@ -224,18 +164,20 @@ export default function AppointmentForm() {
       console.log('Dados do agendamento:', appointment);
       
       // Carregar dados do cliente e pet
-      const customer = await Customer.get(appointment.customer_id);
+      await fetchCustomers({ tenant_id: localStorage.getItem('current_tenant') });
       const pet = await Pet.get(appointment.pet_id);
       
       // Carregar serviços do tipo correto
-      const services = await Service.filter({ 
-        tenant_id: localStorage.getItem('current_tenant'),
-        module: appointment.type 
-      });
+      const mockData = getMockData();
+      const servicesData = mockData.services.filter(service => 
+        service.tenant_id === localStorage.getItem('current_tenant') && 
+        service.module === appointment.type
+      );
+      console.log('Serviços carregados:', servicesData);
+      setServices(servicesData);
       
-      setCustomers([customer]);
+      // Atualizar pets
       setPets([pet]);
-      setServices(services);
       
       // Preencher o formulário
       form.reset({
@@ -250,7 +192,7 @@ export default function AppointmentForm() {
       });
 
       // Definir a duração do serviço
-      const selectedService = services.find(s => s.id === appointment.service_id);
+      const selectedService = servicesData.find(s => s.id === appointment.service_id);
       if (selectedService) {
         setAppointmentDuration(selectedService.duration || 60);
       }
@@ -260,6 +202,41 @@ export default function AppointmentForm() {
       toast({
         title: "Erro",
         description: "Não foi possível carregar os dados do agendamento.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const loadServices = async () => {
+    try {
+      const tenantId = localStorage.getItem('current_tenant');
+      const serviceType = form.getValues("service_type");
+      console.log('Carregando serviços para:', { tenantId, serviceType });
+      
+      const mockData = getMockData();
+      const filteredServices = mockData.services.filter(service => 
+        service.tenant_id === tenantId && service.module === serviceType
+      );
+      
+      // Filtrar IDs duplicados
+      const uniqueServices = filteredServices.reduce((acc, current) => {
+        const x = acc.find(item => item.id === current.id);
+        if (!x) {
+          return acc.concat([current]);
+        } else {
+          console.warn('Serviço duplicado encontrado e removido:', current);
+          return acc;
+        }
+      }, []);
+      
+      console.log('Serviços carregados (únicos):', uniqueServices);
+      setServices(uniqueServices);
+      
+    } catch (error) {
+      console.error("Erro ao carregar serviços:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível carregar os serviços.",
         variant: "destructive"
       });
     }
@@ -359,8 +336,8 @@ export default function AppointmentForm() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {customers.map(customer => (
-                            <SelectItem key={customer.id} value={customer.id}>
+                          {customers.map((customer, index) => (
+                            <SelectItem key={index} value={customer.id}>
                               {customer.full_name}
                             </SelectItem>
                           ))}
@@ -389,8 +366,8 @@ export default function AppointmentForm() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {pets.map(pet => (
-                            <SelectItem key={pet.id} value={pet.id}>
+                          {pets.map((pet, index) => (
+                            <SelectItem key={index} value={pet.id}>
                               {pet.name} ({pet.species} - {pet.breed})
                             </SelectItem>
                           ))}
@@ -445,7 +422,10 @@ export default function AppointmentForm() {
                         </FormControl>
                         <SelectContent>
                           {services.map((service) => (
-                            <SelectItem key={`service-${service.id}`} value={service.id}>
+                            <SelectItem 
+                              key={service.id}
+                              value={service.id}
+                            >
                               {service.name} - {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(service.price)}
                             </SelectItem>
                           ))}

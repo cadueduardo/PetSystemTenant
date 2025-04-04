@@ -20,7 +20,6 @@ import {
   Clock,
   X,
   Edit,
-  ArrowRight,
   RefreshCw,
   Plus
 } from "lucide-react";
@@ -45,7 +44,7 @@ const getStatusBadge = (status) => {
 export default function CalendarPage() {
   const navigate = useNavigate();
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [appointments, setAppointments] = useState([]);
+  const [allAppointments, setAllAppointments] = useState([]);
   const [queueServices, setQueueServices] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [currentTab, setCurrentTab] = useState("all");
@@ -83,11 +82,8 @@ export default function CalendarPage() {
         date: formattedDate
       });
       
-      console.log('Agendamentos carregados:', appointmentsData);
-      
-      const activeAppointments = appointmentsData.filter(app => app.status !== "cancelled");
-      console.log('Agendamentos ativos:', activeAppointments);
-      setAppointments(activeAppointments);
+      console.log('Todos agendamentos carregados:', appointmentsData);
+      setAllAppointments(appointmentsData);
       
       const queueServicesData = await QueueService.filter({
         tenant_id: tenantId,
@@ -117,32 +113,12 @@ export default function CalendarPage() {
     return queueServices.filter(service => service.status !== "completed");
   };
 
-  const handleAddToQueue = async (appointment) => {
-    try {
-      const queueService = {
-        appointment_id: appointment.id,
-        pet_id: appointment.pet_id,
-        customer_id: appointment.customer_id,
-        service_id: appointment.service_id,
-        appointment_date: appointment.date,
-        status: "scheduled",
-        tenant_id: localStorage.getItem('current_tenant')
-      };
+  const getActiveAppointments = () => {
+    return allAppointments.filter(app => app.status !== 'cancelled');
+  };
 
-      await QueueService.create(queueService);
-      toast({
-        title: "Sucesso",
-        description: "Serviço adicionado à fila com sucesso!"
-      });
-      loadData();
-    } catch (error) {
-      console.error("Erro ao adicionar à fila:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível adicionar o serviço à fila.",
-        variant: "destructive"
-      });
-    }
+  const getCanceledAppointments = () => {
+    return allAppointments.filter(app => app.status === 'cancelled');
   };
 
   if (isLoading) {
@@ -209,7 +185,7 @@ export default function CalendarPage() {
               <div className="grid grid-cols-2 gap-2">
                 <div className="p-3 bg-blue-50 rounded-lg">
                   <div className="text-2xl font-bold text-blue-700">
-                    {appointments.length}
+                    {allAppointments.length}
                   </div>
                   <div className="text-sm text-blue-600">Agendamentos</div>
                 </div>
@@ -232,6 +208,7 @@ export default function CalendarPage() {
                 <TabsTrigger value="appointments">Agendamentos</TabsTrigger>
                 <TabsTrigger value="queue">Fila de Atendimento</TabsTrigger>
                 <TabsTrigger value="completed">Atendimentos Concluídos</TabsTrigger>
+                <TabsTrigger value="canceled">Cancelados</TabsTrigger>
               </TabsList>
               <Button variant="ghost" onClick={loadData} size="icon">
                 <RefreshCw className="h-4 w-4" />
@@ -239,16 +216,28 @@ export default function CalendarPage() {
             </div>
 
             <TabsContent value="all" className="space-y-4">
-              {appointments.length === 0 && queueServices.length === 0 ? (
+              {getActiveAppointments().length === 0 && getActiveServices().length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
-                  Nenhum agendamento ou serviço para este dia.
+                  Nenhum agendamento ativo ou serviço em atendimento para este dia.
                 </div>
               ) : (
                 <>
                   {getActiveServices().map((service) => (
                     <QueueServiceCard
-                      key={service.id}
+                      key={`queue-${service.id}`}
                       service={service}
+                      isQueueItem={true}
+                      onLoadData={loadData}
+                      onNavigate={navigate}
+                    />
+                  ))}
+                  {getActiveAppointments()
+                    .filter(app => !queueServices.some(q => q.appointment_id === app.id))
+                    .map((appointment) => (
+                    <QueueServiceCard
+                      key={`appt-${appointment.id}`}
+                      service={appointment}
+                      isQueueItem={false}
                       onLoadData={loadData}
                       onNavigate={navigate}
                     />
@@ -258,16 +247,17 @@ export default function CalendarPage() {
             </TabsContent>
 
             <TabsContent value="appointments" className="space-y-4">
-              {appointments.length === 0 ? (
+              {getActiveAppointments().length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
                   Nenhum agendamento para este dia.
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {appointments.map((appointment) => (
+                  {getActiveAppointments().map((appointment) => (
                     <QueueServiceCard
                       key={appointment.id}
                       service={appointment}
+                      isQueueItem={false}
                       onLoadData={loadData}
                       onNavigate={navigate}
                     />
@@ -286,6 +276,7 @@ export default function CalendarPage() {
                   <QueueServiceCard
                     key={service.id}
                     service={service}
+                    isQueueItem={true}
                     onLoadData={loadData}
                     onNavigate={navigate}
                   />
@@ -303,6 +294,25 @@ export default function CalendarPage() {
                   <QueueServiceCard
                     key={service.id}
                     service={service}
+                    isQueueItem={true}
+                    onLoadData={loadData}
+                    onNavigate={navigate}
+                  />
+                ))
+              )}
+            </TabsContent>
+
+            <TabsContent value="canceled" className="space-y-4">
+              {getCanceledAppointments().length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  Nenhum agendamento cancelado para este dia.
+                </div>
+              ) : (
+                getCanceledAppointments().map((appointment) => (
+                  <QueueServiceCard
+                    key={appointment.id}
+                    service={appointment}
+                    isQueueItem={false}
                     onLoadData={loadData}
                     onNavigate={navigate}
                   />
@@ -316,7 +326,7 @@ export default function CalendarPage() {
   );
 }
 
-function QueueServiceCard({ service, onLoadData, onNavigate }) {
+function QueueServiceCard({ service, isQueueItem, onLoadData, onNavigate }) {
   const formatServiceDate = (dateString) => {
     try {
       const date = new Date(dateString);
@@ -336,22 +346,29 @@ function QueueServiceCard({ service, onLoadData, onNavigate }) {
   console.log('Dados do pet:', pet);
   console.log('Dados do serviço:', service);
 
+  const displayDate = isQueueItem ? service.appointment_date : service.date;
+
   const handleCancel = async () => {
     try {
-      await QueueService.update(service.id, {
-        ...service,
+      console.log("Tentando cancelar agendamento com ID:", service.appointment_id);
+      if (!service.appointment_id) {
+        console.error("Erro: ID do agendamento não encontrado no serviço:", service);
+        toast({ title: "Erro", description: "ID do agendamento não encontrado.", variant: "destructive" });
+        return;
+      }
+      await Appointment.update(service.appointment_id, { 
         status: "cancelled"
       });
       toast({
         title: "Sucesso",
-        description: "Serviço cancelado com sucesso!"
+        description: "Agendamento cancelado com sucesso!"
       });
       onLoadData();
     } catch (error) {
-      console.error("Erro ao cancelar serviço:", error);
+      console.error("Erro ao cancelar agendamento:", error);
       toast({
         title: "Erro",
-        description: "Não foi possível cancelar o serviço.",
+        description: "Não foi possível cancelar o agendamento.",
         variant: "destructive"
       });
     }
@@ -370,7 +387,7 @@ function QueueServiceCard({ service, onLoadData, onNavigate }) {
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <Badge variant="outline">
-                  {formatServiceDate(service.appointment_date)}
+                  {formatServiceDate(displayDate)}
                 </Badge>
                 {getStatusBadge(service.status)}
               </div>
@@ -411,8 +428,10 @@ QueueServiceCard.propTypes = {
     pet_id: PropTypes.string,
     customer_id: PropTypes.string,
     status: PropTypes.string,
-    appointment_date: PropTypes.string
+    appointment_date: PropTypes.string,
+    date: PropTypes.string
   }).isRequired,
+  isQueueItem: PropTypes.bool.isRequired,
   onLoadData: PropTypes.func.isRequired,
   onNavigate: PropTypes.func.isRequired
 };

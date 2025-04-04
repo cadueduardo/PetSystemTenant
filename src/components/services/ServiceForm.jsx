@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
+import PropTypes from "prop-types";
 import { Service } from "@/api/entities";
-import { STORAGE_KEY, getMockData } from "@/api/mockData";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,12 +20,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/use-toast";
-import { Loader2, Upload } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { UploadFile } from "@/api/integrations";
 
-export default function ServiceForm({ open, onOpenChange, onSuccess, service }) {
+const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedImage, setSelectedImage] = useState(null);
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -72,7 +71,6 @@ export default function ServiceForm({ open, onOpenChange, onSuccess, service }) 
   const handleImageChange = async (e) => {
     const file = e.target.files[0];
     if (file) {
-      setSelectedImage(file);
       try {
         const { file_url } = await UploadFile({ file });
         setFormData(prev => ({
@@ -132,18 +130,6 @@ export default function ServiceForm({ open, onOpenChange, onSuccess, service }) 
           description: "Serviço criado com sucesso!"
         });
       }
-      
-      // Atualiza os dados mockados
-      const mockData = getMockData();
-      if (service?.id) {
-        const index = mockData.services.findIndex(s => s.id === service.id);
-        if (index !== -1) {
-          mockData.services[index] = serviceData;
-        }
-      } else {
-        mockData.services.push(serviceData);
-      }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(mockData));
       
       onSuccess();
       onOpenChange(false);
@@ -330,4 +316,13 @@ export default function ServiceForm({ open, onOpenChange, onSuccess, service }) 
       </DialogContent>
     </Dialog>
   );
-}
+};
+
+ServiceForm.propTypes = {
+  service: PropTypes.object,
+  open: PropTypes.bool.isRequired,
+  onOpenChange: PropTypes.func.isRequired,
+  onSuccess: PropTypes.func.isRequired,
+};
+
+export default ServiceForm;
