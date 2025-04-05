@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { PurchaseHistory } from "@/api/entities";
+import { generateUniqueId } from "@/api/mockData";
 import {
   Dialog,
   DialogContent,
@@ -102,12 +103,14 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer, onSu
 
     try {
       const purchaseData = {
+        id: generateUniqueId(),
         customer_id: customer.id,
         purchase_date: new Date().toISOString(),
         total_amount: total,
         payment_method: paymentMethod,
         payment_status: "paid",
         items: cart.map(item => ({
+          id: generateUniqueId(),
           product_id: item.id,
           product_name: item.name,
           quantity: item.quantity,

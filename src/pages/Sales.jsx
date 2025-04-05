@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -190,7 +189,7 @@ export default function SalesPage() {
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {filteredProducts.map(product => (
                           <Card
-                            key={product.id}
+                            key={`product-${product.id}`}
                             className="cursor-pointer hover:bg-gray-50"
                             onClick={() => addToCart(product, 'product')}
                           >
@@ -239,7 +238,7 @@ export default function SalesPage() {
                           )
                           .map(service => (
                             <Card
-                              key={service.id}
+                              key={`service-${service.id}`}
                               className="cursor-pointer hover:bg-gray-50"
                               onClick={() => addToCart(service, 'service')}
                             >

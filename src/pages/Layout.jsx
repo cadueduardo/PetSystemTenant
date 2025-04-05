@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useState } from "react";
+import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -17,7 +17,8 @@ import {
   X,
   Moon,
   Sun,
-  Clock
+  Clock,
+  Stethoscope
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import PropTypes from 'prop-types';
@@ -37,7 +38,6 @@ export default function Layout({ children, currentPageName }) {
 }
 
 function AuthenticatedLayout({ children, currentPageName }) {
-  const navigate = useNavigate();
   const { theme, setTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [storeParam] = useState(localStorage.getItem('current_tenant') || '');
@@ -110,6 +110,16 @@ function AuthenticatedLayout({ children, currentPageName }) {
             >
               <Calendar className="h-5 w-5" />
               <span>Agenda</span>
+            </Link>
+
+            <Link
+              to={getPageUrl("LiveVetDashboard")}
+              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
+                currentPageName === "LiveVetDashboard" ? "bg-accent font-medium" : ""
+              }`}
+            >
+              <Stethoscope className="h-5 w-5" />
+              <span>Live Vet</span>
             </Link>
 
             <Link

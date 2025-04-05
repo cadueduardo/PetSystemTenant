@@ -1,9 +1,9 @@
-
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Tenant } from "@/api/entities";
 import { User } from "@/api/entities";
+import { TransportServiceMock as TransportService } from "@/api/entities";
 import { toast } from "@/components/ui/use-toast";
 import {
   Card,
@@ -162,6 +162,32 @@ export default function TransportServicesPage() {
       }
       
       // Código para carregamento de dados reais...
+      const tenants = await safeApiCall(Tenant, 'filter', { status: 'active' }, []);
+      const tenant = tenants.find(t => t.id === storeParam);
+      
+      if (!tenant) {
+        toast({
+          title: "Erro",
+          description: "Tenant não encontrado."
+        });
+        navigate(createPageUrl("Dashboard?store=" + (storeParam || "")));
+        return;
+      }
+      
+      setTenant(tenant);
+      
+      if (!tenant.selected_modules.includes("transport")) {
+        toast({
+          title: "Módulo não disponível",
+          description: "O módulo de transporte não está habilitado para este tenant."
+        });
+        navigate(createPageUrl("Dashboard?store=" + storeParam));
+        return;
+      }
+      
+      // Carrega os serviços de transporte
+      const transportServices = await safeApiCall(TransportService, 'filter', { tenant_id: tenant.id }, []);
+      setTransportServices(transportServices);
       
     } catch (error) {
       console.error("Erro ao carregar dados:", error);

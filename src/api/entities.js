@@ -1,4 +1,4 @@
-import { CustomerMock, PetMock, ServiceMock, AppointmentMock, QueueServiceMock, uploadFileMock } from './mockData';
+import { CustomerMock, PetMock, ServiceMock, AppointmentMock, QueueServiceMock, uploadFileMock, getMockData, setMockData, generateUniqueId } from './mockData';
 
 // Exporta as entidades com mocks
 export const Customer = CustomerMock;
@@ -7,6 +7,116 @@ export const Service = ServiceMock;
 export const Appointment = AppointmentMock;
 export const QueueService = QueueServiceMock;
 export const UploadFile = uploadFileMock;
+
+// Mock para Product
+export const ProductMock = {
+  list: async () => {
+    const data = getMockData();
+    return data.products || [];
+  },
+
+  get: async (id) => {
+    const data = getMockData();
+    const product = (data.products || []).find(p => p.id === id);
+    if (!product) throw new Error('Produto não encontrado');
+    return product;
+  },
+
+  filter: async (filters = {}) => {
+    const data = getMockData();
+    let filteredProducts = [...(data.products || [])];
+
+    if (filters.tenant_id) {
+      filteredProducts = filteredProducts.filter(p => p.tenant_id === filters.tenant_id);
+    }
+
+    return filteredProducts;
+  },
+
+  create: async (productData) => {
+    const data = getMockData();
+    const newProduct = {
+      id: generateUniqueId(),
+      ...productData,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    data.products = data.products || [];
+    data.products.push(newProduct);
+    setMockData(data);
+    return newProduct;
+  },
+
+  update: async (id, productData) => {
+    const data = getMockData();
+    const index = (data.products || []).findIndex(p => p.id === id);
+    if (index === -1) throw new Error('Produto não encontrado');
+    
+    data.products[index] = {
+      ...data.products[index],
+      ...productData,
+      updated_at: new Date().toISOString()
+    };
+    setMockData(data);
+    return data.products[index];
+  },
+
+  delete: async (id) => {
+    const data = getMockData();
+    data.products = (data.products || []).filter(p => p.id !== id);
+    setMockData(data);
+  }
+};
+
+export const Product = ProductMock;
+
+// Mock para Tenant
+const TenantMock = {
+  async list() {
+    const mockData = getMockData();
+    return mockData.tenants || [];
+  },
+  async filter({ status }) {
+    const mockData = getMockData();
+    if (status) {
+      return mockData.tenants?.filter(t => t.status === status) || [];
+    }
+    return mockData.tenants || [];
+  },
+  async create(data) {
+    const mockData = getMockData();
+    const newTenant = {
+      id: Date.now().toString(),
+      ...data,
+      created_at: new Date().toISOString()
+    };
+    mockData.tenants = [...(mockData.tenants || []), newTenant];
+    setMockData(mockData);
+    return newTenant;
+  },
+  async update(id, data) {
+    const mockData = getMockData();
+    const index = mockData.tenants?.findIndex(t => t.id === id);
+    if (index === -1) throw new Error('Tenant não encontrado');
+    
+    const updatedTenant = {
+      ...mockData.tenants[index],
+      ...data,
+      updated_at: new Date().toISOString()
+    };
+    mockData.tenants[index] = updatedTenant;
+    setMockData(mockData);
+    return updatedTenant;
+  },
+  async delete(id) {
+    const mockData = getMockData();
+    mockData.tenants = mockData.tenants?.filter(t => t.id !== id) || [];
+    setMockData(mockData);
+    return true;
+  }
+};
+
+export const Tenant = TenantMock;
 
 // Mock para Customization
 const CustomizationMock = {
@@ -199,42 +309,6 @@ const MedicationMock = {
 
 export const Medication = MedicationMock;
 
-// Mock para Product
-const ProductMock = {
-  async filter({ tenant_id }) {
-    return [
-      {
-        id: '1',
-        tenant_id,
-        name: 'Produto Mock',
-        description: 'Descrição do produto',
-        price: 100.00,
-        stock: 10,
-        created_at: new Date().toISOString()
-      }
-    ];
-  },
-  async create(data) {
-    return {
-      id: Date.now().toString(),
-      ...data,
-      created_at: new Date().toISOString()
-    };
-  },
-  async update(id, data) {
-    return {
-      id,
-      ...data,
-      updated_at: new Date().toISOString()
-    };
-  },
-  async delete() {
-    return true;
-  }
-};
-
-export const Product = ProductMock;
-
 // Mock para PurchaseHistory
 const PurchaseHistoryMock = {
   async filter({ tenant_id }) {
@@ -269,39 +343,6 @@ const PurchaseHistoryMock = {
 };
 
 export const PurchaseHistory = PurchaseHistoryMock;
-
-// Mock para Tenant
-const TenantMock = {
-  async filter() {
-    return [
-      {
-        id: '1',
-        name: 'Tenant Mock',
-        access_url: 'mock',
-        created_at: new Date().toISOString()
-      }
-    ];
-  },
-  async create(data) {
-    return {
-      id: Date.now().toString(),
-      ...data,
-      created_at: new Date().toISOString()
-    };
-  },
-  async update(id, data) {
-    return {
-      id,
-      ...data,
-      updated_at: new Date().toISOString()
-    };
-  },
-  async delete() {
-    return true;
-  }
-};
-
-export const Tenant = TenantMock;
 
 // Mock para TenantUser
 const TenantUserMock = {
@@ -544,35 +585,62 @@ const HospitalizationProgressMock = {
 export const HospitalizationProgress = HospitalizationProgressMock;
 
 // Mock para TransportService
-const TransportServiceMock = {
-  async filter({ tenant_id }) {
-    return [
-      {
-        id: '1',
-        tenant_id,
-        name: 'Serviço de Transporte Mock',
-        description: 'Descrição do serviço',
-        price: 50.00,
-        created_at: new Date().toISOString()
-      }
-    ];
+export const TransportServiceMock = {
+  list: async () => {
+    const data = getMockData();
+    return data.transportServices || [];
   },
-  async create(data) {
-    return {
-      id: Date.now().toString(),
-      ...data,
-      created_at: new Date().toISOString()
-    };
+
+  get: async (id) => {
+    const data = getMockData();
+    const service = (data.transportServices || []).find(s => s.id === id);
+    if (!service) throw new Error('Serviço de transporte não encontrado');
+    return service;
   },
-  async update(id, data) {
-    return {
-      id,
-      ...data,
+
+  filter: async (filters = {}) => {
+    const data = getMockData();
+    let filteredServices = [...(data.transportServices || [])];
+
+    if (filters.tenant_id) {
+      filteredServices = filteredServices.filter(s => s.tenant_id === filters.tenant_id);
+    }
+
+    return filteredServices;
+  },
+
+  create: async (serviceData) => {
+    const data = getMockData();
+    const newService = {
+      id: generateUniqueId(),
+      ...serviceData,
+      created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
+    data.transportServices = data.transportServices || [];
+    data.transportServices.push(newService);
+    setMockData(data);
+    return newService;
   },
-  async delete() {
-    return true;
+
+  update: async (id, serviceData) => {
+    const data = getMockData();
+    const index = (data.transportServices || []).findIndex(s => s.id === id);
+    if (index === -1) throw new Error('Serviço de transporte não encontrado');
+    
+    data.transportServices[index] = {
+      ...data.transportServices[index],
+      ...serviceData,
+      updated_at: new Date().toISOString()
+    };
+    setMockData(data);
+    return data.transportServices[index];
+  },
+
+  delete: async (id) => {
+    const data = getMockData();
+    data.transportServices = (data.transportServices || []).filter(s => s.id !== id);
+    setMockData(data);
   }
 };
 

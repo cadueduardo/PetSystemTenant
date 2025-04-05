@@ -1,6 +1,12 @@
 // Armazenamento local para dados mockados
 export const STORAGE_KEY = 'mock_data';
 
+// Função para gerar IDs únicos com sufixo aleatório
+export const generateUniqueId = () => {
+  // Cria um ID baseado em timestamp + string aleatória de 8 caracteres
+  return `${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+};
+
 const initialData = {
   customers: [
     {
@@ -88,13 +94,120 @@ const initialData = {
       tenant_id: 'default'
     }
   ],
-  appointments: [],
+  products: [
+    {
+      id: 'prod1',
+      name: 'Ração Premium',
+      category: 'food',
+      description: 'Ração premium para cães adultos',
+      price: 89.90,
+      cost_price: 65.00,
+      stock_quantity: 50,
+      low_stock_threshold: 10,
+      tenant_id: 'default'
+    },
+    {
+      id: 'prod2',
+      name: 'Shampoo Pet',
+      category: 'hygiene',
+      description: 'Shampoo para cães e gatos',
+      price: 29.90,
+      cost_price: 15.00,
+      stock_quantity: 30,
+      low_stock_threshold: 5,
+      tenant_id: 'default'
+    }
+  ],
+  tenants: [
+    {
+      id: 'clinica-veterinaria-teste',
+      name: 'Clínica Veterinária Teste',
+      status: 'active',
+      selected_modules: ['clinica', 'petshop', 'transport'],
+      created_at: '2024-01-01T00:00:00.000Z'
+    }
+  ],
+  appointments: [
+    {
+      id: generateUniqueId(), // Usando nossa função
+      pet_id: "pet1",
+      owner_id: "cust1",
+      service_id: "serv3", // Consulta Veterinária
+      date: new Date().toISOString().split('T')[0], // Data de hoje
+      time: "09:00",
+      duration: 30,
+      notes: "Check-up anual do Rex.",
+      status: "scheduled", // Agendado
+      tenant_id: "default" // Ajustará para o tenant atual se necessário
+    },
+    {
+      id: generateUniqueId(),
+      pet_id: "pet2",
+      owner_id: "cust2",
+      service_id: "serv4", // Vacinação
+      date: new Date().toISOString().split('T')[0], // Data de hoje
+      time: "10:30",
+      duration: 15,
+      notes: "Vacina V10 para Luna.",
+      status: "confirmed", // Confirmado
+      tenant_id: "default"
+    },
+    {
+      id: generateUniqueId(),
+      pet_id: "pet1",
+      owner_id: "cust1",
+      service_id: "serv5", // Exame de Sangue
+      date: new Date().toISOString().split('T')[0], // Data de hoje
+      time: "11:00",
+      duration: 30,
+      notes: "Exame pré-operatório.",
+      status: "waiting", // Chegou e está aguardando
+      tenant_id: "default"
+    },
+    { // Agendamento de Petshop (NÃO deve aparecer na fila Live Vet)
+      id: generateUniqueId(),
+      pet_id: "pet2",
+      owner_id: "cust2",
+      service_id: "serv1", // Banho Completo
+      date: new Date().toISOString().split('T')[0], // Data de hoje
+      time: "14:00",
+      duration: 60,
+      notes: "Banho e tosa higiênica.",
+      status: "scheduled",
+      tenant_id: "default"
+    },
+    { // Agendamento de Clínica para AMANHÃ (NÃO deve aparecer hoje)
+      id: generateUniqueId(),
+      pet_id: "pet1",
+      owner_id: "cust1",
+      service_id: "serv3", // Consulta Veterinária
+      date: new Date(Date.now() + 86400000).toISOString().split('T')[0], // Data de amanhã
+      time: "15:00",
+      duration: 30,
+      notes: "Consulta de acompanhamento.",
+      status: "scheduled",
+      tenant_id: "default"
+    },
+      { // Agendamento de Clínica CONCLUÍDO (NÃO deve aparecer na fila)
+      id: generateUniqueId(),
+      pet_id: "pet2",
+      owner_id: "cust2",
+      service_id: "serv4", // Vacinação
+      date: new Date().toISOString().split('T')[0], // Data de hoje
+      time: "08:00",
+      duration: 15,
+      notes: "Vacina aplicada.",
+      status: "completed", // Concluído
+      tenant_id: "default"
+    }
+  ],
   queueServices: [],
   allergies: [],
   vaccines: [],
   medications: [],
   petshopData: [],
-  medicalRecords: []
+  medicalRecords: [],
+  transportServices: []
 };
 
 // Inicializa o armazenamento se não existir
@@ -114,7 +227,8 @@ export const getMockData = () => {
       ...initialData,
       customers: initialData.customers.map(c => ({ ...c, tenant_id: currentTenant })),
       pets: initialData.pets.map(p => ({ ...p, tenant_id: currentTenant })),
-      services: initialData.services.map(s => ({ ...s, tenant_id: currentTenant }))
+      services: initialData.services.map(s => ({ ...s, tenant_id: currentTenant })),
+      appointments: initialData.appointments.map(a => ({ ...a, tenant_id: currentTenant }))
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedInitialData));
     return updatedInitialData;
@@ -124,15 +238,28 @@ export const getMockData = () => {
   const parsedData = JSON.parse(data);
   
   // Atualiza o tenant_id dos dados existentes se necessário
-  if (parsedData.customers?.some(c => c.tenant_id === "default") ||
-      parsedData.pets?.some(p => p.tenant_id === "default") ||
-      parsedData.services?.some(s => s.tenant_id === "default")) {
+  const needsUpdate = parsedData.customers?.some(c => c.tenant_id !== currentTenant) ||
+                      parsedData.pets?.some(p => p.tenant_id !== currentTenant) ||
+                      parsedData.services?.some(s => s.tenant_id !== currentTenant) ||
+                      parsedData.appointments?.some(a => a.tenant_id !== currentTenant);
+                      
+  if (needsUpdate) {    
+    console.log('[getMockData] ATENÇÃO: Detectada necessidade de atualizar tenant_id para:', currentTenant);
+    // Log ANTES da atualização
+    console.log('[getMockData] Tenant IDs nos agendamentos ANTES da atualização:',
+        parsedData.appointments?.map(a => ({ id: a.id, tenant_id: a.tenant_id })) || 'Nenhum agendamento encontrado'
+    );
+
+    parsedData.customers = parsedData.customers?.map(c => ({ ...c, tenant_id: currentTenant })) || [];
+    parsedData.pets = parsedData.pets?.map(p => ({ ...p, tenant_id: currentTenant })) || [];
+    parsedData.services = parsedData.services?.map(s => ({ ...s, tenant_id: currentTenant })) || [];
+    parsedData.appointments = parsedData.appointments?.map(a => ({ ...a, tenant_id: currentTenant })) || []; // Adicionando atualização para appointments
     
-    console.log('[getMockData] Atualizando tenant_id dos dados existentes');
-    parsedData.customers = parsedData.customers.map(c => ({ ...c, tenant_id: currentTenant }));
-    parsedData.pets = parsedData.pets.map(p => ({ ...p, tenant_id: currentTenant }));
-    parsedData.services = parsedData.services.map(s => ({ ...s, tenant_id: currentTenant }));
-    
+    // Log DEPOIS da atualização (mas antes de salvar)
+    console.log('[getMockData] Tenant IDs nos agendamentos DEPOIS da atualização:',
+        parsedData.appointments?.map(a => ({ id: a.id, tenant_id: a.tenant_id })) || 'Nenhum agendamento encontrado'
+    );
+
     localStorage.setItem(STORAGE_KEY, JSON.stringify(parsedData));
   }
   
@@ -246,13 +373,16 @@ export const setMockData = (data) => {
 export const CustomerMock = {
   list: async () => {
     const data = getMockData();
-    return data.customers;
+    return data.customers || [];
   },
 
   get: async (id) => {
-    const data = getMockData();
-    const customer = data.customers.find(c => c.id === id);
-    if (!customer) throw new Error('Cliente não encontrado');
+    const data = getMockData(); // Busca os dados JÁ atualizados para o tenant atual
+    const customer = (data.customers || []).find(c => c.id === id);
+    if (!customer) {
+      console.error(`[CustomerMock.get] Cliente com ID ${id} não encontrado para o tenant atual.`);
+      throw new Error('Cliente não encontrado');
+    }
     return customer;
   },
 
@@ -271,7 +401,7 @@ export const CustomerMock = {
   create: async (customerData) => {
     const data = getMockData();
     const newCustomer = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...customerData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -306,13 +436,17 @@ export const CustomerMock = {
 export const PetMock = {
   list: async () => {
     const data = getMockData();
-    return data.pets;
+    return data.pets || [];
   },
 
   get: async (id) => {
-    const data = getMockData();
-    const pet = data.pets.find(p => p.id === id);
-    if (!pet) throw new Error('Pet não encontrado');
+    const data = getMockData(); // Busca os dados JÁ atualizados para o tenant atual
+    const pet = (data.pets || []).find(p => p.id === id);
+    if (!pet) {
+      console.error(`[PetMock.get] Pet com ID ${id} não encontrado para o tenant atual.`);
+      throw new Error('Pet não encontrado');
+    }
+    console.log('[PetMock.get] Pet encontrado:', pet);
     return pet;
   },
 
@@ -345,7 +479,7 @@ export const PetMock = {
     
     const data = getMockData();
     const newPet = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...petData,
       photo_url: petData.photo_url || null,
       created_at: new Date().toISOString(),
@@ -467,7 +601,7 @@ export const TenantMock = {
   create: async (tenantData) => {
     const data = getMockData();
     const newTenant = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...tenantData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -528,7 +662,7 @@ export const TenantUserMock = {
   create: async (userData) => {
     const data = getMockData();
     const newUser = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...userData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -568,9 +702,12 @@ export const ServiceMock = {
   },
 
   get: async (id) => {
-    const data = getMockData();
+    const data = getMockData(); // Busca os dados JÁ atualizados para o tenant atual
     const service = (data.services || []).find(s => s.id === id);
-    if (!service) throw new Error('Serviço não encontrado');
+    if (!service) {
+       console.error(`[ServiceMock.get] Serviço com ID ${id} não encontrado para o tenant atual.`);
+      throw new Error('Serviço não encontrado');
+    }
     return service;
   },
 
@@ -600,7 +737,7 @@ export const ServiceMock = {
   create: async (serviceData) => {
     const data = getMockData();
     const newService = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...serviceData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -677,7 +814,7 @@ export const QueueServiceMock = {
   create: async (queueData) => {
     const data = getMockData();
     const newQueueItem = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...queueData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -727,13 +864,8 @@ export const HealthPlanMock = {
     const data = getMockData();
     let filteredPlans = [...(data.healthPlans || [])];
 
-    // Aplica os filtros
     if (filters.tenant_id) {
       filteredPlans = filteredPlans.filter(p => p.tenant_id === filters.tenant_id);
-    }
-
-    if (filters.is_active !== undefined) {
-      filteredPlans = filteredPlans.filter(p => p.is_active === filters.is_active);
     }
 
     return filteredPlans;
@@ -742,7 +874,7 @@ export const HealthPlanMock = {
   create: async (planData) => {
     const data = getMockData();
     const newPlan = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...planData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -780,7 +912,7 @@ export const PurchaseHistoryMock = {
     const data = getMockData();
     return data.purchaseHistory || [];
   },
-
+  
   get: async (id) => {
     const data = getMockData();
     const purchase = (data.purchaseHistory || []).find(p => p.id === id);
@@ -790,24 +922,24 @@ export const PurchaseHistoryMock = {
 
   filter: async (filters = {}) => {
     const data = getMockData();
-    let filteredPurchases = [...(data.purchaseHistory || [])];
+    let filteredHistory = [...(data.purchaseHistory || [])];
 
     // Aplica os filtros
     if (filters.tenant_id) {
-      filteredPurchases = filteredPurchases.filter(p => p.tenant_id === filters.tenant_id);
+      filteredHistory = filteredHistory.filter(p => p.tenant_id === filters.tenant_id);
     }
 
     if (filters.pet_id) {
-      filteredPurchases = filteredPurchases.filter(p => p.pet_id === filters.pet_id);
+      filteredHistory = filteredHistory.filter(p => p.pet_id === filters.pet_id);
     }
 
-    return filteredPurchases;
+    return filteredHistory;
   },
 
   create: async (purchaseData) => {
     const data = getMockData();
     const newPurchase = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...purchaseData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -872,7 +1004,7 @@ export const PetClinicalDataMock = {
   create: async (clinicalData) => {
     const data = getMockData();
     const newClinicalData = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...clinicalData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -974,7 +1106,7 @@ export const PetshopDataMock = {
   create: async (petshopData) => {
     const data = getMockData();
     const newPetshopData = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...petshopData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -1034,7 +1166,7 @@ export const MedicationMock = {
   create: async (medicationData) => {
     const data = getMockData();
     const newMedication = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...medicationData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -1094,7 +1226,7 @@ export const VaccineMock = {
   create: async (vaccineData) => {
     const data = getMockData();
     const newVaccine = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...vaccineData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -1154,7 +1286,7 @@ export const AllergyMock = {
   create: async (allergyData) => {
     const data = getMockData();
     const newAllergy = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...allergyData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -1224,7 +1356,7 @@ export const AppointmentMock = {
   create: async (appointmentData) => {
     const data = getMockData();
     const newAppointment = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...appointmentData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -1284,7 +1416,7 @@ export const ProductMock = {
   create: async (productData) => {
     const data = getMockData();
     const newProduct = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       ...productData,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
