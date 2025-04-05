@@ -82,6 +82,7 @@ import ServiceQueue from "./ServiceQueue";
 import LiveVetDashboard from "../modules/live-vet/pages/LiveVetDashboard";
 import LiveVetConsulta from "../modules/live-vet/pages/LiveVetConsulta";
 import ConsultaReportPage from "../modules/live-vet/pages/ConsultaReportPage";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 
@@ -242,7 +243,14 @@ function PagesContent() {
                         <Route path="/Staff" element={<Staff />} />
                         <Route path="/ServiceQueue" element={<ServiceQueue />} />
                         <Route path="/LiveVetDashboard" element={<LiveVetDashboard />} />
-                        <Route path="/LiveVetConsulta/:appointmentId" element={<LiveVetConsulta />} />
+                        <Route 
+                          path="/LiveVetConsulta/:appointmentId" 
+                          element={
+                            <ErrorBoundary>
+                              <LiveVetConsulta />
+                            </ErrorBoundary>
+                          } 
+                        />
                         <Route path="/consulta/:appointmentId/relatorio" element={<ConsultaReportPage />} />
                     </Routes>
                 </Layout>

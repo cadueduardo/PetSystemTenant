@@ -1073,3 +1073,64 @@ const VehicleHygieneMock = {
 };
 
 export const VehicleHygiene = VehicleHygieneMock;
+
+// Mock para Consultation
+const ConsultationMock = {
+  async filter({ petId, tenant_id }) {
+    console.log(`[ConsultationMock.filter] Filtrando consultas para petId: ${petId}, tenant: ${tenant_id}`);
+    const data = getMockData();
+    // Simula filtro básico - pode ser mais complexo se necessário
+    const filtered = (data.consultations || []).filter(c => 
+      c.pet_id === petId && 
+      (!tenant_id || c.tenant_id === tenant_id)
+    );
+    console.log('[ConsultationMock.filter] Consultas filtradas:', filtered);
+    return Promise.resolve(filtered);
+  },
+  // Adicionar métodos get, create, update, delete se forem necessários em outros lugares
+  async get(id) {
+      console.log(`[ConsultationMock.get] Buscando consulta id: ${id}`);
+      const data = getMockData();
+      const item = (data.consultations || []).find(c => c.id === id);
+      if (!item) {
+          console.warn(`[ConsultationMock.get] Consulta ${id} não encontrada.`);
+          // Retorna null ou lança erro?
+          return Promise.resolve(null);
+      }
+      console.log(`[ConsultationMock.get] Consulta ${id} encontrada:`, item);
+      return Promise.resolve(item);
+  },
+
+   async update(id, updateData) {
+    console.log(`[ConsultationMock.update] Atualizando consulta id: ${id} com dados:`, updateData);
+    let data = getMockData();
+    const index = (data.consultations || []).findIndex(c => c.id === id);
+    if (index === -1) {
+      console.warn(`[ConsultationMock.update] Consulta ${id} não encontrada para atualização.`);
+      return Promise.resolve(null); // ou lançar erro?
+    }
+    const updatedItem = { ...data.consultations[index], ...updateData, id, updated_at: new Date().toISOString() };
+    data.consultations[index] = updatedItem;
+    setMockData(data);
+    console.log(`[ConsultationMock.update] Consulta ${id} atualizada.`);
+    return Promise.resolve(updatedItem);
+  },
+
+  async create(newData) {
+    console.log('[ConsultationMock.create] Criando nova consulta com dados:', newData);
+    let data = getMockData();
+    if (!data.consultations) data.consultations = [];
+    const newItem = {
+        ...newData,
+        id: `${Date.now()}-${Math.random().toString(36).substring(2, 10)}`, // Gera ID simples
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+    };
+    data.consultations.push(newItem);
+    setMockData(data);
+    console.log('[ConsultationMock.create] Nova consulta criada:', newItem);
+    return Promise.resolve(newItem);
+  }
+};
+
+export const Consultation = ConsultationMock;

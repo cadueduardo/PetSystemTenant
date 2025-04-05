@@ -31,7 +31,11 @@ const initialData = {
       species: "dog",
       breed: "Vira-lata",
       owner_id: "cust1",
-      tenant_id: "default"
+      tenant_id: "default",
+      gender: "male",
+      birth_date: "2022-03-15",
+      notes: "Amigável, mas medroso",
+      consultationHistory: []
     },
     {
       id: "pet2",
@@ -39,7 +43,23 @@ const initialData = {
       species: "cat",
       breed: "Siamês",
       owner_id: "cust2",
-      tenant_id: "default"
+      tenant_id: "default",
+      gender: "female",
+      birth_date: "2023-01-20",
+      notes: "Muito ativa",
+      consultationHistory: []
+    },
+    {
+      id: "pet3",
+      name: "Thor",
+      species: "dog",
+      breed: "Golden Retriever",
+      owner_id: "cust1",
+      tenant_id: "default",
+      gender: "male",
+      birth_date: "2021-08-10",
+      notes: "Adora buscar a bola",
+      consultationHistory: []
     }
   ],
   services: [

@@ -7,9 +7,11 @@ import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { toast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, ChevronLeft, Pencil, Calendar } from "lucide-react";
+import { format, parseISO } from "date-fns";
+import { ptBR } from "date-fns/locale";
 
 // Componentes
 import PetBasicInfo from "../components/pets/PetBasicInfo";
@@ -290,6 +292,46 @@ export default function PetDetails() {
               </>
             )}
           </Tabs>
+
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle>Histórico de Consultas (Prontuário)</CardTitle>
+              <CardDescription>Resumo das consultas anteriores.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {pet?.consultationHistory && pet.consultationHistory.length > 0 ? (
+                <ul className="space-y-4">
+                  {pet.consultationHistory
+                     .sort((a, b) => new Date(b.date) - new Date(a.date)) // Ordena pela mais recente
+                     .map((entry, index) => (
+                    <li key={entry.consultationId || index} className="border p-3 rounded-md bg-muted/50">
+                      <div className="flex justify-between items-start mb-1">
+                        <span className="font-medium text-sm">{entry.serviceName || 'Consulta'}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {entry.date ? format(parseISO(entry.date), 'dd/MM/yyyy', { locale: ptBR }) : 'Data N/A'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-1"><strong>Queixa/Resumo:</strong> {entry.chiefComplaint || '-'}</p>
+                      <p className="text-xs text-muted-foreground"><strong>Diagnóstico(s):</strong> {entry.diagnosis || '-'}</p>
+                      {entry.appointmentId && (
+                        <Button
+                            variant="link"
+                            size="sm"
+                            className="h-auto p-0 text-xs mt-1"
+                            // Ajuste a rota se necessário
+                            onClick={() => navigate(`/consulta/${entry.appointmentId}/relatorio`)}
+                        >
+                            Ver Relatório Completo
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-muted-foreground">Nenhum histórico de consulta encontrado para este pet.</p>
+              )}
+            </CardContent>
+          </Card>
         </>
       )}
     </div>

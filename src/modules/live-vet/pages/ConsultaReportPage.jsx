@@ -180,7 +180,7 @@ export default function ConsultaReportPage() {
   return (
     <div className="p-4 md:p-6 lg:p-8 max-w-4xl mx-auto bg-background">
       <div className="flex items-center justify-between mb-6">
-        <Button variant="outline" size="sm" onClick={() => navigate(`/consulta/${appointmentId}`)}>
+        <Button variant="outline" size="sm" onClick={() => navigate(`/LiveVetConsulta/${appointmentId}`)}>
           <ArrowLeft className="h-4 w-4 mr-2" />
           Voltar para Consulta
         </Button>

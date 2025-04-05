@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Appointment, Pet, Customer, Service } from '@/api/entities'; // Entidades do mock principal
-import { Consultation } from '@/modules/live-vet/entities'; // Entidade do mock LiveVet
+import { Appointment, Pet, Customer, Service, Consultation } from "@/api/entities";
 import { DiagnosticAgent } from '@/lib/DiagnosticAgent'; // <<< IMPORTAR O AGENTE
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -12,6 +11,7 @@ import { toast } from '@/components/ui/use-toast';
 import { ArrowLeft, Loader2, ClipboardList, Save, Bot, FileText, Mic, Square, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { useToast } from "@/components/ui/use-toast";
 
 // URLs do NOVO serviço de áudio mock
 const AUDIO_SERVICE_BASE_URL = 'http://localhost:8001';
@@ -22,13 +22,14 @@ const WEBSOCKET_URL_BASE = 'ws://localhost:8001/audio_stream'; // WebSocket URL
 export default function LiveVetConsulta() {
   const { appointmentId } = useParams();
   const navigate = useNavigate();
+  const { toast } = useToast();
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [appointment, setAppointment] = useState(null);
   const [pet, setPet] = useState(null);
   const [customer, setCustomer] = useState(null);
   const [service, setService] = useState(null);
   const [consultationHistory, setConsultationHistory] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
   const diagnosticAgentRef = useRef(new DiagnosticAgent()); // <<< INSTANCIAR O AGENTE
 
   // Estados para os campos da consulta atual
@@ -47,6 +48,10 @@ export default function LiveVetConsulta() {
   const webSocketRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const recognitionRef = useRef(null);
+  const isStoppingRef = useRef(false); // <<< Flag para parada intencional
+  const currentSessionIdRef = useRef(null); // <<< Ref para ID da sessão atual
+  const finalTranscriptRef = useRef(''); // <<< Ref para transcrição final
 
   // --- Estados para Sugestões e Diagnósticos (Revisados para Collapse) ---
   const [initialSuggestions, setInitialSuggestions] = useState([]);
@@ -58,80 +63,87 @@ export default function LiveVetConsulta() {
   const [suggestionFeedback, setSuggestionFeedback] = useState({});
   const [diagnosisFeedback, setDiagnosisFeedback] = useState({});
   const [confirmedDiagnosis, setConfirmedDiagnosis] = useState('');
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
 
   useEffect(() => {
+    console.log('[useEffect Main] Rodando com appointmentId:', appointmentId); // <<< LOG 1
+    // >>> DESCOMENTAR LÓGICA DE BUSCA <<<
     diagnosticAgentRef.current.clearContext();
     setSelectedSuggestionsHistory([]);
     setInitialSuggestions([]);
     setDiagnosisSuggestions([]);
     setActiveSuggestionPath(null);
-    setSuggestionFeedback({});
-    setDiagnosisFeedback({});
-    setConfirmedDiagnosis('');
+    setBackendReport(null);
+    setStreamingTranscript('');
+    finalTranscriptRef.current = '';
+
     const loadConsultationData = async () => {
       if (!appointmentId) {
+        console.error('[useEffect Main] ID do agendamento NULO ao carregar.'); // <<< LOG 2
         setError("ID do agendamento não fornecido.");
-        setIsLoading(false);
+        setIsLoading(false); // Corrigido para usar setIsLoading aqui
         return;
       }
+      console.log('[useEffect Main] Iniciando busca de dados...'); // <<< LOG 3
       setIsLoading(true);
       setError(null);
       setStreamingError(null);
       try {
-        const apptData = await Appointment.get(appointmentId);
-        setAppointment(apptData);
+        // const apptData = await Appointment.get(appointmentId);
+        const apptData = await Appointment.get(appointmentId); // Descomentado
+        console.log('[useEffect Main] Agendamento carregado:', apptData); // <<< LOG 4
+        setAppointment(apptData); // Descomentado
 
+        // ... (Resto das buscas precisa ser descomentado)
         const [petData, customerData, serviceData, historyData] = await Promise.all([
           Pet.get(apptData.pet_id).catch(err => { console.error("Erro ao buscar pet:", err); return null; }),
           Customer.get(apptData.customer_id).catch(err => { console.error("Erro ao buscar cliente:", err); return null; }),
           Service.get(apptData.service_id).catch(err => { console.error("Erro ao buscar serviço:", err); return null; }),
           Consultation.filter({ petId: apptData.pet_id, tenant_id: apptData.tenant_id }).catch(err => { console.error("Erro ao buscar histórico:", err); return []; })
         ]);
+        console.log('[useEffect Main] Dados associados carregados (Pet, Cliente, Serviço, Histórico):', {petData, customerData, serviceData, historyData}); // <<< LOG 5
 
         if (!petData || !customerData || !serviceData) {
+           console.error('[useEffect Main] Falha ao carregar dados essenciais!'); // <<< LOG 6
           throw new Error("Não foi possível carregar todos os dados necessários (pet, cliente ou serviço).");
         }
 
-        setPet(petData);
-        setCustomer(customerData);
-        setService(serviceData);
-        setConsultationHistory(historyData);
+        setPet(petData); // Descomentado
+        setCustomer(customerData); // Descomentado
+        setService(serviceData); // Descomentado
+        setConsultationHistory(historyData); // Descomentado
+        console.log('[useEffect Main] Estados atualizados com sucesso.'); // <<< LOG 7
 
       } catch (err) {
-        console.error("Erro detalhado ao carregar dados da consulta:", err);
+        console.error("[useEffect Main] ERRO DETALHADO no catch:", err); // <<< LOG 8
         setError(`Erro ao carregar dados: ${err.message}`);
         toast({ title: "Erro", description: "Não foi possível carregar os dados da consulta.", variant: "destructive" });
       } finally {
-        setIsLoading(false);
+         console.log('[useEffect Main] Definindo isLoading = false (original).'); // <<< LOG 9
+         setIsLoading(false);
       }
     };
 
     loadConsultationData();
+    // <<< FIM DO CÓDIGO DESCOMENTADO >>>
 
     return () => {
-      if (webSocketRef.current) {
-        console.log("Fechando WebSocket ao desmontar componente.");
-        webSocketRef.current.close();
-        webSocketRef.current = null;
-      }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.stop();
-      }
-      mediaRecorderRef.current = null;
+      console.log('[useEffect Main] Limpeza ao desmontar ou antes de re-rodar.'); // <<< LOG 10
     };
   }, [appointmentId]);
 
   const handleStartStreamingRecording = useCallback(async () => {
     if (isStreaming) return;
 
-    console.log("Iniciando gravação e conexão WebSocket...");
-    setStreamingError(null);
-    setStreamingTranscript('');
     setInitialSuggestions([]);
     setDiagnosisSuggestions([]);
     setActiveSuggestionPath(null);
     setBackendReport(null);
+    setStreamingTranscript('');
+    finalTranscriptRef.current = ''; // <<< RESETAR REF
+
+    console.log("Iniciando gravação e conexão WebSocket...");
+    setIsStreaming(true);
+    setStreamingError(null);
     diagnosticAgentRef.current.clearContext();
     setSelectedSuggestionsHistory([]);
     audioChunksRef.current = [];
@@ -188,6 +200,79 @@ export default function LiveVetConsulta() {
         }
       };
 
+      // --- INICIAR WEB SPEECH API (TRANSCRIÇÃO NO FRONTEND) ---
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        throw new Error("Web Speech API não suportada neste navegador.");
+      }
+
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true; // Continua ouvindo
+      recognition.interimResults = true; // Pega resultados parciais
+      recognition.lang = 'pt-BR'; // Define o idioma
+      recognitionRef.current = recognition; // Guarda a referência
+
+      let finalTranscriptSegment = ''; // Acumulador temporário
+
+      recognition.onresult = (event) => {
+        let interimTranscript = '';
+        finalTranscriptSegment = ''; // Reseta a cada evento de resultado
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscriptSegment += event.results[i][0].transcript;
+          } else {
+            interimTranscript += event.results[i][0].transcript;
+          }
+        }
+        // Atualiza o estado com a parte final + a parte interina atual
+        let nextTranscript = streamingTranscript; // Pega o valor atual do estado (antes do setState)
+        setStreamingTranscript(prev => {
+            if (finalTranscriptSegment && !prev.endsWith(finalTranscriptSegment.trim() + ' ')) {
+                 nextTranscript = prev + finalTranscriptSegment.trim() + ' ';
+                 return nextTranscript;
+            } else {
+                 nextTranscript = prev; // Mantém o valor anterior se não houver segmento final novo
+                return prev;
+            }
+        });
+        // ATUALIZAR REF com o valor *calculado* para o próximo estado
+        finalTranscriptRef.current = nextTranscript;
+        console.log('Interim:', interimTranscript, '| Final segment:', finalTranscriptSegment);
+      };
+
+      recognition.onerror = (event) => {
+        console.error('>>> DETALHE Erro do SpeechRecognition:', event);
+        setStreamingError(`Erro no reconhecimento de fala: ${event.error} - ${event.message || 'Sem msg adicional.'}`);
+        // Tenta parar de forma limpa se o reconhecimento falhar
+        if (isStreaming) {
+            handleStopStreamingRecording();
+        }
+      };
+
+      recognition.onend = () => {
+        console.log('SpeechRecognition parado.');
+        // Verifica se a parada foi intencional (botão Parar clicado)
+        if (isStoppingRef.current) {
+            console.log('Parada intencional detectada, enviando dados...');
+            // <<< USAR VALORES DAS REFS >>>
+            const finalTranscriptToSend = finalTranscriptRef.current;
+            const sessionIdToSend = currentSessionIdRef.current;
+            sendDataToServer(finalTranscriptToSend, sessionIdToSend);
+
+            // Limpeza após envio
+            isStoppingRef.current = false;
+            setSessionId(null);
+            mediaRecorderRef.current = null;
+            audioChunksRef.current = [];
+        } else {
+             console.log('Reco parou (ex: silêncio), mas não foi parada intencional.');
+             // Opcionalmente, chamar handleStopStreamingRecording para finalizar tudo?
+             // handleStopStreamingRecording();
+        }
+      };
+
+      // --- FIM WEB SPEECH API ---
+
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           throw new Error("getUserMedia não é suportado neste navegador.");
       }
@@ -225,6 +310,12 @@ export default function LiveVetConsulta() {
       recorder.start(1000);
       console.log("MediaRecorder iniciado.");
 
+      // <<< INICIAR O RECONHECIMENTO DE FALA >>>
+      if (recognitionRef.current) {
+         recognitionRef.current.start();
+         console.log("SpeechRecognition iniciado.");
+      }
+
     } catch (err) {
       console.error("Erro ao iniciar gravação/streaming:", err);
       setStreamingError(`Falha ao iniciar: ${err.message}`);
@@ -239,123 +330,125 @@ export default function LiveVetConsulta() {
           mediaRecorderRef.current.stop();
       }
     }
-  }, [isStreaming, sessionId]);
+  }, [isStreaming]);
 
   const handleStopStreamingRecording = useCallback(async () => {
-    if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== 'recording') {
-        console.log("Tentativa de parar, mas MediaRecorder não está gravando.");
-        if (webSocketRef.current) {
-            webSocketRef.current.close(1000, "Client stopping non-recording session");
-            webSocketRef.current = null;
-        }
-        setIsStreaming(false);
-        setSessionId(null);
-        return;
+    // --- PARAR WEB SPEECH API --- <<< (Apenas chama stop, não anula a ref ainda)
+    if (recognitionRef.current) {
+      console.log("Chamando recognition.stop()...");
+      isStoppingRef.current = true; // <<< SINALIZA PARADA INTENCIONAL
+      recognitionRef.current.stop();
+      // Não anular recognitionRef.current = null aqui, pois onend pode precisar dele
+    }
+    // --- FIM PARAR WEB SPEECH API ---
+
+    // Verifica se o MediaRecorder existe ANTES de acessar sessionId
+    if (!mediaRecorderRef.current) return;
+    const currentSessionId = currentSessionIdRef.current; // Pega o ID da ref
+    if (!currentSessionId) return;
+
+    console.log("Parando MediaRecorder e finalizando sessão (localmente):", currentSessionId);
+    setIsStreaming(false); // Atualiza UI
+
+    // Parar o MediaRecorder primeiro
+    if (mediaRecorderRef.current.state === "recording") {
+        mediaRecorderRef.current.stop(); // Isso dispara o onstop
     }
 
-     console.log("Parando MediaRecorder e finalizando sessão:", sessionId);
-     mediaRecorderRef.current.stop();
-
-    setIsStreaming(false);
-
-    if (webSocketRef.current) {
+    // Fechar WebSocket
+    if (webSocketRef.current && webSocketRef.current.readyState === WebSocket.OPEN) {
+      console.log('Fechando WebSocket explicitamente...');
       webSocketRef.current.close(1000, "Client ending session");
-      webSocketRef.current = null;
-    } else {
-        console.warn("Tentando parar sessão, mas WebSocket já estava fechado.");
     }
+    webSocketRef.current = null;
 
-    if (!sessionId) {
-        console.error("Não é possível finalizar a sessão: ID da sessão não encontrado.");
-        setStreamingError("Erro interno: ID da sessão perdido.");
+    // A limpeza final (setSessionId(null), etc.) será feita no onend
+
+  }, []);
+
+  // <<< NOVA FUNÇÃO PARA ENVIAR DADOS >>>
+  const sendDataToServer = useCallback(async (finalTranscript, currentSessionId) => {
+    console.log(`Enviando para o servidor (Sessão: ${currentSessionId}): `, finalTranscript);
+    if (!currentSessionId) {
+        console.error("Tentativa de enviar dados sem ID de sessão válido.");
+        setStreamingError("Erro interno: ID da sessão perdido ao enviar.");
         return;
     }
 
     try {
-      const response = await fetch(END_RECORDING_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: sessionId }),
-      });
+        const response = await fetch(END_RECORDING_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+               sessionId: currentSessionId,
+               finalTranscript: finalTranscript
+           }),
+        });
 
-      if (!response.ok) {
-        const errorBody = await response.text();
-         let detail = errorBody;
-        try {
-          const errorJson = JSON.parse(errorBody);
-          detail = errorJson.detail || errorBody;
-        } catch (parseError) {
-           console.warn("Não foi possível analisar o corpo do erro de end_recording como JSON:", parseError);
+        if (!response.ok) {
+          const errorBody = await response.text();
+           let detail = errorBody;
+          try {
+            const errorJson = JSON.parse(errorBody);
+            detail = errorJson.detail || errorBody;
+          } catch (parseError) {
+             console.warn("Não foi possível analisar o corpo do erro de end_recording como JSON:", parseError);
+          }
+          throw new Error(`Erro ao finalizar sessão no backend: ${response.statusText} - ${detail}`);
         }
-        throw new Error(`Erro ao finalizar sessão: ${response.statusText} - ${detail}`);
+
+        const report = await response.json();
+        console.log("Relatório final recebido (com análise Gemini?):", report);
+        setBackendReport(report);
+        toast({ title: "Gravação Finalizada", description: "Análise IA recebida." });
+
+        if (report?.gemini_analysis?.error) {
+            console.error("Erro da API Gemini reportado pelo backend:", report.gemini_analysis.error);
+            setStreamingError(`Erro na análise IA: ${report.gemini_analysis.error}`);
+            setInitialSuggestions([]);
+            setDiagnosisSuggestions([]);
+        } else if (report?.gemini_analysis) {
+            const geminiQuestions = report.gemini_analysis.follow_up_questions || [];
+            const geminiDiagnoses = report.gemini_analysis.possible_diagnoses || [];
+
+            setInitialSuggestions(geminiQuestions);
+            setDiagnosisSuggestions(geminiDiagnoses);
+            setStreamingError(null);
+            setActiveSuggestionPath(null);
+        } else {
+            setStreamingError("Resposta do backend incompleta (sem análise Gemini).");
+        }
+
+      } catch (err) {
+        console.error("Erro ao enviar dados para o backend:", err);
+        setStreamingError(`Falha ao comunicar com backend: ${err.message}`);
+        toast({ title: "Erro de Comunicação", description: err.message, variant: "destructive" });
+        setBackendReport(null);
       }
-
-      const report = await response.json();
-      console.log("Relatório final recebido:", report);
-      setBackendReport(report);
-      toast({ title: "Gravação Finalizada", description: "Relatório recebido do backend." });
-
-      if (report?.final_transcript) {
-          const finalTranscript = report.final_transcript;
-          diagnosticAgentRef.current.clearContext();
-          const finalAnalysis = diagnosticAgentRef.current.analyzeText(finalTranscript);
-          setInitialSuggestions(finalAnalysis.initialQuestions);
-          setDiagnosisSuggestions(finalAnalysis.potentialDiagnoses);
-          setActiveSuggestionPath(null);
-          setStreamingTranscript(finalTranscript);
-      }
-
-    } catch (err) {
-      console.error("Erro ao finalizar gravação:", err);
-      setStreamingError(`Falha ao finalizar: ${err.message}`);
-      toast({ title: "Erro ao Finalizar", description: err.message, variant: "destructive" });
-      setBackendReport(null);
-    } finally {
-       setSessionId(null);
-       mediaRecorderRef.current = null;
-       audioChunksRef.current = [];
-    }
-  }, [sessionId]);
+  }, []); // Dependências vazias, pois usa apenas argumentos
 
   // --- Handler para Clique em Sugestão (Lógica de Collapse/Expand) ---
-  const handleSuggestionSelect = async (suggestion) => {
-    console.log("Sugestão/Pergunta selecionada:", suggestion);
+  const handleSuggestionSelect = (suggestionText, type, index, path = null) => {
+    console.log(`Sugestão/Pergunta selecionada: ${suggestionText}`)
 
-    // Adiciona ao histórico de cliques (para log/RAG)
-    if (!selectedSuggestionsHistory.includes(suggestion)) {
-        setSelectedSuggestionsHistory(prev => [...prev, suggestion]);
-    }
+    // SIMPLIFICADO: Apenas registra a seleção, não chama mais o agente local para follow-ups.
+    // A lógica de feedback (opcional) pode permanecer se desejado.
 
-    // Verifica se está clicando na pergunta já ativa (para fechar/collapse)
-    if (activeSuggestionPath?.originQuestion === suggestion) {
-        setActiveSuggestionPath(null);
-        return; // Sai da função
-    }
+    // Mantém o histórico de seleção se for útil para a UI ou lógica futura
+    setSelectedSuggestionsHistory(prev => [...prev, { text: suggestionText, type, path }]);
 
-    // Se clicou em uma nova pergunta, busca follow-ups
-    toast({ title: "Processando...", description: `Buscando detalhes para: "${suggestion}"` });
-    setIsLoadingSuggestions(true);
-    setActiveSuggestionPath(null); // Fecha o anterior enquanto carrega o novo
+    // Se a lógica de colapso/expansão ainda for desejada:
+    setActiveSuggestionPath(path); // Atualiza o path ativo
 
-    try {
-        await new Promise(resolve => setTimeout(resolve, 400)); // Simula delay
-        const followUps = await diagnosticAgentRef.current.getFollowUpQuestions(suggestion);
-
-        // Define o novo path ativo
-        setActiveSuggestionPath({ originQuestion: suggestion, followUps: followUps });
-
-        // Busca diagnósticos baseados no contexto atualizado (incluindo a pergunta feita)
-        await new Promise(resolve => setTimeout(resolve, 300)); // Simula delay
-        const currentDiagnoses = await diagnosticAgentRef.current.suggestDiagnosesBasedOnContext();
-        setDiagnosisSuggestions(currentDiagnoses);
-
-    } catch (err) {
-        console.error("Erro ao buscar follow-up/diagnóstico:", err);
-        toast({ title: "Erro do Agente", description: "Não foi possível obter sugestões adicionais.", variant: "destructive" });
-        setActiveSuggestionPath(null); // Limpa em caso de erro
-    } finally {
-        setIsLoadingSuggestions(false);
-    }
+    // REMOVIDO: Chamadas ao Diagnostic Agent local
+    // const result = diagnosticAgentRef.current.processInput(suggestionText, path);
+    // console.log('Resultado do processInput local:', result);
+    // if (result?.followUpQuestions?.length) {
+    //    // Atualiza sugestões se houver follow-ups locais (não vai mais acontecer)
+    // }
+    // if (result?.potentialDiagnoses?.length) {
+    //    setDiagnosisSuggestions(result.potentialDiagnoses);
+    // }
   };
 
   // --- NOVOS HANDLERS PARA FEEDBACK ---
@@ -409,6 +502,47 @@ export default function LiveVetConsulta() {
           }
           console.log("Consulta salva/atualizada com dados de interação:", savedConsultation);
 
+          // <<< INÍCIO: LÓGICA PARA ATUALIZAR HISTÓRICO DO PET >>>
+          try {
+            const petId = interactionDataForRAG.petInfo?.id;
+            if (petId) {
+              console.log(`[handleSave] Atualizando histórico para o pet ID: ${petId}`);
+              const currentPetData = await Pet.get(petId);
+              if (currentPetData) {
+                const historySummary = {
+                  consultationId: savedConsultation?.id || consultationData?.id || 'unknown', // ID da consulta salva
+                  appointmentId: interactionDataForRAG.appointmentId,
+                  date: interactionDataForRAG.reportGeneratedAt, // Ou usar data do appointment?
+                  serviceName: interactionDataForRAG.serviceInfo?.name || 'Serviço Desconhecido',
+                  diagnosis: interactionDataForRAG.vetNotes?.diagnosis || interactionDataForRAG.confirmedDiagnosis || 'Não registrado', // Prioriza diagnóstico do vet
+                  // Adicionar queixa principal se disponível (ex: primeiros X chars da transcrição)
+                  chiefComplaint: interactionDataForRAG.fullTranscript?.substring(0, 50) + (interactionDataForRAG.fullTranscript?.length > 50 ? '...' : '') || 'N/A'
+                };
+                
+                const updatedHistory = [...(currentPetData.consultationHistory || []), historySummary];
+                
+                // Evitar duplicatas (opcional, baseado no ID da consulta)
+                const uniqueHistory = updatedHistory.filter((item, index, self) => 
+                   index === self.findIndex((t) => (t.consultationId === item.consultationId))
+                );
+
+                await Pet.update(petId, { consultationHistory: uniqueHistory });
+                console.log(`[handleSave] Histórico do pet ${petId} atualizado com sucesso.`);
+              } else {
+                console.warn(`[handleSave] Pet ${petId} não encontrado para atualizar histórico.`);
+              }
+            } else {
+              console.warn('[handleSave] ID do Pet não encontrado nos dados do relatório para atualizar histórico.');
+            }
+          } catch (historyError) {
+            console.error("[handleSave] Erro ao atualizar histórico do pet:", historyError);
+            // Não impedir a navegação por causa disso, mas registrar o erro
+            toast({ title: "Aviso", description: "Não foi possível atualizar o histórico no prontuário do pet.", variant: "warning" });
+          }
+          // <<< FIM: LÓGICA PARA ATUALIZAR HISTÓRICO DO PET >>>
+
+          console.log("Navegando para a página de relatório...");
+
       } catch (err) {
           console.error("Erro ao salvar consulta:", err);
           toast({ title: "Erro ao Salvar", description: `Não foi possível salvar a consulta: ${err.message}`, variant: "destructive"});
@@ -428,7 +562,7 @@ export default function LiveVetConsulta() {
             serviceInfo: { id: service?.id, name: service?.name },
             fullTranscript: finalTranscript,
             backendAudioReport: backendReport,
-            suggestionFlow: selectedSuggestionsHistory.map(s => ({ question: s, feedback: suggestionFeedback[s] || 'none' })),
+            suggestionFlow: selectedSuggestionsHistory.map(s => ({ question: s.text, feedback: suggestionFeedback[s.text] || 'none' })),
             suggestionFeedbackLog: suggestionFeedback,
             diagnosisFeedbackLog: diagnosisFeedback,
             vetNotes: {
@@ -461,6 +595,20 @@ export default function LiveVetConsulta() {
       }
       return report;
   };
+
+  // <<< Atualizar Refs quando Estados mudam >>>
+  useEffect(() => {
+    currentSessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  useEffect(() => {
+    finalTranscriptRef.current = streamingTranscript;
+  }, [streamingTranscript]);
+
+  // <<< FIM Atualizar Refs >>>
+
+  // <<< LOG ANTES DO RENDER >>>
+  console.log('[Render] Verificando estados:', { isLoading, error, appointment, pet, customer, service });
 
   if (isLoading) {
     return (
@@ -501,9 +649,9 @@ export default function LiveVetConsulta() {
   return (
     <div className="p-4 md:p-6 lg:p-8 max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-             <Button variant="outline" size="sm" onClick={() => navigate(-1)}>
+             <Button variant="outline" size="sm" onClick={() => navigate('/LiveVetDashboard')}>
                 <ArrowLeft className="h-4 w-4 mr-2" />
-                Voltar para Fila
+                Voltar para Dashboard Live Vet
              </Button>
              <h1 className="text-2xl font-bold text-center flex-1 mx-4">Consulta Clínica - {pet?.name}</h1>
              <div className="flex items-center gap-2">
@@ -615,17 +763,13 @@ export default function LiveVetConsulta() {
                            </div>
 
                            <div className="mt-4 space-y-3">
-                               {isLoadingSuggestions && (
-                                   <div className="flex items-center text-sm text-muted-foreground"><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Carregando detalhes...</div>
-                               )}
-
-                               {!isLoadingSuggestions && initialSuggestions.length > 0 && (
+                               {initialSuggestions.length > 0 && (
                                    <div className="space-y-2">
-                                      <p className="text-sm font-medium text-blue-600">Perguntas Iniciais Sugeridas:</p>
+                                      <h4 className="text-sm font-medium text-gray-700 mb-2">Perguntas Iniciais Sugeridas:</h4>
                                       {initialSuggestions.map((sug, i) => (
                                           <div key={`init-${i}`} className="border rounded border-blue-200 bg-blue-50/80 p-2">
                                                <div className="flex items-center gap-1">
-                                                   <Button variant="ghost" size="sm" onClick={() => handleSuggestionSelect(sug)} className="text-xs h-auto py-1 px-2 text-left grow hover:bg-blue-100 font-medium">
+                                                   <Button variant="ghost" size="sm" onClick={() => handleSuggestionSelect(sug, 'initial', i)} className="text-xs h-auto py-1 px-2 text-left grow hover:bg-blue-100 font-medium">
                                                        {sug}
                                                    </Button>
                                                    <div className="flex flex-col gap-0.5">
@@ -634,13 +778,13 @@ export default function LiveVetConsulta() {
                                                    </div>
                                                </div>
                                                {/* Área de Follow-up (Colapsada) */}
-                                               {activeSuggestionPath?.originQuestion === sug && activeSuggestionPath.followUps.length > 0 && (
+                                               {activeSuggestionPath?.path === `initial-${i}` && activeSuggestionPath.followUps.length > 0 && (
                                                    <div className="mt-2 pt-2 pl-4 border-t border-blue-200 space-y-1">
                                                        <p className="text-xs font-medium mb-1 text-purple-600">{`Aprofundamento para '${sug}':`}</p>
                                                         <div className="flex flex-wrap gap-2 items-start">
                                                             {activeSuggestionPath.followUps.map((followUpSug, j) => (
                                                                 <div key={`follow-${i}-${j}`} className="flex items-center gap-1 p-1 border rounded bg-purple-50 border-purple-200 text-xs">
-                                                                    <Button variant="ghost" size="sm" onClick={() => handleSuggestionSelect(followUpSug)} className="h-auto py-1 px-2 text-left grow hover:bg-purple-100">
+                                                                    <Button variant="ghost" size="sm" onClick={() => handleSuggestionSelect(followUpSug, 'follow-up', j, `initial-${i}-${j}`)} className="h-auto py-1 px-2 text-left grow hover:bg-purple-100">
                                                                         {followUpSug}
                                                                     </Button>
                                                                     <div className="flex flex-col gap-0.5">
@@ -652,7 +796,7 @@ export default function LiveVetConsulta() {
                                                         </div>
                                                    </div>
                                                )}
-                                               {activeSuggestionPath?.originQuestion === sug && activeSuggestionPath.followUps.length === 0 && (
+                                               {activeSuggestionPath?.path === `initial-${i}` && activeSuggestionPath.followUps.length === 0 && (
                                                    <p className="mt-2 pt-2 pl-4 border-t border-blue-200 text-xs text-muted-foreground">Nenhum aprofundamento adicional sugerido para esta linha.</p>
                                                )}
                                           </div>
@@ -660,10 +804,10 @@ export default function LiveVetConsulta() {
                                   </div>
                                )}
 
-                                {!isLoadingSuggestions && diagnosisSuggestions.length > 0 && (
+                                {diagnosisSuggestions.length > 0 && (
                                     <div>
-                                       <p className="text-sm font-medium mb-2 text-green-600">Hipóteses Diagnósticas Sugeridas:</p>
-                                       <div className="flex flex-wrap gap-2 items-start">
+                                       <h4 className="text-sm font-medium text-gray-700 mb-2 mt-4">Hipóteses Diagnósticas Sugeridas:</h4>
+                                       <div className="mt-4 space-y-3">
                                            {diagnosisSuggestions.map((diag, i) => (
                                                <div key={`diag-${i}`} className="flex items-center gap-1 p-1 border rounded bg-green-50 border-green-200">
                                                    <span className="text-xs font-medium px-2 grow">

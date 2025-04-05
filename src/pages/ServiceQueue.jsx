@@ -83,74 +83,75 @@ export default function ServiceQueue() {
   const { toast } = useToast();
 
   useEffect(() => {
-    loadQueueItems();
-  }, [selectedDate]);
+    const fetchQueueData = async () => {
+      setIsLoading(true);
+      try {
+        const startOfDay = new Date(selectedDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        
+        const endOfDay = new Date(selectedDate);
+        endOfDay.setHours(23, 59, 59, 999);
 
-  const loadQueueItems = async () => {
-    setIsLoading(true);
-    try {
-      const startOfDay = new Date(selectedDate);
-      startOfDay.setHours(0, 0, 0, 0);
-      
-      const endOfDay = new Date(selectedDate);
-      endOfDay.setHours(23, 59, 59, 999);
+        const currentTenant = localStorage.getItem('current_tenant');
+        
+        const allAppointments = await QueueService.filter({
+          appointment_date: {
+            $gte: startOfDay.toISOString(),
+            $lte: endOfDay.toISOString()
+          },
+          tenant_id: currentTenant
+        });
 
-      const currentTenant = localStorage.getItem('current_tenant');
-      
-      const items = await QueueService.filter({
-        appointment_date: {
-          $gte: startOfDay.toISOString(),
-          $lte: endOfDay.toISOString()
-        },
-        tenant_id: currentTenant
-      });
+        const petshopAppointments = allAppointments.filter(appt => appt.type === 'petshop');
 
-      const enrichedItems = await Promise.all(items.map(async (item) => {
-        try {
-          if (!item.pet_id || !item.customer_id || !item.service_id) {
+        const populatedAppointments = await Promise.all(petshopAppointments.map(async (item) => {
+          try {
+            if (!item.pet_id || !item.customer_id || !item.service_id) {
+              return { 
+                ...item, 
+                pet: { name: "Pet não encontrado" }, 
+                customer: { full_name: "Cliente não encontrado" },
+                service: { name: "Serviço não encontrado" }
+              };
+            }
+            
+            const [pet, customer, service] = await Promise.all([
+              Pet.get(item.pet_id),
+              Customer.get(item.customer_id),
+              Service.get(item.service_id)
+            ]);
+            
+            return {
+              ...item,
+              pet: pet || { name: "Pet não encontrado" },
+              customer: customer || { full_name: "Cliente não encontrado" },
+              service: service || { name: "Serviço não encontrado" }
+            };
+          } catch (error) {
+            console.error("Erro ao carregar dados relacionados:", error);
             return { 
               ...item, 
-              pet: { name: "Pet não encontrado" }, 
-              customer: { full_name: "Cliente não encontrado" },
-              service: { name: "Serviço não encontrado" }
+              pet: { name: "Erro ao carregar pet" }, 
+              customer: { full_name: "Erro ao carregar cliente" },
+              service: { name: "Erro ao carregar serviço" }
             };
           }
-          
-          const [pet, customer, service] = await Promise.all([
-            Pet.get(item.pet_id),
-            Customer.get(item.customer_id),
-            Service.get(item.service_id)
-          ]);
-          
-          return {
-            ...item,
-            pet: pet || { name: "Pet não encontrado" },
-            customer: customer || { full_name: "Cliente não encontrado" },
-            service: service || { name: "Serviço não encontrado" }
-          };
-        } catch (error) {
-          console.error("Erro ao carregar dados relacionados:", error);
-          return { 
-            ...item, 
-            pet: { name: "Erro ao carregar pet" }, 
-            customer: { full_name: "Erro ao carregar cliente" },
-            service: { name: "Erro ao carregar serviço" }
-          };
-        }
-      }));
+        }));
 
-      setQueueItems(enrichedItems);
-    } catch (error) {
-      console.error("Erro ao carregar fila:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível carregar a fila de atendimento.",
-        variant: "destructive"
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
+        setQueueItems(populatedAppointments);
+      } catch (error) {
+        console.error("Erro ao carregar fila:", error);
+        toast({
+          title: "Erro",
+          description: "Não foi possível carregar a fila de atendimento.",
+          variant: "destructive"
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchQueueData();
+  }, [selectedDate]);
 
   const checkUpcomingServices = () => {
     const now = new Date();
