@@ -15,6 +15,7 @@ import PrescriptionModal from '@/components/medical/PrescriptionModal';
 import PrintablePrescriptionContent from '@/components/medical/PrintablePrescription';
 import { useTenant } from '@/components/tenant/TenantContext';
 import { createPageUrl } from "@/utils";
+import PetAvatar from '@/components/pets/PetAvatar';
 
 // URLs do NOVO serviço de áudio mock
 const AUDIO_SERVICE_BASE_URL = 'http://localhost:8001';
@@ -640,18 +641,48 @@ export default function LiveVetConsulta() {
 
   const generateConsultationReport = async () => {
       console.log("Salvando consulta antes de gerar relatório...");
-      await saveProgressAndUpdateHistory();
+      try {
+        // Salva o progresso e aguarda a conclusão
+        await saveProgressAndUpdateHistory();
+        
+        // Gera os dados do relatório
+        const report = generateInteractionDataForRAG();
+        
+        // Cria ou atualiza a consulta com os dados do relatório
+        const consultationPayload = {
+          appointmentId: appointmentId,
+          pet_id: pet?.id,
+          tenant_id: localStorage.getItem('current_tenant'),
+          fullInteraction: report
+        };
+        
+        try {
+          console.log(`[generateConsultationReport] Tentando atualizar consulta ${appointmentId}`);
+          await Consultation.update(appointmentId, consultationPayload);
+        } catch (updateError) {
+          if (updateError.message.includes('Consulta não encontrada')) {
+            console.log(`[generateConsultationReport] Criando nova consulta para ${appointmentId}`);
+            await Consultation.create(consultationPayload);
+          } else {
+            throw updateError;
+          }
+        }
 
-      const report = generateInteractionDataForRAG();
-
-      if (appointmentId) {
+        // Navega para a página de relatório
+        if (appointmentId) {
           console.log("Navegando para a página de relatório...");
-          navigate(`/consulta/${appointmentId}/relatorio`);
-      } else {
-          console.error("Não é possível navegar: appointmentId não encontrado.");
-          toast({ title: "Erro de Navegação", description: "ID do agendamento não encontrado.", variant: "destructive" });
+          navigate(`/tenant/live-vet/consulta/${appointmentId}/relatorio`);
+        } else {
+          throw new Error("ID do agendamento não encontrado");
+        }
+      } catch (error) {
+        console.error("[generateConsultationReport] Erro:", error);
+        toast({ 
+          title: "Erro ao gerar relatório", 
+          description: error.message, 
+          variant: "destructive" 
+        });
       }
-      return report;
   };
 
   useEffect(() => {
@@ -818,12 +849,17 @@ export default function LiveVetConsulta() {
                     <CardHeader>
                         <CardTitle>Informações do Paciente</CardTitle>
                     </CardHeader>
-                    <CardContent className="text-sm space-y-2">
-                        <p><strong>Nome:</strong> {pet.name}</p>
-                        <p><strong>Espécie:</strong> {pet.species}</p>
-                        <p><strong>Raça:</strong> {pet.breed}</p>
-                        <p><strong>Sexo:</strong> {pet.gender || 'N/I'}</p>
-                        <p><strong>Nascimento:</strong> {pet.birth_date ? format(parseISO(pet.birth_date), 'dd/MM/yyyy') : 'N/I'}</p>
+                    <CardContent>
+                        <div className="flex items-center justify-between space-x-4">
+                            <div className="space-y-1 text-sm">
+                                <p><strong>Nome:</strong> {pet?.name || 'Carregando...'}</p>
+                                <p><strong>Espécie:</strong> {pet?.species || 'N/A'}</p>
+                                <p><strong>Raça:</strong> {pet?.breed || 'N/A'}</p>
+                            </div>
+                            <div>
+                                {pet && <PetAvatar pet={pet} className="w-16 h-16" />}
+                            </div>
+                        </div>
                     </CardContent>
                 </Card>
                  <Card>

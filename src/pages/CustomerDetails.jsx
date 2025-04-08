@@ -88,7 +88,7 @@ export default function CustomerDetailsPage() {
 
   const handleViewPet = (petId) => {
     const storeParam = localStorage.getItem('current_tenant');
-    navigate(createPageUrl("PetDetails", { id: petId, store: storeParam }));
+    navigate(`/tenant/pet/${petId}?store=${storeParam}`);
   };
 
   if (isLoading) {

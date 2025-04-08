@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Consultation } from '@/modules/live-vet/entities'; // Ajuste o path se necessário
+import { Consultation } from '@/api/entities';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -17,27 +17,32 @@ export default function ConsultaReportPage() {
 
   useEffect(() => {
     const fetchReportData = async () => {
-      if (!appointmentId) {
-        setError("ID do agendamento não encontrado na URL.");
-        setIsLoading(false);
-        return;
-      }
-      setIsLoading(true);
-      setError(null);
       try {
-        // Assumindo que Consultation.filter retorna um array
-        const consultations = await Consultation.filter({ appointmentId: appointmentId });
-        if (!consultations || consultations.length === 0) {
-          throw new Error("Nenhuma consulta encontrada com este ID ou consulta ainda não salva.");
+        if (!appointmentId) {
+          throw new Error("ID do agendamento não fornecido");
         }
-        const consultation = consultations[0]; // Pega a primeira (deve ser única por appointmentId)
+
+        setIsLoading(true);
+        setError(null);
+
+        // Tenta buscar a consulta
+        const consultations = await Consultation.list();
+        console.log("[ConsultaReportPage] Consultations List:", consultations);
+        const consultation = consultations.find(c => c.appointmentId === appointmentId);
+        console.log("[ConsultaReportPage] Found Consultation:", consultation);
+
+        if (!consultation) {
+          throw new Error("Nenhuma consulta encontrada para este agendamento. Por favor, tente gerar o relatório novamente.");
+        }
+
         if (!consultation.fullInteraction) {
-            throw new Error("Dados da interação IA (fullInteraction) não encontrados nesta consulta.");
+          throw new Error("Dados do relatório não encontrados. Por favor, tente gerar o relatório novamente.");
         }
+
         setReportData(consultation.fullInteraction);
-      } catch (err) {
-        console.error("Erro ao buscar dados do relatório:", err);
-        setError(`Erro ao carregar relatório: ${err.message}`);
+      } catch (error) {
+        console.error("[ConsultaReportPage] Erro ao buscar dados:", error);
+        setError(error.message);
       } finally {
         setIsLoading(false);
       }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { MedicationTask, Pet, Customer, MedicalRecord } from '@/api/entities';
+import { MedicationTask, Pet, Customer, MedicalRecord, Medication } from '@/api/entities';
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -39,38 +39,61 @@ export default function MedicationQueue() {
           console.log("[MedicationQueue] Enriquecendo tarefas...");
           const enrichedTasks = await Promise.all(
             allTasks.map(async (task) => {
+              let pet = null;
+              let owner = null;
+              let medication = null;
+              let petName = 'Dados Inválidos';
+              let ownerName = 'Dados Inválidos';
+              let medicationName = 'Nome Indisponível';
+              let details = task.dosage && task.frequency ? `${task.dosage} (${task.frequency})` : task.details || '-';
+
               try {
-                if (!task || !task.petId) {
-                  console.warn("[MedicationQueue] Tarefa inválida ou sem petId:", task);
-                  return { ...task, petName: 'Dados Inválidos', ownerName: 'Dados Inválidos' };
-                }
-
-                console.log(`[MedicationQueue] Buscando Pet ID: ${task.petId}`);
-                const pet = await Pet.get(task.petId);
-                console.log(`[MedicationQueue] Pet encontrado:`, pet);
-                
-                let owner = null;
-                if (pet && pet.owner_id) {
-                  console.log(`[MedicationQueue] Buscando Tutor ID: ${pet.owner_id}`);
-                  owner = await Customer.get(pet.owner_id);
-                  console.log(`[MedicationQueue] Tutor encontrado:`, owner);
+                if (!task || !task.pet_id) {
+                  console.warn("[MedicationQueue] Tarefa inválida ou sem pet_id:", task);
                 } else {
-                  console.warn(`[MedicationQueue] Pet ou owner_id não encontrado para tarefa ${task.id}`);
-                }
+                    console.log(`[MedicationQueue] Buscando Pet ID: ${task.pet_id}`);
+                    pet = await Pet.get(task.pet_id);
+                    console.log(`[MedicationQueue] Pet encontrado:`, pet);
+                    petName = pet?.name || 'Pet Desconhecido';
 
-                return {
-                  ...task,
-                  petName: pet?.name || 'Pet Desconhecido',
-                  ownerName: owner?.full_name || 'Tutor Desconhecido',
-                };
+                    if (pet && pet.owner_id) {
+                      console.log(`[MedicationQueue] Buscando Tutor ID: ${pet.owner_id}`);
+                      owner = await Customer.get(pet.owner_id);
+                      console.log(`[MedicationQueue] Tutor encontrado:`, owner);
+                      ownerName = owner?.full_name || 'Tutor Desconhecido';
+                    } else {
+                      console.warn(`[MedicationQueue] Pet ou owner_id não encontrado para tarefa ${task.id}`);
+                    }
+
+                    if (task.medication_id) {
+                        try {
+                            console.log(`[MedicationQueue] Buscando Medication ID: ${task.medication_id}`);
+                            medication = await Medication.get(task.medication_id);
+                            console.log(`[MedicationQueue] Medicação encontrada:`, medication);
+                            medicationName = medication?.name || medicationName;
+                            if (medication?.description && details === '-') {
+                                details = medication.description;
+                            }
+                        } catch (medError) {
+                            console.error(`[MedicationQueue] Erro ao buscar medicação ${task.medication_id} para tarefa ${task.id}:`, medError);
+                        }
+                    } else {
+                         console.warn(`[MedicationQueue] medication_id não encontrado para tarefa ${task.id}`);
+                    }
+                }
               } catch (fetchError) {
-                console.error(`[MedicationQueue] Erro ao buscar dados para tarefa ${task.id}:`, fetchError);
-                return {
-                  ...task,
-                  petName: 'Erro (Pet)',
-                  ownerName: 'Erro (Tutor)',
-                };
+                console.error(`[MedicationQueue] Erro ao buscar dados associados para tarefa ${task.id}:`, fetchError);
+                petName = 'Erro (Pet)';
+                ownerName = 'Erro (Tutor)';
               }
+              
+              return {
+                  ...task,
+                  petName,
+                  ownerName,
+                  medicationName,
+                  details
+                };
             })
           );
           console.log("[MedicationQueue] Tarefas enriquecidas:", enrichedTasks);
@@ -95,16 +118,19 @@ export default function MedicationQueue() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleMarkAsAdministered = async (taskId) => {
-    console.log(`[MedicationQueue] Tentando marcar tarefa ${taskId} como administrada`);
+  const handleFinishAdministration = async (taskId) => {
+    console.log(`[MedicationQueue] Tentando finalizar tarefa ${taskId}`);
     try {
-      const taskToComplete = await MedicationTask.get(taskId);
+      const taskToComplete = tasks.find(t => t.id === taskId) || await MedicationTask.get(taskId);
       if (!taskToComplete) {
           throw new Error("Tarefa não encontrada para registrar no histórico.");
       }
       console.log("[MedicationQueue] Detalhes da tarefa para histórico:", taskToComplete);
 
-      await MedicationTask.update(taskId, { status: 'Administrado' });
+      await MedicationTask.update(taskId, { 
+          status: 'administered', 
+          end_time: new Date().toISOString()
+      });
       toast({
         title: "Sucesso",
         description: "Medicação marcada como administrada.",
@@ -114,13 +140,13 @@ export default function MedicationQueue() {
       try {
          await MedicalRecord.create({
              tenant_id: taskToComplete.tenant_id,
-             pet_id: taskToComplete.petId,
+             pet_id: taskToComplete.pet_id,
              record_date: new Date().toISOString(),
              type: 'medication_administration',
-             description: `Medicação administrada: ${taskToComplete.medicationName || 'Nome Indisponível'}. Detalhes: ${taskToComplete.details || '-'}`,
+             description: `Medicação administrada: ${taskToComplete.medicationName}. Detalhes: ${taskToComplete.details || '-'}`, 
              related_appointment_id: taskToComplete.appointmentId
          });
-         console.log(`[MedicationQueue] Registro adicionado ao histórico do pet ${taskToComplete.petId}`);
+         console.log(`[MedicationQueue] Registro adicionado ao histórico do pet ${taskToComplete.pet_id}`);
          toast({ title: "Histórico Atualizado", description: "Administração registrada no prontuário.", });
       } catch (recordError) {
          console.error("[MedicationQueue] Erro ao criar registro no histórico:", recordError);
@@ -129,18 +155,19 @@ export default function MedicationQueue() {
       
       fetchTasks(); 
     } catch (err) {
-      console.error("[MedicationQueue] Erro ao marcar medicação como administrada:", err);
+      console.error("[MedicationQueue] Erro ao finalizar medicação:", err);
       toast({
         title: "Erro",
-        description: `Não foi possível atualizar o status da medicação: ${err.message}`,
+        description: `Não foi possível finalizar a medicação: ${err.message}`,
         variant: "destructive",
       });
     }
   };
 
   const handleCancelTask = async (taskId) => {
+    console.log(`[MedicationQueue] Tentando cancelar tarefa ${taskId}`);
     try {
-      await MedicationTask.update(taskId, { status: 'Cancelado' });
+      await MedicationTask.update(taskId, { status: 'cancelled' }); 
       toast({
         title: "Sucesso",
         description: "Medicação cancelada com sucesso.",
@@ -156,8 +183,33 @@ export default function MedicationQueue() {
     }
   };
 
+  const handleStartAdministration = async (taskId) => {
+    console.log(`[MedicationQueue] Tentando iniciar tarefa ${taskId}`);
+    try {
+      await MedicationTask.update(taskId, { 
+          status: 'in_progress',
+          start_time: new Date().toISOString()
+      });
+      toast({
+        title: "Iniciada",
+        description: "Administração da medicação iniciada.",
+      });
+      fetchTasks(); // Atualiza a lista para refletir a mudança de status
+    } catch (err) {
+      console.error("[MedicationQueue] Erro ao iniciar medicação:", err);
+      toast({
+        title: "Erro",
+        description: `Não foi possível iniciar a medicação: ${err.message}`,
+        variant: "destructive",
+      });
+    }
+  };
+
   const getFilteredTasks = (status) => {
-    return tasks.filter(task => task.status === status);
+      if (status === 'pending') {
+          return tasks.filter(task => task.status === 'pending' || task.status === 'in_progress');
+      }
+      return tasks.filter(task => task.status === status);
   };
 
   const renderTaskTable = (tasks) => {
@@ -177,7 +229,6 @@ export default function MedicationQueue() {
             <TableHead>Tutor</TableHead>
             <TableHead>Medicação</TableHead>
             <TableHead>Detalhes</TableHead>
-            <TableHead>Agendado Para</TableHead>
             <TableHead className="text-right">Ações</TableHead>
           </TableRow>
         </TableHeader>
@@ -186,35 +237,43 @@ export default function MedicationQueue() {
             <TableRow key={task.id}>
               <TableCell className="font-medium">{task.petName}</TableCell>
               <TableCell>{task.ownerName}</TableCell>
-              <TableCell>{task.medicationName || 'Nome Indisponível'}</TableCell>
-              <TableCell className="text-sm text-muted-foreground">{task.details || '-'}</TableCell>
-              <TableCell>
-                {task.scheduledTime 
-                  ? format(new Date(task.scheduledTime), "dd/MM/yyyy HH:mm", { locale: ptBR })
-                  : 'Data Indisponível'}
-              </TableCell>
+              <TableCell>{task.medicationName}</TableCell>
+              <TableCell className="text-sm text-muted-foreground">{task.details}</TableCell>
               <TableCell className="text-right">
-                {activeTab === "pending" && (
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => handleMarkAsAdministered(task.id)}
-                      variant="outline"
-                    >
-                      <CheckCircle className="h-4 w-4 mr-2" />
-                      Administrado
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => handleCancelTask(task.id)}
-                      variant="outline"
-                      className="text-destructive"
-                    >
-                      <X className="h-4 w-4 mr-2" />
-                      Cancelar
-                    </Button>
-                  </div>
-                )}
+                <div className="flex justify-end gap-2">
+                  {task.status === 'pending' && (
+                      <Button
+                          size="sm"
+                          onClick={() => handleStartAdministration(task.id)}
+                          variant="secondary"
+                      >
+                          <Clock className="h-4 w-4 mr-2" />
+                          Iniciar
+                      </Button>
+                  )}
+                  {task.status === 'in_progress' && (
+                      <Button
+                          size="sm"
+                          onClick={() => handleFinishAdministration(task.id)}
+                          variant="outline"
+                          className="text-green-600 border-green-600 hover:bg-green-50"
+                      >
+                          <CheckCircle className="h-4 w-4 mr-2" />
+                          Finalizar
+                      </Button>
+                  )}
+                  {(task.status === 'pending' || task.status === 'in_progress') && (
+                      <Button
+                          size="sm"
+                          onClick={() => handleCancelTask(task.id)}
+                          variant="outline"
+                          className="text-destructive hover:bg-red-50"
+                      >
+                          <X className="h-4 w-4 mr-2" />
+                          Cancelar
+                      </Button>
+                  )}
+                </div>
               </TableCell>
             </TableRow>
           ))}
@@ -248,28 +307,28 @@ export default function MedicationQueue() {
               <TabsList>
                 <TabsTrigger value="pending" className="flex items-center gap-2">
                   <Clock className="h-4 w-4" />
-                  Pendentes ({getFilteredTasks('Pendente').length})
+                  Pendentes ({getFilteredTasks('pending').length})
                 </TabsTrigger>
                 <TabsTrigger value="administered" className="flex items-center gap-2">
                   <CheckCircle className="h-4 w-4" />
-                  Administrados ({getFilteredTasks('Administrado').length})
+                  Administrados ({getFilteredTasks('administered').length})
                 </TabsTrigger>
                 <TabsTrigger value="cancelled" className="flex items-center gap-2">
                   <X className="h-4 w-4" />
-                  Cancelados ({getFilteredTasks('Cancelado').length})
+                  Cancelados ({getFilteredTasks('cancelled').length})
                 </TabsTrigger>
               </TabsList>
 
               <TabsContent value="pending">
-                {renderTaskTable(getFilteredTasks('Pendente'))}
+                {renderTaskTable(getFilteredTasks('pending'))}
               </TabsContent>
 
               <TabsContent value="administered">
-                {renderTaskTable(getFilteredTasks('Administrado'))}
+                {renderTaskTable(getFilteredTasks('administered'))}
               </TabsContent>
 
               <TabsContent value="cancelled">
-                {renderTaskTable(getFilteredTasks('Cancelado'))}
+                {renderTaskTable(getFilteredTasks('cancelled'))}
               </TabsContent>
             </Tabs>
           )}

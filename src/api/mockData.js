@@ -224,7 +224,29 @@ const initialData = {
   queueServices: [],
   allergies: [],
   vaccines: [],
-  medications: [],
+  medications: [
+    {
+      id: 'mock-med-1',
+      tenant_id: 'clinica-veterinaria-teste', // Associar ao tenant de teste
+      name: 'Dipirona Gotas 500mg/ml',
+      description: 'Analgésico e antitérmico',
+      category: 'Analgésicos',
+      unit: 'ml',
+      concentration: '500mg/ml',
+      presentation: 'Frasco 20ml',
+      manufacturer: 'Medley',
+      cost_price: 5.50,
+      selling_price: 12.00,
+      stock_quantity: 50,
+      min_stock_level: 10,
+      location: 'Prateleira A3',
+      notes: 'Uso oral.',
+      created_at: '2024-01-10T10:00:00Z',
+      updated_at: '2024-01-10T10:00:00Z'
+    }
+    // Adicionar mais medicações mock se necessário
+  ],
+  medicationTasks: [],
   petshopData: [],
   medicalRecords: [],
   transportServices: [],
@@ -1565,53 +1587,129 @@ export const ConsultationMock = {
     data.consultations = (data.consultations || []).filter(c => c.id !== id);
     setMockData(data);
     return Promise.resolve(true);
+  },
+
+  async list() {
+    console.log('[ConsultationMock.list] Listando todas as consultas...');
+    const data = getMockData();
+    const consultations = data.consultations || [];
+    console.log('[ConsultationMock.list] Consultas encontradas:', consultations);
+    return Promise.resolve(consultations);
   }
 };
 
 // Mock para MedicationTask
 export const MedicationTaskMock = {
+  // CORRIGIDO: filter agora lê do array e aplica filtros
   async filter({ tenant_id, pet_id, status }) {
-    // Simula busca de tarefas de medicação
-    return [
-      {
-        id: '1',
-        tenant_id,
-        pet_id: pet_id || '1',
-        medication_id: '1',
-        dosage: '1 comprimido',
-        frequency: '8/8 horas',
-        start_date: new Date().toISOString(),
-        end_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-        status: status || 'pending',
-        notes: 'Tomar com água',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+    console.log(`[MedicationTaskMock.filter] Filtrando por:`, { tenant_id, pet_id, status });
+    const allData = getMockData();
+    let tasks = [...(allData.medicationTasks || [])];
+
+    if (tenant_id) {
+      tasks = tasks.filter(task => task.tenant_id === tenant_id);
+    }
+    if (pet_id) {
+      tasks = tasks.filter(task => task.pet_id === pet_id);
+    }
+    if (status) {
+      // Lógica para tratar status 'pending' que inclui 'in_progress' (se necessário aqui)
+      if (status === 'pending') {
+          tasks = tasks.filter(task => task.status === 'pending' || task.status === 'in_progress');
+      } else {
+          tasks = tasks.filter(task => task.status === status);
       }
-    ];
+    } else {
+       // Se nenhum status for passado, talvez retornar apenas pending/in_progress por padrão?
+       // Ou retornar todos? Por enquanto, retorna todos se status for null/undefined.
+    }
+
+    console.log(`[MedicationTaskMock.filter] Tarefas encontradas: ${tasks.length}`, tasks);
+    return Promise.resolve(tasks);
   },
 
-  async create(data) {
-    // Simula criação de nova tarefa
-    return {
-      id: Date.now().toString(),
-      ...data,
+  // CORRIGIDO: create agora salva no array
+  async create(newData) {
+    console.log("[MedicationTaskMock.create] Criando com dados:", newData);
+    const allData = getMockData();
+    
+    // Padroniza para usar pet_id
+    const { petId, ...restData } = newData; // Separa petId se existir
+    const finalData = { 
+        ...restData, 
+        pet_id: petId || newData.pet_id // Usa petId ou pet_id que veio
+    };
+
+    const newTask = {
+      id: generateUniqueId('task'),
+      ...finalData, // Usa os dados com pet_id padronizado
+      status: finalData.status || 'pending', // Garante status inicial
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
+
+    // Garante que o array existe
+    if (!allData.medicationTasks) {
+        allData.medicationTasks = [];
+    }
+
+    allData.medicationTasks.push(newTask);
+    setMockData(allData); // Salva os dados atualizados
+    console.log("[MedicationTaskMock.create] Tarefa adicionada e salva (com pet_id):");
+    console.log(newTask); // Log da tarefa salva para verificar
+    return Promise.resolve(newTask);
   },
 
-  async update(id, data) {
-    // Simula atualização de tarefa
-    return {
-      id,
-      ...data,
+  // Update continua como estava (com o paliativo para mock-task-1)
+  async update(id, updateData) {
+    // ... (implementação anterior do update) ...
+     console.log(`[MedicationTaskMock.update] ID: ${id}, Dados:`, updateData);
+    const allData = getMockData(); 
+    if (!allData.medicationTasks) {
+        allData.medicationTasks = [];
+        console.warn('[MedicationTaskMock.update] Array medicationTasks não existia, foi criado.');
+    }
+    const index = allData.medicationTasks.findIndex(task => task.id === id);
+    if (index === -1) {
+      if (id === 'mock-task-1') {
+          console.warn(`[MedicationTaskMock.update] Tarefa mock ${id} não encontrada no array, aplicando virtualmente.`);
+           return Promise.resolve({ 
+               id: id, 
+               // Removido: ...(await this.filter({})[0]), // Não podemos mais assumir que filter retorna a task mockada
+               ...updateData, 
+               updated_at: new Date().toISOString() 
+           });
+      } else {
+           console.error(`[MedicationTaskMock.update] Tarefa com ID ${id} não encontrada.`);
+           throw new Error('Tarefa de medicação não encontrada');
+      }
+    }
+    allData.medicationTasks[index] = {
+      ...allData.medicationTasks[index],
+      ...updateData,
       updated_at: new Date().toISOString()
     };
+    setMockData(allData);
+    console.log('[MedicationTaskMock.update] Tarefa atualizada e dados salvos:', allData.medicationTasks[index]);
+    return Promise.resolve(allData.medicationTasks[index]);
   },
 
+  // Delete agora remove do array
   async delete(id) {
-    // Simula exclusão de tarefa
-    return { success: true, id };
+    console.log(`[MedicationTaskMock.delete] Tentando deletar ID: ${id}`);
+    const allData = getMockData();
+    const initialLength = allData.medicationTasks?.length || 0;
+    if (allData.medicationTasks) {
+        allData.medicationTasks = allData.medicationTasks.filter(task => task.id !== id);
+    }
+    if ((allData.medicationTasks?.length || 0) < initialLength) {
+        setMockData(allData);
+        console.log(`[MedicationTaskMock.delete] Tarefa ${id} deletada e dados salvos.`);
+        return Promise.resolve({ success: true, id });
+    } else {
+        console.warn(`[MedicationTaskMock.delete] Tarefa ${id} não encontrada para deletar.`);
+        return Promise.resolve({ success: false, id }); // Indica que não deletou
+    }
   }
 };
 
