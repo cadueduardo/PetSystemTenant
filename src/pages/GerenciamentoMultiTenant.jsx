@@ -1,15 +1,6 @@
-import React, { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { TransportService } from "@/api/entities";
-import { TransportZonePricing } from "@/api/entities";
-import { TransportDriver } from "@/api/entities";
-import { TransportVehicle } from "@/api/entities";
-import { TransportRoute } from "@/api/entities";
-import { Customer } from "@/api/entities";
-import { Pet } from "@/api/entities";
-import { User } from "@/api/entities";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { Tenant } from "@/api/entities";
-import { Appointment } from "@/api/entities";
 import { toast } from "@/components/ui/use-toast";
 import {
   Table,
@@ -35,20 +26,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { 
   Loader2, 
   Users, 
-  ArrowLeft, 
   Search, 
   Lock, 
   ShieldCheck, 
   Key,
   Settings as SettingsIcon,
   Building,
-  AlertCircle,
-  BarChart,
   PlusCircle,
-  ArrowRight,
   Home,
-  ExternalLink,
-  Eye,
   Pencil,
   Plus,
   Stethoscope,
@@ -56,11 +41,11 @@ import {
   DollarSign,
   Truck,
 } from "lucide-react";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
-
-import TenantDetails from "../components/admin/TenantDetails";
-import TenantForm from "../components/admin/TenantForm";
+import { createPageUrl } from "@/utils";
+import TenantDetails from "@/components/admin/TenantDetails";
+import TenantForm from "@/components/admin/TenantForm";
 
 export default function GerenciamentoMultiTenant() {
   const navigate = useNavigate();
@@ -69,8 +54,7 @@ export default function GerenciamentoMultiTenant() {
   const [showNewTenantForm, setShowNewTenantForm] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [tenants, setTenants] = useState([]);
-  const [isLoadingTenants, setIsLoadingTenants] = useState(false);
-  const [tenantSearchTerm, setTenantSearchTerm] = useState("");
+  const [tenantSearchTerm, /* setTenantSearchTerm */] = useState(""); // Removendo setter não usado
 
   useEffect(() => {
     loadData();
@@ -93,7 +77,7 @@ export default function GerenciamentoMultiTenant() {
     }
   };
 
-  const handleTenantCreated = (newTenant) => {
+  const handleTenantCreated = (/* newTenant */) => {
     setShowNewTenantForm(false);
     loadData();
     toast({
@@ -115,6 +99,11 @@ export default function GerenciamentoMultiTenant() {
       console.error("Erro ao atualizar status:", error);
       return false;
     }
+  };
+
+  const handleEditTenant = (tenant) => {
+    console.log("Editar tenant (implementar):", tenant);
+    toast({ title: "Info", description: "Funcionalidade de edição de tenant ainda não implementada." });
   };
 
   const filteredTenants = tenants.filter(tenant => 
@@ -140,7 +129,7 @@ export default function GerenciamentoMultiTenant() {
       financial: false,
       transport: false,
     });
-    const [isLoading, setIsLoading] = useState(false);
+    const [isSavingModules, setIsSavingModules] = useState(false);
 
     const handleEditModules = async (tenant) => {
       try {
@@ -159,11 +148,10 @@ export default function GerenciamentoMultiTenant() {
     };
 
     const handleSaveModules = async () => {
+      setIsSavingModules(true);
       try {
-        setIsLoading(true);
-
         const updatedModules = Object.entries(editingModules)
-          .filter(([_, isSelected]) => isSelected)
+          .filter(([, isSelected]) => isSelected)
           .map(([moduleName]) => moduleName);
 
         if (updatedModules.length === 0) {
@@ -172,7 +160,7 @@ export default function GerenciamentoMultiTenant() {
             description: "Selecione pelo menos um módulo",
             variant: "destructive"
           });
-          setIsLoading(false);
+          setIsSavingModules(false);
           return;
         }
 
@@ -196,7 +184,7 @@ export default function GerenciamentoMultiTenant() {
           variant: "destructive"
         });
       } finally {
-        setIsLoading(false);
+        setIsSavingModules(false);
       }
     };
 
@@ -402,9 +390,9 @@ export default function GerenciamentoMultiTenant() {
                 <Button
                   type="button"
                   onClick={handleSaveModules}
-                  disabled={isLoading}
+                  disabled={isSavingModules}
                 >
-                  {isLoading ? (
+                  {isSavingModules ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       Salvando...

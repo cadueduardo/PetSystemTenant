@@ -151,3 +151,45 @@ button:focus-visible {
     @apply bg-background text-foreground;
   }
 }
+
+/* Estilos específicos para impressão */
+@media print {
+  body {
+    -webkit-print-color-adjust: exact; /* Chrome, Safari */
+    color-adjust: exact; /* Firefox */
+  }
+  
+  /* Oculta o corpo principal e mostra apenas o container de impressão */
+  body > #root > *:not(.print-container) {
+     display: none;
+  }
+  .print-container > *:not(.printable-prescription) {
+     display: none; 
+  }
+  .print-container .printable-prescription {
+    display: block !important; /* Garante que a prescrição seja visível */
+    position: absolute;
+    left: 0;
+    top: 0;
+    margin: 15mm; /* Margens */
+    padding: 0;
+    font-size: 10pt;
+    box-shadow: none;
+    border: none;
+    background-color: white !important; /* Força fundo branco */
+    color: black !important; /* Força texto preto */
+  }
+  /* Evita quebras de página indesejadas */
+  .printable-prescription section,
+  .printable-prescription ol,
+  .printable-prescription li,
+  .printable-prescription header,
+  .printable-prescription footer {
+     page-break-inside: avoid;
+  }
+  .printable-prescription header,
+  .printable-prescription footer {
+     page-break-before: auto;
+     page-break-after: auto;
+  }
+}

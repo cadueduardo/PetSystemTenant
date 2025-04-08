@@ -1,7 +1,12 @@
+// import React, { Suspense } from "react"; // Removido não usado
+// import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom"; // Removido não usado
+import { Routes, Route } from "react-router-dom"; // Mantido apenas o necessário
+
 import Layout from "./Layout.jsx";
 import AdminLayout from "./AdminLayout.jsx";
+import Landing from "./Landing"; // Descomentar a importação da Landing
 
-import Landing from "./Landing";
+// import Landing from "./Landing"; // Comentado - Não pertence ao Layout principal?
 
 import Dashboard from "./Dashboard";
 
@@ -19,7 +24,7 @@ import Support from "./Support";
 
 import Settings from "./Settings";
 
-import Admin from "./Admin";
+// import Admin from "./Admin"; // Comentado - Pertence ao AdminLayout?
 
 import Products from "./Products";
 
@@ -41,7 +46,7 @@ import MedicalRecordForm from "./MedicalRecordForm";
 
 import AdminLogin from "./AdminLogin";
 
-import DashboardMultiTenant from "./DashboardMultiTenant";
+// import DashboardMultiTenant from "./DashboardMultiTenant"; // Comentado - Pertence ao AdminLayout?
 
 import GerenciamentoMultiTenant from "./GerenciamentoMultiTenant";
 
@@ -57,11 +62,7 @@ import TenantSettings from "./TenantSettings";
 
 import AdminTools from "./AdminTools";
 
-import TransportServices from "./TransportServices";
-
 import SalesHistory from "./SalesHistory";
-
-import TransportSettings from "./TransportSettings";
 
 import AdminDashboard from "./AdminDashboard";
 
@@ -82,10 +83,10 @@ import ServiceQueue from "./ServiceQueue";
 import LiveVetDashboard from "../modules/live-vet/pages/LiveVetDashboard";
 import LiveVetConsulta from "../modules/live-vet/pages/LiveVetConsulta";
 import ConsultaReportPage from "../modules/live-vet/pages/ConsultaReportPage";
-import ErrorBoundary from "@/components/ErrorBoundary";
+import MedicationQueue from "./MedicationQueue";
+import { TenantProvider } from "@/components/tenant/TenantContext";
 
-import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
-
+/* Comentado PAGES pois não será mais usado 
 const PAGES = {
     
     Landing: Landing,
@@ -171,7 +172,9 @@ const PAGES = {
     LiveVetConsulta: LiveVetConsulta,
     
 }
+*/
 
+/* Comentado _getCurrentPage pois não será mais usado 
 function _getCurrentPage(url) {
     if (url.endsWith('/')) {
         url = url.slice(0, -1);
@@ -184,85 +187,113 @@ function _getCurrentPage(url) {
     const pageName = Object.keys(PAGES).find(page => page.toLowerCase() === urlLastPart.toLowerCase());
     return pageName || Object.keys(PAGES)[0];
 }
+*/
 
-// Create a wrapper component that uses useLocation inside the Router context
 function PagesContent() {
-    const location = useLocation();
-    const currentPage = _getCurrentPage(location.pathname);
-    
     return (
+      <TenantProvider>
         <Routes>
+            {/* Rota raiz - Landing Page */}
+            <Route path="/" element={<Landing />} />
+            
             {/* Rotas sem layout */}
             <Route path="/adminlogin" element={<AdminLogin />} />
             
-            {/* Rotas com layout administrativo */}
-            <Route element={<AdminLayout />}>
-                <Route path="/admindashboard" element={<AdminDashboard />} />
-                <Route path="/admintools" element={<AdminTools />} />
-                <Route path="/adminreports" element={<AdminReports />} />
+            {/* Rotas com AdminLayout */}
+            <Route path="/admin" element={<AdminLayout />}>
+                <Route index element={<AdminDashboard />} />
+                <Route path="dashboard" element={<AdminDashboard />} />
+                <Route path="multitenant" element={<GerenciamentoMultiTenant />} />
+                <Route path="reports" element={<AdminReports />} />
+                <Route path="tools" element={<AdminTools />} />
             </Route>
-            
-            {/* Rotas com layout tenant */}
-            <Route path="*" element={
-                <Layout currentPageName={currentPage}>
-                    <Routes>
-                        <Route path="/" element={<Landing />} />
-                        <Route path="/Landing" element={<Landing />} />
-                        <Route path="/Dashboard" element={<Dashboard />} />
-                        <Route path="/Customers" element={<Customers />} />
-                        <Route path="/CustomerDetails" element={<CustomerDetails />} />
-                        <Route path="/Calendar" element={<Calendar />} />
-                        <Route path="/PetDetails" element={<PetDetails />} />
-                        <Route path="/OCRStatistics" element={<OCRStatistics />} />
-                        <Route path="/Support" element={<Support />} />
-                        <Route path="/Settings" element={<Settings />} />
-                        <Route path="/Admin" element={<Admin />} />
-                        <Route path="/Products" element={<Products />} />
-                        <Route path="/Financial" element={<Financial />} />
-                        <Route path="/Hospitalization" element={<Hospitalization />} />
-                        <Route path="/Services" element={<Services />} />
-                        <Route path="/Sales" element={<Sales />} />
-                        <Route path="/EditCustomer" element={<EditCustomer />} />
-                        <Route path="/EditAppointment" element={<EditAppointment />} />
-                        <Route path="/AppointmentForm" element={<AppointmentForm />} />
-                        <Route path="/MedicalRecordForm" element={<MedicalRecordForm />} />
-                        <Route path="/DashboardMultiTenant" element={<DashboardMultiTenant />} />
-                        <Route path="/GerenciamentoMultiTenant" element={<GerenciamentoMultiTenant />} />
-                        <Route path="/Contratar" element={<Contratar />} />
-                        <Route path="/StoreSetup" element={<StoreSetup />} />
-                        <Route path="/StoreDashboard" element={<StoreDashboard />} />
-                        <Route path="/TenantSettings" element={<TenantSettings />} />
-                        <Route path="/TransportServices" element={<TransportServices />} />
-                        <Route path="/SalesHistory" element={<SalesHistory />} />
-                        <Route path="/TransportSettings" element={<TransportSettings />} />
-                        <Route path="/HealthPlans" element={<HealthPlans />} />
-                        <Route path="/Vaccines" element={<Vaccines />} />
-                        <Route path="/Medications" element={<Medications />} />
-                        <Route path="/Allergies" element={<Allergies />} />
-                        <Route path="/Appointments" element={<Appointments />} />
-                        <Route path="/Staff" element={<Staff />} />
-                        <Route path="/ServiceQueue" element={<ServiceQueue />} />
-                        <Route path="/LiveVetDashboard" element={<LiveVetDashboard />} />
-                        <Route 
-                          path="/LiveVetConsulta/:appointmentId" 
-                          element={
-                            <ErrorBoundary>
-                              <LiveVetConsulta />
-                            </ErrorBoundary>
-                          } 
-                        />
-                        <Route path="/consulta/:appointmentId/relatorio" element={<ConsultaReportPage />} />
-                    </Routes>
-                </Layout>
-            } />
+
+            {/* Alias para /admin/dashboard */}
+            <Route path="/admindashboard" element={<AdminLayout />}>
+                <Route index element={<AdminDashboard />} />
+            </Route>
+
+            {/* Rotas com Layout padrão (tenant) */}
+            <Route path="/tenant" element={<Layout />}>
+                <Route index element={<Dashboard />} />
+                <Route path="dashboard" element={<Dashboard />} />
+                <Route path="clientes" element={<Customers />} />
+                <Route path="cliente/:id" element={<CustomerDetails />} />
+                <Route path="cliente/editar/:id" element={<EditCustomer />} />
+                <Route path="calendario" element={<Calendar />} />
+                <Route path="pet/:id" element={<PetDetails />} />
+                <Route path="orc-estatisticas" element={<OCRStatistics />} />
+                <Route path="suporte" element={<Support />} />
+                <Route path="configuracoes" element={<Settings />} />
+                <Route path="produtos" element={<Products />} />
+                <Route path="financeiro" element={<Financial />} />
+                <Route path="internacao" element={<Hospitalization />} />
+                <Route path="servicos" element={<Services />} />
+                <Route path="vendas" element={<Sales />} />
+                <Route path="vendas/historico" element={<SalesHistory />} />
+                <Route path="agendamento/editar/:id" element={<EditAppointment />} />
+                <Route path="agendamento/novo" element={<AppointmentForm />} />
+                <Route path="prontuario/novo" element={<MedicalRecordForm />} />
+                <Route path="contratar" element={<Contratar />} />
+                <Route path="loja/configurar" element={<StoreSetup />} />
+                <Route path="loja/dashboard" element={<StoreDashboard />} />
+                <Route path="tenant/configuracoes" element={<TenantSettings />} />
+                <Route path="planos-saude" element={<HealthPlans />} />
+                <Route path="vacinas" element={<Vaccines />} />
+                <Route path="medicamentos" element={<Medications />} />
+                <Route path="alergias" element={<Allergies />} />
+                <Route path="consultas" element={<Appointments />} />
+                <Route path="equipe" element={<Staff />} />
+                <Route path="fila-atendimento" element={<ServiceQueue />} />
+                <Route path="medicacao" element={<MedicationQueue />} />
+                <Route path="live-vet" element={<LiveVetDashboard />} />
+                <Route path="live-vet/consulta/:appointmentId" element={<LiveVetConsulta />} />
+                <Route path="live-vet/consulta/:appointmentId/relatorio" element={<ConsultaReportPage />} />
+            </Route>
+
+            {/* Aliases para rotas sem o prefixo /tenant/ */}
+            <Route path="/Dashboard" element={<Layout />}>
+                <Route index element={<Dashboard />} />
+            </Route>
+            <Route path="/Customers" element={<Layout />}>
+                <Route index element={<Customers />} />
+            </Route>
+            <Route path="/Calendar" element={<Layout />}>
+                <Route index element={<Calendar />} />
+            </Route>
+            <Route path="/Products" element={<Layout />}>
+                <Route index element={<Products />} />
+            </Route>
+            <Route path="/Sales" element={<Layout />}>
+                <Route index element={<Sales />} />
+            </Route>
+            <Route path="/Services" element={<Layout />}>
+                <Route index element={<Services />} />
+            </Route>
+            <Route path="/Financial" element={<Layout />}>
+                <Route index element={<Financial />} />
+            </Route>
+            <Route path="/Settings" element={<Layout />}>
+                <Route index element={<Settings />} />
+            </Route>
+            <Route path="/ServiceQueue" element={<Layout />}>
+                <Route index element={<ServiceQueue />} />
+            </Route>
+            <Route path="/MedicationQueue" element={<Layout />}>
+                <Route index element={<MedicationQueue />} />
+            </Route>
+            <Route path="/LiveVetDashboard" element={<Layout />}>
+                <Route index element={<LiveVetDashboard />} />
+            </Route>
+            <Route path="/LiveVetConsulta/:appointmentId" element={<Layout />}>
+                <Route index element={<LiveVetConsulta />} />
+            </Route>
+            <Route path="/LiveVetConsulta/:appointmentId/relatorio" element={<Layout />}>
+                <Route index element={<ConsultaReportPage />} />
+            </Route>
         </Routes>
+      </TenantProvider>
     );
 }
 
-export default function Pages() {
-    return (
-        <Router>
-            <PagesContent />
-        </Router>
-    );
-}
+export default PagesContent;

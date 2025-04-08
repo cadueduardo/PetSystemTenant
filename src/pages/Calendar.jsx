@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Appointment, QueueService } from "@/api/entities";
+import { Appointment, QueueService /*, Service, Pet, Customer */ } from "@/api/entities";
+import { getMockData, addRemovalReason /*, getRemovalReasons */ } from "@/api/mockData";
 import { createPageUrl } from "@/utils";
-import { getMockData } from "@/api/mockData";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { format } from "date-fns";
+import { format, isToday, isBefore, startOfDay, endOfDay, differenceInMinutes, differenceInSeconds, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "@/components/ui/use-toast";
 import PropTypes from "prop-types";
@@ -21,10 +21,12 @@ import {
   X,
   Edit,
   RefreshCw,
-  Plus
+  Plus,
+  Info
 } from "lucide-react";
-import ServiceTimer from "../components/queue/ServiceTimer";
 import PetAvatar from "@/components/pets/PetAvatar";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import RemoveFromQueueModal from '@/components/queue/RemoveFromQueueModal';
 
 const getStatusBadge = (status) => {
   const statusConfig = {
@@ -41,17 +43,154 @@ const getStatusBadge = (status) => {
   </Badge>;
 };
 
+const calculateDuration = (start, end) => {
+  if (!start || !end) return null;
+  try {
+    const startDate = parseISO(start);
+    const endDate = parseISO(end);
+    const minutes = differenceInMinutes(endDate, startDate);
+    if (isNaN(minutes) || minutes < 0) return null;
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `${hours}h ${remainingMinutes > 0 ? `${remainingMinutes}min` : ''}`.trim();
+  } catch (e) {
+    console.error("Erro ao calcular duração:", e);
+    return null;
+  }
+};
+
+const AppointmentCard = ({ appointment, onNavigate, onCancelClick, onRemovalReasonClick }) => {
+  const handleEdit = () => {
+    onNavigate(createPageUrl(`EditAppointment`, { id: appointment.id }));
+  };
+
+  const durationDisplay = useMemo(() => { 
+    const savedMinutes = appointment.duration_minutes;
+
+    if (savedMinutes > 0) {
+      if (savedMinutes < 60) return `${savedMinutes} min`;
+      const hours = Math.floor(savedMinutes / 60);
+      const remainingMinutes = savedMinutes % 60;
+      return `${hours}h ${remainingMinutes > 0 ? `${remainingMinutes}min` : ''}`.trim();
+    }
+    
+    if (savedMinutes === 0 && appointment.start_time && appointment.end_time) {
+      try {
+        const seconds = differenceInSeconds(parseISO(appointment.end_time), parseISO(appointment.start_time || appointment.date));
+        if (seconds > 0) {
+          return '< 1 min';
+        }
+      } catch (e) { /* ignora erro */ }
+    }
+
+    return null;
+
+  }, [appointment.date, appointment.start_time, appointment.end_time, appointment.duration_minutes]); 
+
+  return (
+    <Card className="p-4 relative group">
+      <div className="flex justify-between items-start">
+        <div className="flex items-center gap-4">
+          <PetAvatar pet={appointment.pet} size="lg" />
+          <div>
+            <h3 className="font-medium">{appointment.pet?.name || 'Pet não encontrado'}</h3>
+            <p className="text-sm text-gray-500">
+              {appointment.customer?.full_name || `Cliente (ID: ${appointment.customer_id}) não encontrado`}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              Tipo: <span className="font-medium capitalize">{appointment.type === 'clinica' ? 'Clínica' : 'Petshop'}</span>
+            </p>
+            <p className="text-xs text-gray-500">
+              Serviço: <span className="font-medium">{appointment.service?.name || 'N/A'}</span>
+            </p>
+            <div className="mt-1 flex items-center gap-2">
+              {getStatusBadge(appointment.status)}
+              
+              {appointment.status === 'cancelled' && appointment.removal_reason && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info 
+                        className="h-4 w-4 text-gray-500 cursor-pointer" 
+                        onClick={(e) => { 
+                          e.stopPropagation();
+                          onRemovalReasonClick(appointment.removal_reason); 
+                        }}
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Motivo: {appointment.removal_reason}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+              
+              {appointment.status === 'completed' && durationDisplay && (
+                <span className="text-xs text-muted-foreground flex items-center">
+                  <Clock className="h-3 w-3 mr-1" /> {durationDisplay}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">
+            {appointment.date && !isNaN(new Date(appointment.date).getTime()) 
+              ? format(new Date(appointment.date), 'HH:mm')
+              : '--:--'}
+          </span>
+          {(appointment.status === 'scheduled' || appointment.status === 'confirmed') && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">
+                    <MoreVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={handleEdit}>
+                    <Edit className="h-4 w-4 mr-2" />
+                    Editar
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onCancelClick(appointment)} className="text-red-600 focus:text-red-700 focus:bg-red-50">
+                    <X className="h-4 w-4 mr-2" />
+                    Cancelar
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+};
+
+AppointmentCard.propTypes = {
+  appointment: PropTypes.object.isRequired,
+  onNavigate: PropTypes.func.isRequired,
+  onCancelClick: PropTypes.func.isRequired,
+  onRemovalReasonClick: PropTypes.func.isRequired,
+};
+
 export default function CalendarPage() {
   const navigate = useNavigate();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [allAppointments, setAllAppointments] = useState([]);
   const [queueServices, setQueueServices] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [currentTab, setCurrentTab] = useState("all");
+  const [currentTab, setCurrentTab] = useState("awaiting");
+  const [isViewingHistory, setIsViewingHistory] = useState(false);
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [itemToCancel, setItemToCancel] = useState(null);
+  const [cancelledAppointments, setCancelledAppointments] = useState([]);
+  const [completedAppointments, setCompletedAppointments] = useState([]);
 
   useEffect(() => {
-    loadData();
-  }, [selectedDate]);
+    const initialDate = new Date();
+    setSelectedDate(initialDate);
+    setIsViewingHistory(isBefore(startOfDay(initialDate), startOfDay(new Date())));
+    loadData(initialDate);
+  }, []);
 
   const clearCacheAndReload = () => {
     localStorage.removeItem('appointments');
@@ -59,41 +198,89 @@ export default function CalendarPage() {
     localStorage.removeItem('customers');
     localStorage.removeItem('pets');
     localStorage.removeItem('services');
-    loadData();
+    localStorage.removeItem('removalReasons');
+    loadData(selectedDate);
+    toast({ title: "Cache Limpo", description: "Dados recarregados." });
   };
 
   const handleDateSelect = (date) => {
+    if (!date || isNaN(date.getTime())) return;
     setSelectedDate(date);
+    const isHistory = isBefore(startOfDay(date), startOfDay(new Date()));
+    setIsViewingHistory(isHistory);
+    console.log('Data selecionada:', format(date, 'dd/MM/yyyy'), 'É histórico:', isHistory);
     loadData(date);
   };
 
-  const loadData = async () => {
+  const loadData = async (date) => {
+    if (!date) {
+      console.warn("loadData chamado sem data definida.");
+      return; 
+    }
     try {
       setIsLoading(true);
       const tenantId = localStorage.getItem('current_tenant');
-      const date = selectedDate || new Date();
-      const formattedDate = format(date, "yyyy-MM-dd");
-      
-      console.log('Carregando dados para a data:', formattedDate);
-      console.log('Tenant ID:', tenantId);
-      
-      const appointmentsData = await Appointment.filter({
+      const selectedDayStart = startOfDay(date);
+      const selectedDayEnd = endOfDay(date);
+
+      const mockData = getMockData();
+      const isViewingHistory = isBefore(selectedDayStart, startOfDay(new Date())); 
+
+      const allAppointmentsData = await Appointment.filter({
         tenant_id: tenantId,
-        date: formattedDate
+        date: { 
+          $gte: selectedDayStart.toISOString(),
+          $lte: selectedDayEnd.toISOString()
+        }
       });
-      
-      console.log('Todos agendamentos carregados:', appointmentsData);
-      setAllAppointments(appointmentsData);
-      
-      const queueServicesData = await QueueService.filter({
+
+      const allQueueServicesData = await QueueService.filter({
         tenant_id: tenantId,
-        appointment_date: formattedDate
+        appointment_date: {
+          $gte: selectedDayStart.toISOString(),
+          $lte: selectedDayEnd.toISOString()
+        }
       });
+
+      const allServices = mockData.services || [];
+      const enrichedAppointments = allAppointmentsData.map(appointment => {
+        if (appointment.status === 'cancelled') {
+          console.log("[loadData] Enriquecendo cancelado:", { 
+            id: appointment.id, 
+            customerId: appointment.customer_id, 
+            foundCustomer: !!appointment.customer, 
+            reason: appointment.removal_reason
+          });
+        }
+        
+        const pet = mockData.pets.find(p => p.id === appointment.pet_id);
+        const customer = mockData.customers.find(c => c.id === appointment.customer_id);
+        const service = allServices.find(s => s.id === appointment.service_id);
+        
+        return {
+          ...appointment,
+          pet: pet || { name: "Pet não encontrado" },
+          customer: customer || null,
+          service: service || { name: "Serviço não encontrado" } 
+        };
+      });
+
+      const active = enrichedAppointments.filter(a => a.status === 'scheduled' || a.status === 'confirmed');
+      const cancelled = enrichedAppointments.filter(a => a.status === 'cancelled');
+      const completed = enrichedAppointments.filter(a => a.status === 'completed');
       
-      console.log('Serviços da fila carregados:', queueServicesData);
-      setQueueServices(queueServicesData);
-      
-      setIsLoading(false);
+      setAllAppointments(active);
+      setCancelledAppointments(cancelled);
+      setCompletedAppointments(completed);
+
+      const enrichedServices = allQueueServicesData.map(service => ({
+        ...service,
+        pet: mockData.pets.find(p => p.id === service.pet_id),
+        customer: mockData.customers.find(c => c.id === service.customer_id)
+      }));
+
+      setQueueServices(enrichedServices);
+      setIsViewingHistory(isViewingHistory);
     } catch (error) {
       console.error("Erro ao carregar dados:", error);
       toast({
@@ -101,24 +288,64 @@ export default function CalendarPage() {
         description: "Não foi possível carregar os agendamentos.",
         variant: "destructive"
       });
+    } finally {
       setIsLoading(false);
     }
   };
 
-  const getCompletedServices = () => {
-    return queueServices.filter(service => service.status === "completed");
+  const waitingCount = allAppointments.length;
+  const cancelledCount = cancelledAppointments.length;
+  const completedCount = completedAppointments.length;
+
+  const handleOpenCancelModal = (appointment) => {
+    console.log("Abrindo modal para cancelar:", appointment);
+    setItemToCancel(appointment);
+    setIsCancelModalOpen(true);
   };
 
-  const getActiveServices = () => {
-    return queueServices.filter(service => service.status !== "completed");
+  const handleCloseCancelModal = () => {
+    setItemToCancel(null);
+    setIsCancelModalOpen(false);
+  };
+  
+  const handleConfirmCalendarCancel = async (reason, newReason = null) => {
+    if (!itemToCancel) return;
+
+    let finalReason = reason;
+    if (reason === '__other__' && newReason) {
+      finalReason = newReason.trim();
+      if(!finalReason) {
+        toast({ title: "Erro", description: "Especifique o motivo em 'Outros'.", variant: "destructive" });
+        return;
+      }
+      try { addRemovalReason(finalReason); } catch (error) { console.error("Erro salvando motivo:", error); }
+    } else if (reason === '__other__') {
+      toast({ title: "Erro", description: "Especifique o motivo em 'Outros'.", variant: "destructive" });
+      return;
+    } else if (!reason) {
+      toast({ title: "Erro", description: "Selecione um motivo.", variant: "destructive" });
+      return;
+    }
+
+    console.log(`Cancelando Agendamento ${itemToCancel.id} com motivo: ${finalReason}`);
+
+    try {
+      await Appointment.update(itemToCancel.id, {
+        status: 'cancelled',
+        removal_reason: finalReason
+      });
+      toast({ title: "Sucesso", description: "Agendamento cancelado." });
+      loadData(selectedDate);
+      handleCloseCancelModal();
+    } catch (error) {
+      console.error("Erro ao cancelar agendamento:", error);
+      toast({ title: "Erro", description: "Não foi possível cancelar.", variant: "destructive" });
+    }
   };
 
-  const getActiveAppointments = () => {
-    return allAppointments.filter(app => app.status !== 'cancelled');
-  };
-
-  const getCanceledAppointments = () => {
-    return allAppointments.filter(app => app.status === 'cancelled');
+  const openRemovalReasonModal = (reason) => {
+    console.log("Exibir motivo:", reason);
+    alert(`Motivo do Cancelamento: ${reason}`);
   };
 
   if (isLoading) {
@@ -136,6 +363,9 @@ export default function CalendarPage() {
           <h1 className="text-2xl font-bold">Agenda</h1>
           <p className="text-gray-500">
             {format(selectedDate, "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
+            {isViewingHistory && (
+              <span className="ml-2 text-yellow-600 font-semibold">(Visualizando histórico)</span>
+            )}
           </p>
         </div>
         <div className="flex gap-2">
@@ -157,8 +387,7 @@ export default function CalendarPage() {
           </Button>
           <Button
             onClick={() => {
-              const storeParam = localStorage.getItem('current_tenant');
-              navigate(createPageUrl(`AppointmentForm?store=${storeParam}`));
+              navigate(createPageUrl(`AppointmentForm`));
             }}
           >
             <Plus className="h-4 w-4 mr-2" />
@@ -191,7 +420,7 @@ export default function CalendarPage() {
                 </div>
                 <div className="p-3 bg-yellow-50 rounded-lg">
                   <div className="text-2xl font-bold text-yellow-700">
-                    {getActiveServices().length}
+                    {queueServices.length}
                   </div>
                   <div className="text-sm text-yellow-600">Em Atendimento</div>
                 </div>
@@ -201,83 +430,62 @@ export default function CalendarPage() {
         </Card>
 
         <div className="lg:col-span-8">
-          <Tabs defaultValue="all" value={currentTab} onValueChange={setCurrentTab}>
+          <Tabs defaultValue="awaiting" value={currentTab} onValueChange={setCurrentTab}>
             <div className="flex justify-between items-center mb-4">
               <TabsList>
-                <TabsTrigger value="all">Todos</TabsTrigger>
-                <TabsTrigger value="appointments">Agendamentos</TabsTrigger>
-                <TabsTrigger value="queue">Fila de Atendimento</TabsTrigger>
-                <TabsTrigger value="completed">Atendimentos Concluídos</TabsTrigger>
-                <TabsTrigger value="canceled">Cancelados</TabsTrigger>
+                <TabsTrigger value="awaiting">Aguardando ({waitingCount})</TabsTrigger>
+                <TabsTrigger value="queue">Fila Atend.</TabsTrigger>
+                <TabsTrigger value="completed">Concluídos ({completedCount})</TabsTrigger>
+                <TabsTrigger 
+                  value="canceled"
+                  className={cancelledCount > 0 ? 'text-red-600 font-bold' : ''}
+                >
+                  Cancelados {cancelledCount > 0 ? `(${cancelledCount})` : ''}
+                </TabsTrigger>
               </TabsList>
-              <Button variant="ghost" onClick={loadData} size="icon">
+              <Button variant="ghost" onClick={() => loadData(selectedDate)} size="icon">
                 <RefreshCw className="h-4 w-4" />
               </Button>
             </div>
 
-            <TabsContent value="all" className="space-y-4">
-              {getActiveAppointments().length === 0 && getActiveServices().length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  Nenhum agendamento ativo ou serviço em atendimento para este dia.
-                </div>
-              ) : (
-                <>
-                  {getActiveServices().map((service) => (
-                    <QueueServiceCard
-                      key={`queue-${service.id}`}
-                      service={service}
-                      isQueueItem={true}
-                      onLoadData={loadData}
-                      onNavigate={navigate}
-                    />
-                  ))}
-                  {getActiveAppointments()
-                    .filter(app => !queueServices.some(q => q.appointment_id === app.id))
-                    .map((appointment) => (
-                    <QueueServiceCard
-                      key={`appt-${appointment.id}`}
-                      service={appointment}
-                      isQueueItem={false}
-                      onLoadData={loadData}
-                      onNavigate={navigate}
-                    />
-                  ))}
-                </>
-              )}
-            </TabsContent>
-
-            <TabsContent value="appointments" className="space-y-4">
-              {getActiveAppointments().length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  Nenhum agendamento para este dia.
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {getActiveAppointments().map((appointment) => (
-                    <QueueServiceCard
-                      key={appointment.id}
-                      service={appointment}
-                      isQueueItem={false}
-                      onLoadData={loadData}
-                      onNavigate={navigate}
-                    />
-                  ))}
-                </div>
-              )}
+            <TabsContent value="awaiting" className="space-y-4">
+              {allAppointments.length === 0 ? (
+                 <div className="text-center py-8 text-gray-500">
+                   {isToday(selectedDate)
+                     ? "Nenhum agendamento aguardando para hoje."
+                     : isViewingHistory
+                     ? "Nenhum agendamento aguardando registrado para este dia."
+                     : "Nenhum agendamento aguardando para este dia."}
+                 </div>
+               ) : (
+                 allAppointments.map((appointment) => (
+                   <AppointmentCard
+                     key={`app-awaiting-${appointment.id}`}
+                     appointment={appointment}
+                     onNavigate={navigate}
+                     onCancelClick={handleOpenCancelModal}
+                     onRemovalReasonClick={openRemovalReasonModal}
+                   />
+                 ))
+               )}
             </TabsContent>
 
             <TabsContent value="queue" className="space-y-4">
-              {getActiveServices().length === 0 ? (
+              {queueServices.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
-                  Nenhum serviço na fila para este dia.
+                  {isToday(selectedDate)
+                    ? "Nenhum atendimento em andamento."
+                    : isViewingHistory
+                    ? "Nenhum atendimento registrado para este dia."
+                    : "Nenhum atendimento para este dia."}
                 </div>
               ) : (
-                getActiveServices().map((service) => (
+                queueServices.map((service) => (
                   <QueueServiceCard
-                    key={service.id}
+                    key={`queue-${service.id}`}
                     service={service}
                     isQueueItem={true}
-                    onLoadData={loadData}
+                    onLoadData={() => loadData(selectedDate)}
                     onNavigate={navigate}
                   />
                 ))
@@ -285,36 +493,46 @@ export default function CalendarPage() {
             </TabsContent>
 
             <TabsContent value="completed" className="space-y-4">
-              {getCompletedServices().length === 0 ? (
+              {completedAppointments.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
-                  Nenhum atendimento concluído para este dia.
+                  {isToday(selectedDate)
+                    ? "Nenhum atendimento concluído hoje."
+                    : isViewingHistory
+                    ? "Nenhum atendimento concluído registrado para este dia."
+                    : "Nenhum atendimento concluído para este dia."}
                 </div>
               ) : (
-                getCompletedServices().map((service) => (
-                  <QueueServiceCard
-                    key={service.id}
-                    service={service}
-                    isQueueItem={true}
-                    onLoadData={loadData}
-                    onNavigate={navigate}
-                  />
-                ))
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {completedAppointments.map((appointment) => (
+                    <AppointmentCard
+                      key={`app-completed-${appointment.id}`}
+                      appointment={appointment}
+                      onNavigate={navigate}
+                      onCancelClick={() => {}}
+                      onRemovalReasonClick={() => {}}
+                    />
+                  ))}
+                </div>
               )}
             </TabsContent>
 
             <TabsContent value="canceled" className="space-y-4">
-              {getCanceledAppointments().length === 0 ? (
+              {cancelledAppointments.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
-                  Nenhum agendamento cancelado para este dia.
+                  {isToday(selectedDate)
+                    ? "Nenhum agendamento cancelado hoje."
+                    : isViewingHistory
+                    ? "Nenhum agendamento cancelado registrado para este dia."
+                    : "Nenhum agendamento cancelado para este dia."}
                 </div>
               ) : (
-                getCanceledAppointments().map((appointment) => (
-                  <QueueServiceCard
-                    key={appointment.id}
-                    service={appointment}
-                    isQueueItem={false}
-                    onLoadData={loadData}
+                cancelledAppointments.map((appointment) => (
+                  <AppointmentCard
+                    key={`app-canceled-${appointment.id}`}
+                    appointment={appointment}
                     onNavigate={navigate}
+                    onCancelClick={() => {}}
+                    onRemovalReasonClick={openRemovalReasonModal}
                   />
                 ))
               )}
@@ -322,6 +540,15 @@ export default function CalendarPage() {
           </Tabs>
         </div>
       </div>
+
+      {isCancelModalOpen && itemToCancel && (
+        <RemoveFromQueueModal 
+          isOpen={isCancelModalOpen} 
+          onClose={handleCloseCancelModal} 
+          onConfirm={handleConfirmCalendarCancel}
+          item={itemToCancel}
+        />
+      )}
     </div>
   );
 }
@@ -350,19 +577,14 @@ function QueueServiceCard({ service, isQueueItem, onLoadData, onNavigate }) {
 
   const handleCancel = async () => {
     try {
-      console.log("Tentando cancelar agendamento com ID:", service.appointment_id);
+      console.log("Cancelando direto do QueueServiceCard:", service.appointment_id);
       if (!service.appointment_id) {
         console.error("Erro: ID do agendamento não encontrado no serviço:", service);
         toast({ title: "Erro", description: "ID do agendamento não encontrado.", variant: "destructive" });
         return;
       }
-      await Appointment.update(service.appointment_id, { 
-        status: "cancelled"
-      });
-      toast({
-        title: "Sucesso",
-        description: "Agendamento cancelado com sucesso!"
-      });
+      await Appointment.update(service.appointment_id, { status: "cancelled" });
+      toast({ title: "Sucesso", description: "Agendamento cancelado." });
       onLoadData();
     } catch (error) {
       console.error("Erro ao cancelar agendamento:", error);
@@ -396,7 +618,6 @@ function QueueServiceCard({ service, isQueueItem, onLoadData, onNavigate }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <ServiceTimer service={service} compact />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon">

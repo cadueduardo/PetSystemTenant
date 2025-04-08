@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { Customer, Pet } from "@/api/entities";
 import { createPageUrl } from "@/utils";
 import { toast } from "@/components/ui/use-toast";
@@ -12,7 +12,9 @@ import CustomerForm from "@/components/customers/CustomerForm";
 import PetAvatar from "@/components/pets/PetAvatar";
 
 export default function CustomerDetailsPage() {
+  console.log('[CustomerDetailsPage] Componente montado/renderizado.');
   const navigate = useNavigate();
+  const { id } = useParams();
   const [customer, setCustomer] = useState(null);
   const [pets, setPets] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -21,28 +23,30 @@ export default function CustomerDetailsPage() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [id]);
 
   const loadData = async () => {
+    console.log('[CustomerDetailsPage] loadData iniciado com id:', id);
     setIsLoading(true);
     try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const customerId = urlParams.get('id');
       const currentTenant = localStorage.getItem('current_tenant');
 
       if (!currentTenant) {
+        console.log('[CustomerDetailsPage] Tenant não encontrado, redirecionando para Landing.');
         navigate(createPageUrl("Landing"));
         return;
       }
 
-      if (!customerId) {
+      if (!id) {
+        console.log('[CustomerDetailsPage] ID do cliente não encontrado (via useParams), redirecionando para Customers.');
         navigate(createPageUrl("Customers"));
         return;
       }
-
+      
+      console.log(`[CustomerDetailsPage] Buscando Customer.get(${id}) e Pet.filter({ owner_id: ${id} })`);
       const [customerData, petsData] = await Promise.all([
-        Customer.get(customerId),
-        Pet.filter({ owner_id: customerId })
+        Customer.get(id),
+        Pet.filter({ owner_id: id })
       ]);
 
       if (customerData.tenant_id !== currentTenant) {

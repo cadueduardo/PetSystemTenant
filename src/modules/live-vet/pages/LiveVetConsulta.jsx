@@ -1,17 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Appointment, Pet, Customer, Service, Consultation } from "@/api/entities";
-import { DiagnosticAgent } from '@/lib/DiagnosticAgent'; // <<< IMPORTAR O AGENTE
+import { Appointment, Pet, Customer, Service, Consultation, MedicationTask /*, MedicalRecord */ } from "@/api/entities";
+import { DiagnosticAgent } from '@/lib/DiagnosticAgent';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { toast } from '@/components/ui/use-toast';
-import { ArrowLeft, Loader2, ClipboardList, Save, Bot, FileText, Mic, Square, ThumbsUp, ThumbsDown } from 'lucide-react';
-import { format, parseISO } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
 import { useToast } from "@/components/ui/use-toast";
+import { ArrowLeft, Loader2, ClipboardList, Save, Bot, FileText, Mic, Square, ThumbsUp, ThumbsDown, Pill as PillIcon, Printer } from 'lucide-react';
+import { format, parseISO, differenceInMinutes } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+import PrescriptionModal from '@/components/medical/PrescriptionModal';
+import PrintablePrescriptionContent from '@/components/medical/PrintablePrescription';
+import { useTenant } from '@/components/tenant/TenantContext';
+import { createPageUrl } from "@/utils";
 
 // URLs do NOVO serviço de áudio mock
 const AUDIO_SERVICE_BASE_URL = 'http://localhost:8001';
@@ -30,7 +33,7 @@ export default function LiveVetConsulta() {
   const [customer, setCustomer] = useState(null);
   const [service, setService] = useState(null);
   const [consultationHistory, setConsultationHistory] = useState([]);
-  const diagnosticAgentRef = useRef(new DiagnosticAgent()); // <<< INSTANCIAR O AGENTE
+  const diagnosticAgentRef = useRef(new DiagnosticAgent());
 
   // Estados para os campos da consulta atual
   const [anamnesisNotes, setAnamnesisNotes] = useState('');
@@ -49,9 +52,9 @@ export default function LiveVetConsulta() {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const recognitionRef = useRef(null);
-  const isStoppingRef = useRef(false); // <<< Flag para parada intencional
-  const currentSessionIdRef = useRef(null); // <<< Ref para ID da sessão atual
-  const finalTranscriptRef = useRef(''); // <<< Ref para transcrição final
+  const isStoppingRef = useRef(false);
+  const currentSessionIdRef = useRef(null);
+  const finalTranscriptRef = useRef('');
 
   // --- Estados para Sugestões e Diagnósticos (Revisados para Collapse) ---
   const [initialSuggestions, setInitialSuggestions] = useState([]);
@@ -64,9 +67,17 @@ export default function LiveVetConsulta() {
   const [diagnosisFeedback, setDiagnosisFeedback] = useState({});
   const [confirmedDiagnosis, setConfirmedDiagnosis] = useState('');
 
+  // <<< Adicionar Estados para Prescrição >>>
+  const [isPrescriptionModalOpen, setIsPrescriptionModalOpen] = useState(false);
+  const [currentPrescriptionItems, setCurrentPrescriptionItems] = useState([]);
+  const { tenant } = useTenant();
+  const [isPrinting, setIsPrinting] = useState(false);
+
+  // <<< Ref para o componente de impressão >>>
+  const printableComponentRef = useRef();
+
   useEffect(() => {
-    console.log('[useEffect Main] Rodando com appointmentId:', appointmentId); // <<< LOG 1
-    // >>> DESCOMENTAR LÓGICA DE BUSCA <<<
+    console.log('[useEffect Main] Rodando com appointmentId:', appointmentId);
     diagnosticAgentRef.current.clearContext();
     setSelectedSuggestionsHistory([]);
     setInitialSuggestions([]);
@@ -78,56 +89,79 @@ export default function LiveVetConsulta() {
 
     const loadConsultationData = async () => {
       if (!appointmentId) {
-        console.error('[useEffect Main] ID do agendamento NULO ao carregar.'); // <<< LOG 2
+        console.error('[useEffect Main] ID do agendamento NULO ao carregar.');
         setError("ID do agendamento não fornecido.");
-        setIsLoading(false); // Corrigido para usar setIsLoading aqui
+        setIsLoading(false);
         return;
       }
-      console.log('[useEffect Main] Iniciando busca de dados...'); // <<< LOG 3
+      console.log('[useEffect Main] Iniciando busca de dados...');
       setIsLoading(true);
       setError(null);
       setStreamingError(null);
       try {
-        // const apptData = await Appointment.get(appointmentId);
-        const apptData = await Appointment.get(appointmentId); // Descomentado
-        console.log('[useEffect Main] Agendamento carregado:', apptData); // <<< LOG 4
-        setAppointment(apptData); // Descomentado
+        const apptData = await Appointment.get(appointmentId);
+        console.log('[useEffect Main] Agendamento carregado inicialmente:', apptData);
 
-        // ... (Resto das buscas precisa ser descomentado)
-        const [petData, customerData, serviceData, historyData] = await Promise.all([
-          Pet.get(apptData.pet_id).catch(err => { console.error("Erro ao buscar pet:", err); return null; }),
-          Customer.get(apptData.customer_id).catch(err => { console.error("Erro ao buscar cliente:", err); return null; }),
-          Service.get(apptData.service_id).catch(err => { console.error("Erro ao buscar serviço:", err); return null; }),
-          Consultation.filter({ petId: apptData.pet_id, tenant_id: apptData.tenant_id }).catch(err => { console.error("Erro ao buscar histórico:", err); return []; })
+        let currentApptData = apptData; // Variável para manter dados atualizados
+
+        // <<< MARCAR COMO EM ANDAMENTO E DEFINIR START_TIME >>>
+        if ( (apptData.status === 'scheduled' || apptData.status === 'confirmed') && !apptData.start_time ) {
+           console.log('[useEffect Main] Agendamento precisa ser iniciado. Atualizando status e start_time...');
+           const startTimeUpdate = new Date().toISOString();
+           try {
+              const updatedAppt = await Appointment.update(appointmentId, {
+                 status: 'in_progress',
+                 start_time: startTimeUpdate
+              });
+              console.log('[useEffect Main] Agendamento atualizado para in_progress:', updatedAppt);
+              currentApptData = updatedAppt; // Usa os dados atualizados
+           } catch (startError) {
+              console.error("[useEffect Main] Erro ao atualizar agendamento para in_progress:", startError);
+              toast({ title: "Erro", description: "Não foi possível marcar o início do atendimento.", variant: "destructive" });
+              // Continuaremos com os dados originais (apptData)
+           }
+        }
+        // <<< FIM DA LÓGICA DE INÍCIO >>>
+        
+        setAppointment(currentApptData); // <<< Define o estado com os dados potencialmente atualizados
+
+        // <<< GARANTIR APENAS UMA DECLARAÇÃO AQUI >>>
+        const [petDataResult, customerDataResult, serviceDataResult, historyDataResult] = await Promise.all([
+          Pet.get(currentApptData.pet_id).catch(err => { console.error("Erro Pet:", err); return null; }),
+          Customer.get(currentApptData.customer_id).catch(err => { console.error("Erro Cliente:", err); return null; }),
+          Service.get(currentApptData.service_id).catch(err => { console.error("Erro Serviço:", err); return null; }),
+          Consultation.filter({ petId: currentApptData.pet_id, tenant_id: currentApptData.tenant_id }).catch(err => { console.error("Erro Hist:", err); return []; })
         ]);
-        console.log('[useEffect Main] Dados associados carregados (Pet, Cliente, Serviço, Histórico):', {petData, customerData, serviceData, historyData}); // <<< LOG 5
+        console.log('[useEffect Main] Dados associados carregados:', {petDataResult, customerDataResult, serviceDataResult, historyDataResult});
 
-        if (!petData || !customerData || !serviceData) {
-           console.error('[useEffect Main] Falha ao carregar dados essenciais!'); // <<< LOG 6
+        if (!petDataResult || !customerDataResult || !serviceDataResult) {
+           console.error('[useEffect Main] Falha ao carregar dados essenciais!');
           throw new Error("Não foi possível carregar todos os dados necessários (pet, cliente ou serviço).");
         }
 
-        setPet(petData); // Descomentado
-        setCustomer(customerData); // Descomentado
-        setService(serviceData); // Descomentado
-        setConsultationHistory(historyData); // Descomentado
-        console.log('[useEffect Main] Estados atualizados com sucesso.'); // <<< LOG 7
+        setPet(petDataResult);
+        setCustomer(customerDataResult);
+        setService(serviceDataResult);
+        setConsultationHistory(historyDataResult);
+        console.log('[useEffect Main] Estados atualizados com sucesso.');
+
+        console.log('[useEffect Main] Agendamento carregado:', apptData);
+        setAppointment(apptData);
 
       } catch (err) {
-        console.error("[useEffect Main] ERRO DETALHADO no catch:", err); // <<< LOG 8
+        console.error("[useEffect Main] ERRO DETALHADO no catch:", err);
         setError(`Erro ao carregar dados: ${err.message}`);
         toast({ title: "Erro", description: "Não foi possível carregar os dados da consulta.", variant: "destructive" });
       } finally {
-         console.log('[useEffect Main] Definindo isLoading = false (original).'); // <<< LOG 9
+         console.log('[useEffect Main] Definindo isLoading = false (original).');
          setIsLoading(false);
       }
     };
 
     loadConsultationData();
-    // <<< FIM DO CÓDIGO DESCOMENTADO >>>
 
     return () => {
-      console.log('[useEffect Main] Limpeza ao desmontar ou antes de re-rodar.'); // <<< LOG 10
+      console.log('[useEffect Main] Limpeza ao desmontar ou antes de re-rodar.');
     };
   }, [appointmentId]);
 
@@ -139,7 +173,7 @@ export default function LiveVetConsulta() {
     setActiveSuggestionPath(null);
     setBackendReport(null);
     setStreamingTranscript('');
-    finalTranscriptRef.current = ''; // <<< RESETAR REF
+    finalTranscriptRef.current = '';
 
     console.log("Iniciando gravação e conexão WebSocket...");
     setIsStreaming(true);
@@ -200,23 +234,22 @@ export default function LiveVetConsulta() {
         }
       };
 
-      // --- INICIAR WEB SPEECH API (TRANSCRIÇÃO NO FRONTEND) ---
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRecognition) {
         throw new Error("Web Speech API não suportada neste navegador.");
       }
 
       const recognition = new SpeechRecognition();
-      recognition.continuous = true; // Continua ouvindo
-      recognition.interimResults = true; // Pega resultados parciais
-      recognition.lang = 'pt-BR'; // Define o idioma
-      recognitionRef.current = recognition; // Guarda a referência
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'pt-BR';
+      recognitionRef.current = recognition;
 
-      let finalTranscriptSegment = ''; // Acumulador temporário
+      let finalTranscriptSegment = '';
 
       recognition.onresult = (event) => {
         let interimTranscript = '';
-        finalTranscriptSegment = ''; // Reseta a cada evento de resultado
+        finalTranscriptSegment = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           if (event.results[i].isFinal) {
             finalTranscriptSegment += event.results[i][0].transcript;
@@ -224,18 +257,16 @@ export default function LiveVetConsulta() {
             interimTranscript += event.results[i][0].transcript;
           }
         }
-        // Atualiza o estado com a parte final + a parte interina atual
-        let nextTranscript = streamingTranscript; // Pega o valor atual do estado (antes do setState)
+        let nextTranscript = streamingTranscript;
         setStreamingTranscript(prev => {
             if (finalTranscriptSegment && !prev.endsWith(finalTranscriptSegment.trim() + ' ')) {
                  nextTranscript = prev + finalTranscriptSegment.trim() + ' ';
                  return nextTranscript;
             } else {
-                 nextTranscript = prev; // Mantém o valor anterior se não houver segmento final novo
+                 nextTranscript = prev;
                 return prev;
             }
         });
-        // ATUALIZAR REF com o valor *calculado* para o próximo estado
         finalTranscriptRef.current = nextTranscript;
         console.log('Interim:', interimTranscript, '| Final segment:', finalTranscriptSegment);
       };
@@ -243,7 +274,6 @@ export default function LiveVetConsulta() {
       recognition.onerror = (event) => {
         console.error('>>> DETALHE Erro do SpeechRecognition:', event);
         setStreamingError(`Erro no reconhecimento de fala: ${event.error} - ${event.message || 'Sem msg adicional.'}`);
-        // Tenta parar de forma limpa se o reconhecimento falhar
         if (isStreaming) {
             handleStopStreamingRecording();
         }
@@ -251,27 +281,20 @@ export default function LiveVetConsulta() {
 
       recognition.onend = () => {
         console.log('SpeechRecognition parado.');
-        // Verifica se a parada foi intencional (botão Parar clicado)
         if (isStoppingRef.current) {
             console.log('Parada intencional detectada, enviando dados...');
-            // <<< USAR VALORES DAS REFS >>>
             const finalTranscriptToSend = finalTranscriptRef.current;
             const sessionIdToSend = currentSessionIdRef.current;
             sendDataToServer(finalTranscriptToSend, sessionIdToSend);
 
-            // Limpeza após envio
             isStoppingRef.current = false;
             setSessionId(null);
             mediaRecorderRef.current = null;
             audioChunksRef.current = [];
         } else {
              console.log('Reco parou (ex: silêncio), mas não foi parada intencional.');
-             // Opcionalmente, chamar handleStopStreamingRecording para finalizar tudo?
-             // handleStopStreamingRecording();
         }
       };
-
-      // --- FIM WEB SPEECH API ---
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           throw new Error("getUserMedia não é suportado neste navegador.");
@@ -310,7 +333,6 @@ export default function LiveVetConsulta() {
       recorder.start(1000);
       console.log("MediaRecorder iniciado.");
 
-      // <<< INICIAR O RECONHECIMENTO DE FALA >>>
       if (recognitionRef.current) {
          recognitionRef.current.start();
          console.log("SpeechRecognition iniciado.");
@@ -333,40 +355,30 @@ export default function LiveVetConsulta() {
   }, [isStreaming]);
 
   const handleStopStreamingRecording = useCallback(async () => {
-    // --- PARAR WEB SPEECH API --- <<< (Apenas chama stop, não anula a ref ainda)
     if (recognitionRef.current) {
       console.log("Chamando recognition.stop()...");
-      isStoppingRef.current = true; // <<< SINALIZA PARADA INTENCIONAL
+      isStoppingRef.current = true;
       recognitionRef.current.stop();
-      // Não anular recognitionRef.current = null aqui, pois onend pode precisar dele
     }
-    // --- FIM PARAR WEB SPEECH API ---
-
-    // Verifica se o MediaRecorder existe ANTES de acessar sessionId
     if (!mediaRecorderRef.current) return;
-    const currentSessionId = currentSessionIdRef.current; // Pega o ID da ref
+    const currentSessionId = currentSessionIdRef.current;
     if (!currentSessionId) return;
 
     console.log("Parando MediaRecorder e finalizando sessão (localmente):", currentSessionId);
-    setIsStreaming(false); // Atualiza UI
+    setIsStreaming(false);
 
-    // Parar o MediaRecorder primeiro
     if (mediaRecorderRef.current.state === "recording") {
-        mediaRecorderRef.current.stop(); // Isso dispara o onstop
+        mediaRecorderRef.current.stop();
     }
 
-    // Fechar WebSocket
     if (webSocketRef.current && webSocketRef.current.readyState === WebSocket.OPEN) {
       console.log('Fechando WebSocket explicitamente...');
       webSocketRef.current.close(1000, "Client ending session");
     }
     webSocketRef.current = null;
 
-    // A limpeza final (setSessionId(null), etc.) será feita no onend
-
   }, []);
 
-  // <<< NOVA FUNÇÃO PARA ENVIAR DADOS >>>
   const sendDataToServer = useCallback(async (finalTranscript, currentSessionId) => {
     console.log(`Enviando para o servidor (Sessão: ${currentSessionId}): `, finalTranscript);
     if (!currentSessionId) {
@@ -425,33 +437,17 @@ export default function LiveVetConsulta() {
         toast({ title: "Erro de Comunicação", description: err.message, variant: "destructive" });
         setBackendReport(null);
       }
-  }, []); // Dependências vazias, pois usa apenas argumentos
+  }, []);
 
-  // --- Handler para Clique em Sugestão (Lógica de Collapse/Expand) ---
   const handleSuggestionSelect = (suggestionText, type, index, path = null) => {
     console.log(`Sugestão/Pergunta selecionada: ${suggestionText}`)
 
-    // SIMPLIFICADO: Apenas registra a seleção, não chama mais o agente local para follow-ups.
-    // A lógica de feedback (opcional) pode permanecer se desejado.
-
-    // Mantém o histórico de seleção se for útil para a UI ou lógica futura
     setSelectedSuggestionsHistory(prev => [...prev, { text: suggestionText, type, path }]);
 
-    // Se a lógica de colapso/expansão ainda for desejada:
-    setActiveSuggestionPath(path); // Atualiza o path ativo
+    setActiveSuggestionPath(path);
 
-    // REMOVIDO: Chamadas ao Diagnostic Agent local
-    // const result = diagnosticAgentRef.current.processInput(suggestionText, path);
-    // console.log('Resultado do processInput local:', result);
-    // if (result?.followUpQuestions?.length) {
-    //    // Atualiza sugestões se houver follow-ups locais (não vai mais acontecer)
-    // }
-    // if (result?.potentialDiagnoses?.length) {
-    //    setDiagnosisSuggestions(result.potentialDiagnoses);
-    // }
   };
 
-  // --- NOVOS HANDLERS PARA FEEDBACK ---
   const handleSuggestionFeedback = (suggestion, isUseful) => {
       const feedback = isUseful ? 'useful' : 'not_useful';
       setSuggestionFeedback(prev => ({ ...prev, [suggestion]: feedback }));
@@ -466,7 +462,9 @@ export default function LiveVetConsulta() {
       toast({ title: "Feedback Registrado", description: `Diagnóstico "${diagnosis}" marcado.` });
   };
 
-  const handleSaveConsultation = async () => {
+  // <<< FUNÇÃO RENOMEADA: Salva progresso da consulta e atualiza histórico >>>
+  const saveProgressAndUpdateHistory = async () => {
+      console.log('[saveProgressAndUpdateHistory] Iniciando...');
       if (!appointment || !pet || !customer) {
           toast({ title: "Erro", description: "Dados essenciais faltando para salvar.", variant: "destructive" });
           return;
@@ -474,81 +472,141 @@ export default function LiveVetConsulta() {
       setIsSaving(true);
       try {
           const existingConsultations = await Consultation.filter({ appointmentId: appointment.id });
-          const interactionDataForRAG = generateInteractionDataForRAG();
+          const interactionDataForRAG = generateInteractionDataForRAG(); // Gera dados atuais
 
-          const consultationData = {
+          const consultationDataPayload = { // Usa payload para clareza
               appointmentId: appointment.id,
               petId: pet.id,
               ownerId: customer.id,
               vetId: 'vet-default',
               date: new Date().toISOString(),
               reason: service?.name || appointment.notes || 'Consulta Clínica',
+              // Usa os estados atuais dos campos
               anamnesis: { notes: anamnesisNotes },
               clinicalExam: clinicalExamNotes,
               diagnosis: diagnosisNotes,
               treatment: treatmentNotes,
-              status: 'completed',
+              // Status NÃO é alterado aqui
               tenant_id: appointment.tenant_id,
               fullInteraction: interactionDataForRAG
           };
 
           let savedConsultation;
           if (existingConsultations.length > 0) {
-              savedConsultation = await Consultation.update(existingConsultations[0].id, consultationData);
-              toast({ title: "Sucesso", description: "Consulta atualizada e finalizada." });
+              console.log('[saveProgressAndUpdateHistory] Atualizando consulta existente:', existingConsultations[0].id);
+              savedConsultation = await Consultation.update(existingConsultations[0].id, consultationDataPayload);
           } else {
-              savedConsultation = await Consultation.create(consultationData);
-              toast({ title: "Sucesso", description: "Consulta salva e finalizada." });
+              console.log('[saveProgressAndUpdateHistory] Criando nova consulta...');
+              savedConsultation = await Consultation.create(consultationDataPayload);
           }
-          console.log("Consulta salva/atualizada com dados de interação:", savedConsultation);
+          console.log("[saveProgressAndUpdateHistory] Consulta salva/atualizada:", savedConsultation);
+          toast({ title: "Progresso Salvo", description: "Suas anotações foram salvas com sucesso." });
 
-          // <<< INÍCIO: LÓGICA PARA ATUALIZAR HISTÓRICO DO PET >>>
+          // Atualiza histórico do pet (lógica movida para cá)
           try {
             const petId = interactionDataForRAG.petInfo?.id;
             if (petId) {
-              console.log(`[handleSave] Atualizando histórico para o pet ID: ${petId}`);
+              console.log(`[saveProgressAndUpdateHistory] Atualizando histórico para o pet ID: ${petId}`);
               const currentPetData = await Pet.get(petId);
               if (currentPetData) {
-                const historySummary = {
-                  consultationId: savedConsultation?.id || consultationData?.id || 'unknown', // ID da consulta salva
-                  appointmentId: interactionDataForRAG.appointmentId,
-                  date: interactionDataForRAG.reportGeneratedAt, // Ou usar data do appointment?
-                  serviceName: interactionDataForRAG.serviceInfo?.name || 'Serviço Desconhecido',
-                  diagnosis: interactionDataForRAG.vetNotes?.diagnosis || interactionDataForRAG.confirmedDiagnosis || 'Não registrado', // Prioriza diagnóstico do vet
-                  // Adicionar queixa principal se disponível (ex: primeiros X chars da transcrição)
-                  chiefComplaint: interactionDataForRAG.fullTranscript?.substring(0, 50) + (interactionDataForRAG.fullTranscript?.length > 50 ? '...' : '') || 'N/A'
-                };
-                
-                const updatedHistory = [...(currentPetData.consultationHistory || []), historySummary];
-                
-                // Evitar duplicatas (opcional, baseado no ID da consulta)
-                const uniqueHistory = updatedHistory.filter((item, index, self) => 
-                   index === self.findIndex((t) => (t.consultationId === item.consultationId))
-                );
-
-                await Pet.update(petId, { consultationHistory: uniqueHistory });
-                console.log(`[handleSave] Histórico do pet ${petId} atualizado com sucesso.`);
-              } else {
-                console.warn(`[handleSave] Pet ${petId} não encontrado para atualizar histórico.`);
-              }
-            } else {
-              console.warn('[handleSave] ID do Pet não encontrado nos dados do relatório para atualizar histórico.');
-            }
+                 const historySummary = {
+                   consultationId: savedConsultation?.id || 'unknown-' + Date.now(), // ID mais robusto
+                   appointmentId: interactionDataForRAG.appointmentId,
+                   date: interactionDataForRAG.reportGeneratedAt,
+                   serviceName: interactionDataForRAG.serviceInfo?.name || 'Serviço Desconhecido',
+                   diagnosis: interactionDataForRAG.vetNotes?.diagnosis || interactionDataForRAG.confirmedDiagnosis || 'Não registrado',
+                   chiefComplaint: interactionDataForRAG.fullTranscript?.substring(0, 50) + (interactionDataForRAG.fullTranscript?.length > 50 ? '...' : '') || 'N/A'
+                 };
+                 const updatedHistory = [...(currentPetData.consultationHistory || []), historySummary];
+                 const uniqueHistory = updatedHistory.filter((item, index, self) => index === self.findIndex((t) => (t.consultationId === item.consultationId)));
+                 await Pet.update(petId, { consultationHistory: uniqueHistory });
+                 console.log(`[saveProgressAndUpdateHistory] Histórico do pet ${petId} atualizado.`);
+              } else { console.warn(`[saveProgressAndUpdateHistory] Pet ${petId} não encontrado.`); }
+            } else { console.warn('[saveProgressAndUpdateHistory] ID do Pet não encontrado nos dados.'); }
           } catch (historyError) {
-            console.error("[handleSave] Erro ao atualizar histórico do pet:", historyError);
-            // Não impedir a navegação por causa disso, mas registrar o erro
-            toast({ title: "Aviso", description: "Não foi possível atualizar o histórico no prontuário do pet.", variant: "warning" });
+             console.error("[saveProgressAndUpdateHistory] Erro ao atualizar histórico:", historyError);
+             toast({ title: "Aviso", description: "Não foi possível atualizar o histórico no prontuário.", variant: "warning" });
           }
-          // <<< FIM: LÓGICA PARA ATUALIZAR HISTÓRICO DO PET >>>
-
-          console.log("Navegando para a página de relatório...");
 
       } catch (err) {
-          console.error("Erro ao salvar consulta:", err);
-          toast({ title: "Erro ao Salvar", description: `Não foi possível salvar a consulta: ${err.message}`, variant: "destructive"});
+          console.error("[saveProgressAndUpdateHistory] Erro:", err);
+          toast({ title: "Erro ao Salvar", description: `Não foi possível salvar o progresso: ${err.message}`, variant: "destructive"});
       } finally {
           setIsSaving(false);
       }
+  };
+
+  // <<< NOVA FUNÇÃO: Apenas completa o AGENDAMENTO >>>
+  const handleCompleteAppointment = async (appointmentIdToComplete, consultationNotes) => {
+    console.log("[handleCompleteAppointment] Iniciando conclusão para appointment:", appointmentIdToComplete);
+    try {
+      const appointmentToUpdate = await Appointment.get(appointmentIdToComplete);
+      if (!appointmentToUpdate) {
+         throw new Error("Agendamento original não encontrado para concluir.");
+      }
+      
+      // <<< USA start_time que DEVE ter sido definido no useEffect >>>
+      const startTime = appointmentToUpdate.start_time || appointmentToUpdate.date; 
+      const endTime = new Date();
+      let duration = 0; // Default para 0
+      try {
+          const startDate = parseISO(startTime);
+          const endDate = endTime; // Já é objeto Date
+          const minutes = differenceInMinutes(endDate, startDate);
+          if (!isNaN(minutes) && minutes >= 0) { // <<< Garante que seja >= 0 >>>
+              duration = minutes;
+          } else {
+              console.warn(`[handleCompleteAppointment] Duração calculada inválida ou negativa (${minutes}). Salvando como 0.`);
+          }
+      } catch (e) { 
+          console.error("Erro calculando duração para Appointment:", e); 
+      }
+            
+      const updateData = {
+        status: 'completed',
+        end_time: endTime.toISOString(), // Salva como ISO string
+        duration_minutes: duration, // Salva a duração calculada (ou 0)
+        consultation_notes: consultationNotes
+      };
+      console.log("[handleCompleteAppointment] Atualizando agendamento com:", updateData);
+      await Appointment.update(appointmentIdToComplete, updateData);
+      console.log("[handleCompleteAppointment] Agendamento concluído com sucesso.");
+    } catch (error) {
+      console.error("[handleCompleteAppointment] Erro ao concluir agendamento:", error);
+      // Relança o erro para ser tratado por quem chamou (saveConsultationDataAndComplete)
+      throw new Error(`Não foi possível marcar o agendamento como concluído: ${error.message}`);
+    }
+  };
+
+  // <<< NOVA FUNÇÃO: Salva consulta, completa agendamento e navega >>>
+  const saveConsultationDataAndComplete = async () => {
+    console.log("[saveConsultationDataAndComplete] Iniciando...");
+    setIsSaving(true);
+    try {
+      // 1. Salva o progresso da consulta e atualiza histórico
+      await saveProgressAndUpdateHistory();
+
+      // 2. Prepara notas resumidas (opcional)
+      const summaryNotes = `Anamnese: ${anamnesisNotes?.substring(0,50)}... | Exame: ${clinicalExamNotes?.substring(0,50)}... | Diag: ${diagnosisNotes?.substring(0,50)}... | Trat: ${treatmentNotes?.substring(0,50)}...`;
+
+      // 3. Marca o agendamento como concluído
+      if (appointment?.id) {
+        await handleCompleteAppointment(appointment.id, summaryNotes);
+      } else {
+         throw new Error("ID do agendamento não disponível para conclusão.");
+      }
+
+      // 4. Exibe toast e Navega para a fila (COM o prefixo /tenant)
+      toast({ title: "Sucesso", description: "Atendimento salvo e concluído!" });
+      console.log("[saveConsultationDataAndComplete] Navegando para /tenant/live-vet...");
+      navigate(createPageUrl('/tenant/live-vet'));
+
+    } catch (error) {
+      console.error("[saveConsultationDataAndComplete] Erro geral:", error);
+      toast({ variant: "destructive", title: "Erro", description: `Falha ao salvar/concluir: ${error.message}` });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const generateInteractionDataForRAG = () => {
@@ -582,7 +640,7 @@ export default function LiveVetConsulta() {
 
   const generateConsultationReport = async () => {
       console.log("Salvando consulta antes de gerar relatório...");
-      await handleSaveConsultation();
+      await saveProgressAndUpdateHistory();
 
       const report = generateInteractionDataForRAG();
 
@@ -596,7 +654,6 @@ export default function LiveVetConsulta() {
       return report;
   };
 
-  // <<< Atualizar Refs quando Estados mudam >>>
   useEffect(() => {
     currentSessionIdRef.current = sessionId;
   }, [sessionId]);
@@ -605,10 +662,91 @@ export default function LiveVetConsulta() {
     finalTranscriptRef.current = streamingTranscript;
   }, [streamingTranscript]);
 
-  // <<< FIM Atualizar Refs >>>
-
-  // <<< LOG ANTES DO RENDER >>>
   console.log('[Render] Verificando estados:', { isLoading, error, appointment, pet, customer, service });
+
+  const handleOpenPrescriptionModal = () => {
+    setIsPrescriptionModalOpen(true);
+  };
+
+  const handleClosePrescriptionModal = () => {
+    setIsPrescriptionModalOpen(false);
+  };
+
+  const handleSavePrescription = async (prescriptionData) => {
+    console.log("[handleSavePrescription] Salvando prescrição:", prescriptionData);
+    setIsSaving(true);
+    try {
+      // 1. Salva localmente (opcional)
+      setCurrentPrescriptionItems(prescriptionData.items);
+
+      // <<< TENTAR ATUALIZAR OU CRIAR A CONSULTA COM OS ITENS >>>
+      const consultationPayload = { 
+          // Incluir outros dados da consulta se necessário/disponível
+          pet_id: pet?.id,
+          tenant_id: localStorage.getItem('current_tenant'),
+          appointmentId: appointmentId, // Usado como ID pelo mock
+          prescription_items: prescriptionData.items 
+      };
+
+      try {
+          console.log(`[handleSavePrescription] Tentando ATUALIZAR consulta ${appointmentId} com prescription_items`);
+          await Consultation.update(appointmentId, consultationPayload);
+          console.log(`[handleSavePrescription] Consulta ${appointmentId} atualizada no mock.`);
+      } catch (updateError) {
+          // Se update falhou (provavelmente "Não encontrada"), tenta criar
+          if (updateError.message.includes('Consulta não encontrada')) { // Checa a msg de erro
+              console.log(`[handleSavePrescription] Consulta ${appointmentId} não encontrada, tentando CRIAR...`);
+              await Consultation.create(consultationPayload);
+              console.log(`[handleSavePrescription] Consulta ${appointmentId} criada no mock com prescription_items.`);
+          } else {
+              // Se foi outro erro no update, relança para o catch principal
+              throw updateError; 
+          }
+      }
+      
+      // 2. Criar MedicationTasks para itens de uso interno
+      const internalMedicationItems = prescriptionData.items.filter(item => item.usage === 'internal');
+      console.log("[handleSavePrescription] Itens internos para criar tasks:", internalMedicationItems);
+
+      if (internalMedicationItems.length > 0) {
+        const tenantId = localStorage.getItem('current_tenant');
+        const tasksPromises = internalMedicationItems.map(item => 
+          MedicationTask.create({
+            tenant_id: tenantId,
+            petId: pet?.id,
+            appointmentId: appointmentId,
+            prescriptionItemId: item.id,
+            medicationName: item.medication,
+            details: `${item.dosage} - ${item.duration} - ${item.notes || ''}`.trim(),
+            scheduledTime: new Date().toISOString(),
+            status: 'Pendente' 
+          })
+        );
+        await Promise.all(tasksPromises);
+        console.log(`[handleSavePrescription] ${internalMedicationItems.length} MedicationTasks criadas.`);
+        toast({ title: "Tarefas de Medicação Criadas", description: "Itens de uso interno foram adicionados à fila.", });
+      }
+
+      toast({ title: "Prescrição Salva", description: "A prescrição foi registrada com sucesso.", });
+      setIsPrescriptionModalOpen(false);
+
+    } catch (error) {
+      console.error("[handleSavePrescription] Erro GERAL ao salvar prescrição:", error);
+      toast({ title: "Erro ao Salvar", description: `Falha ao registrar prescrição: ${error.message}`, variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // <<< ADICIONAR useEffect para IMPRIMIR >>>
+  useEffect(() => {
+    if (isPrinting && printableComponentRef.current) {
+      // A mágica acontece aqui: o CSS @media print vai cuidar de mostrar/esconder
+      window.print();
+      // Reseta o estado após disparar a impressão
+      setIsPrinting(false);
+    }
+  }, [isPrinting]);
 
   if (isLoading) {
     return (
@@ -659,10 +797,18 @@ export default function LiveVetConsulta() {
                    <FileText className="h-4 w-4 mr-2" />
                    Gerar Relatório
                 </Button>
-                 <Button onClick={handleSaveConsultation} disabled={isSaving || isStreaming}>
+                 <Button onClick={saveProgressAndUpdateHistory} disabled={isSaving || isStreaming}>
                     {isSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin"/> : <Save className="h-4 w-4 mr-2" />}
                     {isSaving ? 'Salvando...' : 'Salvar Progresso'}
                 </Button>
+                <Button onClick={handleOpenPrescriptionModal} variant="outline">
+                  <PillIcon className="mr-2 h-4 w-4" /> Prescrever
+                </Button>
+                {currentPrescriptionItems && currentPrescriptionItems.length > 0 && (
+                   <Button onClick={() => setIsPrinting(true)} variant="outline">
+                      <Printer className="mr-2 h-4 w-4" /> Imprimir Prescrição
+                   </Button>
+                 )}
             </div>
         </div>
 
@@ -697,14 +843,15 @@ export default function LiveVetConsulta() {
                     </CardHeader>
                     <CardContent>
                         {consultationHistory.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">Nenhuma consulta anterior registrada.</p>
+                            <p className="text-sm text-muted-foreground">Nenhum histórico de consulta anterior para este pet.</p>
                         ) : (
-                            <ul className="space-y-3 max-h-60 overflow-y-auto text-sm">
-                                {consultationHistory.map(hist => (
-                                    <li key={hist.id} className="border-b pb-2 last:border-b-0">
-                                        <p><strong>Data:</strong> {format(parseISO(hist.date), 'dd/MM/yyyy HH:mm', { locale: ptBR })}</p>
-                                        <p><strong>Motivo:</strong> {hist.reason}</p>
-                                        {hist.diagnosis && <p><strong>Diagnóstico:</strong> {hist.diagnosis}</p>}
+                            <ul className="space-y-3">
+                                {consultationHistory.slice(0, 5).map((hist) => (
+                                    <li key={hist.id} className="text-sm">
+                                        <span className="font-medium">
+                                            {hist.date ? format(parseISO(hist.date), 'dd/MM/yyyy', { locale: ptBR }) : 'Data Indisponível'}
+                                        </span>
+                                        : {hist.diagnosis || hist.clinical_exam_notes?.substring(0, 50) || 'Consulta Rápida'}
                                     </li>
                                 ))}
                             </ul>
@@ -777,7 +924,6 @@ export default function LiveVetConsulta() {
                                                        <Button variant={suggestionFeedback[sug] === 'not_useful' ? 'destructive' : 'outline'} size="icon_xs" onClick={() => handleSuggestionFeedback(sug, false)} className={`h-5 w-5 ${suggestionFeedback[sug] === 'not_useful' ? '' : 'hover:bg-red-100'}`}><ThumbsDown className="h-3 w-3" /></Button>
                                                    </div>
                                                </div>
-                                               {/* Área de Follow-up (Colapsada) */}
                                                {activeSuggestionPath?.path === `initial-${i}` && activeSuggestionPath.followUps.length > 0 && (
                                                    <div className="mt-2 pt-2 pl-4 border-t border-blue-200 space-y-1">
                                                        <p className="text-xs font-medium mb-1 text-purple-600">{`Aprofundamento para '${sug}':`}</p>
@@ -862,9 +1008,41 @@ export default function LiveVetConsulta() {
 
                     </CardContent>
                  </Card>
-
+                 {/* <<< BOTÃO MOVIDO PARA O FINAL DESTA COLUNA >>> */}
+                 <div className="flex justify-end">
+                     <Button 
+                        variant="primary"
+                        onClick={saveConsultationDataAndComplete} 
+                        disabled={isSaving}
+                        size="lg" // Botão maior para destaque
+                     >
+                        {isSaving ? <Loader2 className="h-5 w-5 mr-2 animate-spin"/> : <ClipboardList className="h-5 w-5 mr-2" />}
+                        Salvar e Concluir Atendimento
+                     </Button>
+                  </div>
             </div>
         </div>
+
+        <PrescriptionModal 
+          isOpen={isPrescriptionModalOpen} 
+          onClose={handleClosePrescriptionModal} 
+          onSave={handleSavePrescription} 
+          initialItems={currentPrescriptionItems.length > 0 ? currentPrescriptionItems : undefined} 
+        />
+
+        {/* Componente de Impressão (escondido VISUALMENTE, mas presente para @media print) */}
+        <div className="print-container" style={{ display: 'none' }}> 
+          {tenant && pet && customer && currentPrescriptionItems.length > 0 && (
+            <PrintablePrescriptionContent 
+              ref={printableComponentRef} 
+              tenant={tenant} 
+              pet={pet} 
+              customer={customer} 
+              items={currentPrescriptionItems} 
+            />
+          )}
+        </div>
+
     </div>
   );
 } 

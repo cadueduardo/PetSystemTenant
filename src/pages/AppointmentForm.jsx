@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { format } from "date-fns";
+import { format, isBefore, startOfMinute } from "date-fns";
 import { createPageUrl } from "@/utils";
 import { Appointment } from "@/api/entities";
 import { QueueService } from "@/api/entities";
@@ -78,6 +78,7 @@ export default function AppointmentForm() {
     console.log('Valor inicial do service_type:', form.getValues("service_type"));
     
     loadData();
+    loadServices();
 
     // Se temos customer_id na URL, carregar os pets desse cliente
     if (customerIdParam) {
@@ -243,30 +244,37 @@ export default function AppointmentForm() {
   };
 
   const onSubmit = async (data) => {
+    const [hours, minutes] = data.time.split(":");
+    const appointmentDateTime = new Date(data.date);
+    appointmentDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+
+    const now = startOfMinute(new Date());
+
+    if (isBefore(appointmentDateTime, now)) {
+      toast({
+        title: "Data/Hora Inválida",
+        description: "Não é possível agendar em um horário passado.",
+        variant: "destructive"
+      });
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
     try {
-      const [hours, minutes] = data.time.split(":");
-      const appointmentDate = new Date(data.date);
-      appointmentDate.setHours(parseInt(hours), parseInt(minutes), 0, 0);
-      
-      const endDate = new Date(appointmentDate);
-      endDate.setMinutes(endDate.getMinutes() + appointmentDuration);
-
-      const tenantId = localStorage.getItem('current_tenant');
-      if (!tenantId) {
-        throw new Error('Tenant ID não encontrado');
-      }
+      const serviceType = form.getValues("service_type");
+      console.log('[onSubmit] Criando/Atualizando agendamento com tipo:', serviceType);
 
       const appointmentData = {
         pet_id: data.pet_id,
         customer_id: data.customer_id,
         service_id: data.service_id,
-        date: appointmentDate.toISOString(),
-        end_date: endDate.toISOString(),
-        type: data.service_type,
+        date: appointmentDateTime.toISOString(),
+        end_date: new Date(appointmentDateTime.getTime() + appointmentDuration * 60000).toISOString(),
+        type: serviceType,
         notes: data.notes,
-        status: data.status || "scheduled",
-        tenant_id: tenantId
+        status: data.status || (isEditing ? undefined : "scheduled"),
+        tenant_id: localStorage.getItem('current_tenant'),
       };
 
       if (isEditing) {
@@ -275,27 +283,59 @@ export default function AppointmentForm() {
           title: "Sucesso",
           description: "Agendamento atualizado com sucesso!"
         });
+        console.log('[onSubmit] Agendamento editado. Redirecionando para Calendar/PetDetails.');
+        if (petIdParam) {
+          navigate(createPageUrl('PetDetails', { id: petIdParam }));
+        } else {
+          navigate(createPageUrl('Calendar'));
+        }
       } else {
+        console.log('[onSubmit] Criando novo agendamento com tipo:', data.service_type);
         const appointment = await Appointment.create(appointmentData);
-        if (addToQueue) {
+        let addedToQueue = false;
+        
+        console.log('[onSubmit] Verificando se adiciona à fila:', { addToQueue, service_type: data.service_type });
+        if (addToQueue && data.service_type === 'petshop') { 
+          console.log('[onSubmit] Adicionando à QueueService...');
           const queueData = {
             pet_id: data.pet_id,
             customer_id: data.customer_id,
             service_id: data.service_id,
             appointment_id: appointment.id,
-            appointment_date: appointmentDate.toISOString(),
+            appointment_date: appointmentDateTime.toISOString(),
             status: "scheduled",
-            tenant_id: tenantId
+            tenant_id: localStorage.getItem('current_tenant')
           };
-          await QueueService.create(queueData);
+          try {
+            await QueueService.create(queueData);
+            addedToQueue = true;
+            console.log('[onSubmit] Adicionado à QueueService com sucesso.');
+          } catch(queueError) {
+             console.error('[onSubmit] Erro ao adicionar à QueueService:', queueError);
+             toast({
+                title: "Erro na Fila",
+                description: "Agendamento criado, mas houve um erro ao adicionar à fila.",
+                variant: "destructive"
+             });
+          }
         }
+        
         toast({
           title: "Sucesso",
           description: "Agendamento criado com sucesso!"
         });
+
+        // Lógica de redirecionamento após criar - SEMPRE para Calendar/PetDetails
+        console.log('[onSubmit] Decidindo redirecionamento (sempre Calendar/PetDetails):', { service_type: data.service_type, addedToQueue });
+        if (petIdParam) {
+          console.log('[onSubmit] Redirecionando para PetDetails (após criar).');
+          navigate(createPageUrl('PetDetails', { id: petIdParam }));
+        } else {
+          console.log('[onSubmit] Redirecionando para Calendar (após criar).');
+          navigate(createPageUrl('Calendar'));
+        }
       }
 
-      navigate(createPageUrl(`Calendar?store=${storeParam}`));
     } catch (error) {
       console.error("Erro ao salvar agendamento:", error);
       toast({

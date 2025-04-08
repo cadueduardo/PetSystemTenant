@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { format, isBefore, isAfter, addMinutes } from "date-fns";
+import { format, isBefore, isAfter, addMinutes, differenceInMinutes, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { QueueService, Pet, Customer, Service, TenantUser } from "../api/entities";
+import { QueueService, Pet, Customer, Service, TenantUser, Appointment } from "../api/entities";
 import {
   Card,
   CardContent,
@@ -66,6 +66,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import ServiceTimer from "../components/queue/ServiceTimer";
 import ServiceDetailsPanel from "../components/queue/ServiceDetailsPanel";
 import PetAvatar from "@/components/pets/PetAvatar";
+import RemoveFromQueueModal from '../components/queue/RemoveFromQueueModal';
+import { addRemovalReason } from '@/api/mockData';
 
 export default function ServiceQueue() {
   const [queueItems, setQueueItems] = useState([]);
@@ -80,78 +82,101 @@ export default function ServiceQueue() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [notes, setNotes] = useState("");
   const [showAddNotesDialog, setShowAddNotesDialog] = useState(false);
+  const [isRemoveModalOpen, setIsRemoveModalOpen] = useState(false);
+  const [itemToRemove, setItemToRemove] = useState(null);
   const { toast } = useToast();
 
-  useEffect(() => {
-    const fetchQueueData = async () => {
+  // Define fetchQueueData FORA do useEffect para ser acessível por outros handlers
+  const fetchQueueData = async () => {
       setIsLoading(true);
       try {
         const startOfDay = new Date(selectedDate);
         startOfDay.setHours(0, 0, 0, 0);
-        
         const endOfDay = new Date(selectedDate);
         endOfDay.setHours(23, 59, 59, 999);
-
         const currentTenant = localStorage.getItem('current_tenant');
-        
-        const allAppointments = await QueueService.filter({
+
+        // Busca os itens da QueueService
+        const queueItemsFromDB = await QueueService.filter({
           appointment_date: {
             $gte: startOfDay.toISOString(),
             $lte: endOfDay.toISOString()
           },
-          tenant_id: currentTenant
+          tenant_id: currentTenant,
+          status: { $ne: 'cancelled' } // Excluir cancelados
         });
+        console.log('[ServiceQueue] Itens brutos da QueueService:', queueItemsFromDB);
 
-        const petshopAppointments = allAppointments.filter(appt => appt.type === 'petshop');
-
-        const populatedAppointments = await Promise.all(petshopAppointments.map(async (item) => {
-          try {
-            if (!item.pet_id || !item.customer_id || !item.service_id) {
-              return { 
-                ...item, 
-                pet: { name: "Pet não encontrado" }, 
-                customer: { full_name: "Cliente não encontrado" },
-                service: { name: "Serviço não encontrado" }
-              };
+        // Mapeia e popula os dados corretamente
+        const populatedAppointmentsPromises = queueItemsFromDB.map(async (item) => {
+            try {
+                if (!item.pet_id || !item.customer_id || !item.service_id) { 
+                    console.warn("Item da fila com IDs faltando:", item);
+                    return { 
+                        ...item, 
+                        pet: { name: "Pet Inválido" }, 
+                        customer: { full_name: "Cliente Inválido" },
+                        service: { name: "Serviço Inválido" }
+                    };
+                 }
+                 
+                // Busca os dados relacionados em paralelo
+                const [pet, customer, service] = await Promise.all([
+                    Pet.get(item.pet_id).catch(e => { console.error(`Erro Pet ${item.pet_id}:`, e); return null; }),
+                    Customer.get(item.customer_id).catch(e => { console.error(`Erro Customer ${item.customer_id}:`, e); return null; }),
+                    Service.get(item.service_id).catch(e => { console.error(`Erro Service ${item.service_id}:`, e); return null; })
+                ]);
+                
+                // Retorna o item populado
+                return {
+                    ...item,
+                    pet: pet || { name: "Pet não encontrado" },
+                    customer: customer || { full_name: "Cliente não encontrado" },
+                    service: service || { name: "Serviço não encontrado" }
+                };
+            } catch (error) {
+                console.error("Erro ao popular item da fila:", item.id, error);
+                return { 
+                    ...item, 
+                    pet: { name: "Erro Pet" }, 
+                    customer: { full_name: "Erro Cliente" },
+                    service: { name: "Erro Serviço" }
+                };
             }
-            
-            const [pet, customer, service] = await Promise.all([
-              Pet.get(item.pet_id),
-              Customer.get(item.customer_id),
-              Service.get(item.service_id)
-            ]);
-            
-            return {
-              ...item,
-              pet: pet || { name: "Pet não encontrado" },
-              customer: customer || { full_name: "Cliente não encontrado" },
-              service: service || { name: "Serviço não encontrado" }
-            };
-          } catch (error) {
-            console.error("Erro ao carregar dados relacionados:", error);
-            return { 
-              ...item, 
-              pet: { name: "Erro ao carregar pet" }, 
-              customer: { full_name: "Erro ao carregar cliente" },
-              service: { name: "Erro ao carregar serviço" }
-            };
-          }
-        }));
+        }); // Fim do .map
+
+        // Aguarda todas as promises do map serem resolvidas
+        const populatedAppointments = await Promise.all(populatedAppointmentsPromises);
 
         setQueueItems(populatedAppointments);
+
       } catch (error) {
-        console.error("Erro ao carregar fila:", error);
-        toast({
-          title: "Erro",
-          description: "Não foi possível carregar a fila de atendimento.",
-          variant: "destructive"
-        });
+           console.error("Erro ao carregar fila:", error);
+           toast({
+             title: "Erro",
+             description: "Não foi possível carregar a fila de atendimento.",
+             variant: "destructive"
+           });
       } finally {
-        setIsLoading(false);
+          setIsLoading(false);
+      }
+  };
+
+  useEffect(() => {
+    fetchQueueData(); // Chama a função ao montar e quando selectedDate/autoRefresh mudar
+
+    // Lógica do intervalo de auto-refresh
+    let intervalId = null;
+    if (autoRefresh) {
+      intervalId = setInterval(fetchQueueData, 30000); 
+    }
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
       }
     };
-    fetchQueueData();
-  }, [selectedDate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate, autoRefresh]);
 
   const checkUpcomingServices = () => {
     const now = new Date();
@@ -194,51 +219,81 @@ export default function ServiceQueue() {
   };
 
   const handleStatusChange = async (itemId, newStatus, additionalData = {}) => {
+    console.log(`[handleStatusChange] ID: ${itemId}, Novo Status: ${newStatus}`);
     try {
       const now = new Date().toISOString();
       let updateData = {
         status: newStatus
       };
+      const currentItem = queueItems.find(item => item.id === itemId);
+      if (!currentItem) {
+        console.error("[handleStatusChange] Item da fila não encontrado:", itemId);
+        throw new Error("Item da fila não encontrado.");
+      }
 
       switch (newStatus) {
         case "in_progress":
-          if (!updateData.start_time) {
+          if (!currentItem.start_time) {
             updateData.start_time = now;
+          }
+          if (currentItem.pauses?.length > 0) {
+            const lastPause = currentItem.pauses[currentItem.pauses.length - 1];
+            if (!lastPause.end) {
+              updateData.pauses = [
+                ...currentItem.pauses.slice(0, -1),
+                { ...lastPause, end: now }
+              ];
+            }
           }
           break;
         case "completed":
           updateData.end_time = now;
+          if (currentItem.appointment_id) {
+            const startTime = currentItem.start_time || currentItem.appointment_date;
+            let duration = null;
+            try {
+                const startDate = parseISO(startTime);
+                const endDate = parseISO(now);
+                const minutes = differenceInMinutes(endDate, startDate);
+                if (!isNaN(minutes) && minutes >= 0) {
+                    duration = minutes;
+                }
+            } catch (e) { console.error("Erro calculando duração para Appointment:", e); }
+            
+            const appointmentUpdateData = {
+               status: 'completed',
+               end_time: now,
+               ...(duration !== null && { duration_minutes: duration })
+            };
+            console.log(`[handleStatusChange] Atualizando Appointment ${currentItem.appointment_id} para concluído:`, appointmentUpdateData);
+            try {
+               await Appointment.update(currentItem.appointment_id, appointmentUpdateData);
+               console.log(`[handleStatusChange] Appointment ${currentItem.appointment_id} atualizado com sucesso.`);
+            } catch (apptError) {
+               console.error("[handleStatusChange] Erro ao atualizar Appointment:", apptError);
+               toast({ title: "Aviso", description: "Status da fila atualizado, mas houve erro ao finalizar o agendamento principal.", variant: "warning" });
+            }
+          } else {
+             console.warn("[handleStatusChange] appointment_id não encontrado no item da fila para concluir agendamento.");
+          }
           break;
         case "paused":
-          const currentItem = queueItems.find(item => item.id === itemId);
           const pauses = currentItem.pauses || [];
           updateData.pauses = [
             ...pauses,
             {
               start: now,
-              reason: additionalData.pauseReason
+              reason: additionalData.pauseReason || 'Pausado pelo usuário'
             }
           ];
           break;
-      }
-
-      if (newStatus === "in_progress") {
-        const currentItem = queueItems.find(item => item.id === itemId);
-        if (currentItem.pauses?.length > 0) {
-          const lastPause = currentItem.pauses[currentItem.pauses.length - 1];
-          if (!lastPause.end) {
-            updateData.pauses = [
-              ...currentItem.pauses.slice(0, -1),
-              { ...lastPause, end: now }
-            ];
-          }
-        }
       }
 
       if (additionalData.notes) {
         updateData.notes = additionalData.notes;
       }
 
+      console.log("[handleStatusChange] Atualizando QueueService:", itemId, updateData);
       await QueueService.update(itemId, updateData);
       toast({
         title: "Status atualizado",
@@ -248,17 +303,17 @@ export default function ServiceQueue() {
       if (newStatus === "completed") {
         toast({
           title: "Serviço concluído",
-          description: `O serviço para ${queueItems.find(item => item.id === itemId)?.pet?.name} foi finalizado!`,
+          description: `O serviço para ${currentItem.pet?.name} foi finalizado!`,
           variant: "success"
         });
       }
       
-      loadQueueItems();
+      fetchQueueData();
     } catch (error) {
       console.error("Erro ao atualizar status:", error);
       toast({
         title: "Erro",
-        description: "Não foi possível atualizar o status.",
+        description: `Não foi possível atualizar o status: ${error.message}`,
         variant: "destructive"
       });
     }
@@ -286,7 +341,7 @@ export default function ServiceQueue() {
         description: "As observações foram salvas com sucesso!"
       });
       setShowAddNotesDialog(false);
-      loadQueueItems();
+      fetchQueueData();
     } catch (error) {
       console.error("Erro ao salvar observações:", error);
       toast({
@@ -351,6 +406,83 @@ export default function ServiceQueue() {
     
     return matchesSearch && matchesStatus;
   });
+
+  const handleOpenRemoveModal = (item) => {
+    setItemToRemove(item);
+    setIsRemoveModalOpen(true);
+  };
+
+  const handleCloseRemoveModal = () => {
+    setItemToRemove(null);
+    setIsRemoveModalOpen(false);
+  };
+
+  const handleConfirmRemove = async (reason, newReason = null) => {
+    if (!itemToRemove) return;
+
+    let finalReason = reason;
+
+    if (reason === '__other__' && newReason) {
+      finalReason = newReason.trim();
+      try {
+        addRemovalReason(finalReason);
+      } catch (error) {
+        console.error("Erro ao salvar novo motivo de remoção:", error);
+      }
+    } else if (reason === '__other__' && !newReason) {
+       console.error("Tentativa de remover com 'Outros' sem especificar motivo.");
+       toast({
+          title: "Erro",
+          description: "Motivo 'Outros' selecionado, mas nenhum texto foi fornecido.",
+          variant: "destructive"
+       });
+       return;
+    }
+
+    console.log(`Removendo item ${itemToRemove.id} da fila com motivo: ${finalReason}`);
+
+    try {
+      await QueueService.update(itemToRemove.id, { 
+        status: 'cancelled', 
+        removal_reason: finalReason 
+      });
+      
+      if (itemToRemove.appointment_id) {
+          try {
+              await Appointment.update(itemToRemove.appointment_id, {
+                  status: 'cancelled',
+                  removal_reason: finalReason 
+              });
+              console.log(`Agendamento ${itemToRemove.appointment_id} atualizado para cancelado com motivo.`);
+          } catch (appointmentError) {
+              console.error("Erro ao atualizar status do agendamento original:", appointmentError);
+              toast({
+                  title: "Aviso",
+                  description: "Item removido da fila, mas houve um erro ao atualizar o status do agendamento principal.",
+                  variant: "destructive"
+              });
+          }
+      } else {
+          console.warn("Não foi possível atualizar o agendamento original: appointment_id não encontrado no item da fila.");
+      }
+      
+      toast({
+        title: "Item Removido",
+        description: `O atendimento de ${itemToRemove.pet?.name || 'Pet'} foi removido da fila.`
+      });
+      
+      fetchQueueData();
+      handleCloseRemoveModal();
+      
+    } catch (error) {
+      console.error("Erro ao atualizar status para cancelado na fila:", error);
+      toast({
+        title: "Erro ao Remover",
+        description: "Não foi possível remover o item da fila.",
+        variant: "destructive"
+      });
+    }
+  };
 
   if (isLoading) {
     return (
@@ -444,7 +576,7 @@ export default function ServiceQueue() {
               </SelectContent>
             </Select>
             
-            <Button onClick={() => loadQueueItems()}>
+            <Button onClick={() => fetchQueueData()}>
               <RefreshCw className="h-4 w-4 mr-2" />
               Atualizar
             </Button>
@@ -520,6 +652,13 @@ export default function ServiceQueue() {
                                   onClick={() => handleAddNotes(item.id)}
                                 >
                                   <ClipboardList className="h-4 w-4" />
+                                </Button>
+                                <Button 
+                                  variant="outline" 
+                                  size="icon"
+                                  onClick={() => handleOpenRemoveModal(item)}
+                                >
+                                  <XCircle className="h-4 w-4" />
                                 </Button>
                               </div>
                             </TableCell>
@@ -707,7 +846,7 @@ export default function ServiceQueue() {
           onOpenChange={setIsDetailsOpen}
           service={selectedService}
           onStatusChange={handleStatusChange}
-          onRefresh={loadQueueItems}
+          onRefresh={fetchQueueData}
         />
       )}
 
@@ -734,6 +873,15 @@ export default function ServiceQueue() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {isRemoveModalOpen && itemToRemove && (
+        <RemoveFromQueueModal 
+          isOpen={isRemoveModalOpen} 
+          onClose={handleCloseRemoveModal} 
+          onConfirm={handleConfirmRemove}
+          item={itemToRemove}
+        />
+      )}
     </div>
   );
 }

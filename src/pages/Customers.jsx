@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { Customer } from "@/api/entities";
-import { Pet } from "@/api/entities";
+import { useState, useEffect } from "react";
+import { Customer, Pet } from "@/api/entities";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
@@ -43,7 +42,6 @@ export default function CustomersPage() {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      // Carregar clientes e pets em paralelo, filtrando por tenant
       const [customersData, petsData] = await Promise.all([
         Customer.filter({ tenant_id: storeParam }),
         Pet.filter({ tenant_id: storeParam })
@@ -64,7 +62,8 @@ export default function CustomersPage() {
   };
 
   const handleEdit = (customerId) => {
-    navigate(createPageUrl(`CustomerDetails?id=${customerId}&store=${storeParam}`));
+    console.log('[CustomersPage] handleEdit chamado para cliente:', customerId);
+    navigate(createPageUrl(`/tenant/cliente/${customerId}`));
   };
 
   const handleDelete = async (id) => {

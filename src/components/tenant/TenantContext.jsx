@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Tenant } from '@/api/entities';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 // Criar contexto do tenant
 const TenantContext = createContext(null);
@@ -9,6 +10,8 @@ export function TenantProvider({ children }) {
   const [currentTenant, setCurrentTenant] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     // Carregar tenant da URL ou do tenant ativo
@@ -49,7 +52,7 @@ export function TenantProvider({ children }) {
     };
 
     loadTenant();
-  }, []);
+  }, [location.search]);
 
   // Função para alterar tenant atual (para administradores que gerenciam múltiplos tenants)
   const switchTenant = async (tenantId) => {
@@ -78,12 +81,28 @@ export function TenantProvider({ children }) {
     }
   };
 
+  // Função para navegar mantendo o parâmetro store
+  const navigateWithStore = (path) => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const storeParam = urlParams.get('store');
+    
+    if (storeParam) {
+      const newPath = path.includes('?') 
+        ? `${path}&store=${storeParam}`
+        : `${path}?store=${storeParam}`;
+      navigate(newPath);
+    } else {
+      navigate(path);
+    }
+  };
+
   return (
     <TenantContext.Provider value={{ 
       currentTenant, 
       isLoading, 
       error,
-      switchTenant 
+      switchTenant,
+      navigateWithStore
     }}>
       {children}
     </TenantContext.Provider>

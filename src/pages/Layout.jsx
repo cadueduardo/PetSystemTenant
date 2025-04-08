@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { Link, Outlet, useLocation } from "react-router-dom";
+// import { createPageUrl } from "@/utils"; // Removido - Não usado
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -10,7 +10,6 @@ import {
   Package,
   ShoppingBag,
   FileText,
-  Truck,
   DollarSign,
   Settings as SettingsIcon,
   Menu,
@@ -18,35 +17,32 @@ import {
   Moon,
   Sun,
   Clock,
-  Stethoscope
+  Stethoscope,
+  Pill
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import PropTypes from 'prop-types';
+import { useTenant } from "@/components/tenant/TenantContext";
+// import TransportServices from './TransportServices'; // Removido não usado
+// import TransportSettings from './TransportSettings';
+// import AdminDashboard from './AdminDashboard'; // Removido não usado
 
 const classNames = (...classes) => {
   return classes.filter(Boolean).join(' ');
 };
 
-export default function Layout({ children, currentPageName }) {
-  const publicPages = ["Landing", "Login", "Register", "ForgotPassword", "ResetPassword"];
-  
-  if (publicPages.includes(currentPageName)) {
-    return <>{children}</>;
-  }
-
-  return <AuthenticatedLayout currentPageName={currentPageName}>{children}</AuthenticatedLayout>;
-}
-
-function AuthenticatedLayout({ children, currentPageName }) {
+export default function Layout() {
   const { theme, setTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [storeParam] = useState(localStorage.getItem('current_tenant') || '');
+  const location = useLocation();
+  const { navigateWithStore } = useTenant();
 
-  const getPageUrl = (pageName) => {
-    if (storeParam) {
-      return `${createPageUrl(pageName)}?store=${storeParam}`;
-    }
-    return createPageUrl(pageName);
+  const isActive = (href) => {
+    return location.pathname.startsWith(href);
+  };
+
+  const handleNavigation = (e, path) => {
+    e.preventDefault();
+    navigateWithStore(path);
   };
 
   return (
@@ -83,110 +79,146 @@ function AuthenticatedLayout({ children, currentPageName }) {
         <div className="flex-1 overflow-auto py-4">
           <nav className="flex flex-col gap-1 px-4">
             <Link
-              to={getPageUrl("Dashboard")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "Dashboard" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/dashboard"
+              onClick={(e) => handleNavigation(e, "/tenant/dashboard")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/dashboard") ? "bg-accent font-medium" : ""
+              )}
             >
               <LayoutDashboard className="h-5 w-5" />
               <span>Dashboard</span>
             </Link>
 
             <Link
-              to={getPageUrl("Customers")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "Customers" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/clientes"
+              onClick={(e) => handleNavigation(e, "/tenant/clientes")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/clientes") ? "bg-accent font-medium" : ""
+              )}
             >
               <Users className="h-5 w-5" />
               <span>Clientes</span>
             </Link>
 
             <Link
-              to={getPageUrl("Calendar")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "Calendar" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/calendario"
+              onClick={(e) => handleNavigation(e, "/tenant/calendario")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/calendario") ? "bg-accent font-medium" : ""
+              )}
             >
               <Calendar className="h-5 w-5" />
               <span>Agenda</span>
             </Link>
 
             <Link
-              to={getPageUrl("LiveVetDashboard")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "LiveVetDashboard" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/live-vet"
+              onClick={(e) => handleNavigation(e, "/tenant/live-vet")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/live-vet") ? "bg-accent font-medium" : ""
+              )}
             >
               <Stethoscope className="h-5 w-5" />
               <span>Live Vet</span>
             </Link>
 
             <Link
-              to={getPageUrl("ServiceQueue")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "ServiceQueue" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/fila-atendimento"
+              onClick={(e) => handleNavigation(e, "/tenant/fila-atendimento")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/fila-atendimento") ? "bg-accent font-medium" : ""
+              )}
             >
               <Clock className="h-5 w-5" />
               <span>Fila de Atendimento</span>
             </Link>
 
             <Link
-              to={getPageUrl("Products")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "Products" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/medicacao"
+              onClick={(e) => handleNavigation(e, "/tenant/medicacao")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/medicacao") ? "bg-accent font-medium" : ""
+              )}
+            >
+              <Pill className="h-5 w-5" />
+              <span>Medicação Interna</span>
+            </Link>
+
+            <Link
+              to="/tenant/produtos"
+              onClick={(e) => handleNavigation(e, "/tenant/produtos")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/produtos") ? "bg-accent font-medium" : ""
+              )}
             >
               <Package className="h-5 w-5" />
               <span>Produtos</span>
             </Link>
 
             <Link
-              to={getPageUrl("Sales")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "Sales" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/vendas"
+              onClick={(e) => handleNavigation(e, "/tenant/vendas")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/vendas") ? "bg-accent font-medium" : ""
+              )}
             >
               <ShoppingBag className="h-5 w-5" />
               <span>Vendas</span>
             </Link>
 
             <Link
-              to={getPageUrl("Services")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "Services" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/servicos"
+              onClick={(e) => handleNavigation(e, "/tenant/servicos")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/servicos") ? "bg-accent font-medium" : ""
+              )}
             >
               <FileText className="h-5 w-5" />
               <span>Serviços</span>
             </Link>
 
+            {/* <<< COMENTANDO/REMOVENDO O LINK DE TRANSPORTE >>>
             <Link
-              to={getPageUrl("Transport")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "Transport" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/transporte"
+              onClick={(e) => handleNavigation(e, "/tenant/transporte")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/transporte") ? "bg-accent font-medium" : ""
+              )}
             >
               <Truck className="h-5 w-5" />
               <span>Transporte</span>
             </Link>
+            */}
 
             <Link
-              to={getPageUrl("Financial")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "Financial" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/financeiro"
+              onClick={(e) => handleNavigation(e, "/tenant/financeiro")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/financeiro") ? "bg-accent font-medium" : ""
+              )}
             >
               <DollarSign className="h-5 w-5" />
               <span>Financeiro</span>
             </Link>
 
             <Link
-              to={getPageUrl("Settings")}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent ${
-                currentPageName === "Settings" ? "bg-accent font-medium" : ""
-              }`}
+              to="/tenant/configuracoes"
+              onClick={(e) => handleNavigation(e, "/tenant/configuracoes")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/configuracoes") ? "bg-accent font-medium" : ""
+              )}
             >
               <SettingsIcon className="h-5 w-5" />
               <span>Configurações</span>
@@ -204,7 +236,6 @@ function AuthenticatedLayout({ children, currentPageName }) {
             <div className="overflow-hidden">
               <p className="truncate font-medium">Usuário</p>
               <p className="truncate text-sm text-muted-foreground">
-                {storeParam}
               </p>
             </div>
           </div>
@@ -234,18 +265,10 @@ function AuthenticatedLayout({ children, currentPageName }) {
             <Menu className="h-6 w-6" />
           </Button>
         </header>
-        <main className="flex-1">{children}</main>
+        <main className="flex-1 p-4">
+          <Outlet />
+        </main>
       </div>
     </div>
   );
 }
-
-Layout.propTypes = {
-  children: PropTypes.node.isRequired,
-  currentPageName: PropTypes.string.isRequired
-};
-
-AuthenticatedLayout.propTypes = {
-  children: PropTypes.node.isRequired,
-  currentPageName: PropTypes.string.isRequired
-};

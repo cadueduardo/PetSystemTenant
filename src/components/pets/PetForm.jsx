@@ -83,6 +83,7 @@ PetForm.propTypes = {
 };
 
 export default function PetForm({ onSuccess, customerId }) {
+  console.log('[PetForm] Renderizado com customerId:', customerId);
   const [isLoading, setIsLoading] = useState(false);
   const [healthPlans, setHealthPlans] = useState([]);
   const [dateInputValue, setDateInputValue] = useState("");
@@ -214,16 +215,22 @@ export default function PetForm({ onSuccess, customerId }) {
   };
 
   const handleSubmit = async (e) => {
+    console.log('[PetForm] handleSubmit iniciado!');
     e.preventDefault();
     setIsLoading(true);
 
     try {
       const petData = {
         ...formData,
+        owner_id: customerId,
         tenant_id: localStorage.getItem('current_tenant')
       };
-
+      
+      console.log('[PetForm] Dados a serem enviados para Pet.create:', petData);
+      
       await Pet.create(petData);
+      
+      console.log('[PetForm] Pet.create executado com sucesso (aparentemente).');
       
       toast({
         title: "Sucesso",
@@ -231,6 +238,7 @@ export default function PetForm({ onSuccess, customerId }) {
       });
 
       if (onSuccess) {
+        console.log('[PetForm] Chamando onSuccess...');
         onSuccess();
       }
     } catch (error) {
