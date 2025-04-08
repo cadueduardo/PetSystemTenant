@@ -1,14 +1,20 @@
 // Mapeamento de nomes de página para rotas específicas
 const routeMappings: Record<string, string> = {
     AppointmentForm: '/tenant/agendamento/novo',
+    PetDetails: '/tenant/pet/:id',
+    CustomerDetails: '/tenant/cliente/:id',
     // Adicione outros mapeamentos conforme necessário
     // Exemplo: EditAppointment: '/tenant/agendamento/editar', // :id será tratado pelos params
-    // Exemplo: CustomerDetails: '/tenant/cliente', // :id será tratado pelos params
     // Exemplo: MedicalRecordForm: '/tenant/prontuario/novo'
 };
 
 export function createPageUrl(pageName: string, params?: Record<string, string | number | undefined | null>): string {
     let basePath: string;
+
+    // Remove o parâmetro store do pageName se ele estiver presente
+    if (pageName.includes('?store=')) {
+        pageName = pageName.split('?store=')[0];
+    }
 
     // Verifica se há um mapeamento específico para o pageName
     if (routeMappings[pageName]) {

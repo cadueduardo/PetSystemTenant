@@ -4,7 +4,8 @@ import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Loader2, CheckCircle, AlertCircle, Clock, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
@@ -12,6 +13,7 @@ export default function MedicationQueue() {
   const [tasks, setTasks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [activeTab, setActiveTab] = useState("pending");
   const { toast } = useToast();
 
   const fetchTasks = useCallback(async () => {
@@ -26,20 +28,18 @@ export default function MedicationQueue() {
          setIsLoading(false);
          return;
       }
-      console.log(`[MedicationQueue] Buscando tarefas pendentes para tenant: ${tenantId}`);
-      const pendingTasks = await MedicationTask.filter({ status: 'Pendente', tenant_id: tenantId });
-      console.log("[MedicationQueue] Tarefas pendentes recebidas:", pendingTasks);
+      console.log(`[MedicationQueue] Buscando tarefas para tenant: ${tenantId}`);
+      const allTasks = await MedicationTask.filter({ tenant_id: tenantId });
+      console.log("[MedicationQueue] Tarefas recebidas:", allTasks);
       
-      if (!pendingTasks || pendingTasks.length === 0) {
-        console.log("[MedicationQueue] Nenhuma tarefa pendente encontrada.");
+      if (!allTasks || allTasks.length === 0) {
+        console.log("[MedicationQueue] Nenhuma tarefa encontrada.");
         setTasks([]);
-        // Não definimos erro aqui, apenas lista vazia
       } else {
           console.log("[MedicationQueue] Enriquecendo tarefas...");
           const enrichedTasks = await Promise.all(
-            pendingTasks.map(async (task) => {
+            allTasks.map(async (task) => {
               try {
-                // Validação básica da task
                 if (!task || !task.petId) {
                   console.warn("[MedicationQueue] Tarefa inválida ou sem petId:", task);
                   return { ...task, petName: 'Dados Inválidos', ownerName: 'Dados Inválidos' };
@@ -81,7 +81,7 @@ export default function MedicationQueue() {
       setError("Falha ao carregar as tarefas de medicação.");
       toast({
         title: "Erro",
-        description: "Não foi possível buscar as tarefas pendentes.",
+        description: "Não foi possível buscar as tarefas.",
         variant: "destructive",
       });
     } finally {
@@ -138,11 +138,96 @@ export default function MedicationQueue() {
     }
   };
 
+  const handleCancelTask = async (taskId) => {
+    try {
+      await MedicationTask.update(taskId, { status: 'Cancelado' });
+      toast({
+        title: "Sucesso",
+        description: "Medicação cancelada com sucesso.",
+      });
+      fetchTasks();
+    } catch (err) {
+      console.error("[MedicationQueue] Erro ao cancelar medicação:", err);
+      toast({
+        title: "Erro",
+        description: "Não foi possível cancelar a medicação.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const getFilteredTasks = (status) => {
+    return tasks.filter(task => task.status === status);
+  };
+
+  const renderTaskTable = (tasks) => {
+    if (tasks.length === 0) {
+      return (
+        <div className="text-center text-muted-foreground py-8">
+          Nenhuma medicação {activeTab === "pending" ? "pendente" : activeTab === "administered" ? "administrada" : "cancelada"} no momento.
+        </div>
+      );
+    }
+
+    return (
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Pet</TableHead>
+            <TableHead>Tutor</TableHead>
+            <TableHead>Medicação</TableHead>
+            <TableHead>Detalhes</TableHead>
+            <TableHead>Agendado Para</TableHead>
+            <TableHead className="text-right">Ações</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {tasks.map((task) => (
+            <TableRow key={task.id}>
+              <TableCell className="font-medium">{task.petName}</TableCell>
+              <TableCell>{task.ownerName}</TableCell>
+              <TableCell>{task.medicationName || 'Nome Indisponível'}</TableCell>
+              <TableCell className="text-sm text-muted-foreground">{task.details || '-'}</TableCell>
+              <TableCell>
+                {task.scheduledTime 
+                  ? format(new Date(task.scheduledTime), "dd/MM/yyyy HH:mm", { locale: ptBR })
+                  : 'Data Indisponível'}
+              </TableCell>
+              <TableCell className="text-right">
+                {activeTab === "pending" && (
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => handleMarkAsAdministered(task.id)}
+                      variant="outline"
+                    >
+                      <CheckCircle className="h-4 w-4 mr-2" />
+                      Administrado
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => handleCancelTask(task.id)}
+                      variant="outline"
+                      className="text-destructive"
+                    >
+                      <X className="h-4 w-4 mr-2" />
+                      Cancelar
+                    </Button>
+                  </div>
+                )}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    );
+  };
+
   return (
     <div className="container mx-auto p-4 md:p-6">
       <Card>
         <CardHeader>
-          <CardTitle>Fila de Medicação Interna Pendente</CardTitle>
+          <CardTitle>Fila de Medicação</CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading && (
@@ -158,48 +243,35 @@ export default function MedicationQueue() {
                <Button onClick={fetchTasks} className="mt-4">Tentar Novamente</Button>
              </div>
            )}
-          {!isLoading && !error && tasks.length === 0 && (
-            <p className="text-center text-muted-foreground py-10">
-              Nenhuma medicação interna pendente no momento.
-            </p>
-          )}
-          {!isLoading && !error && tasks.length > 0 && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Pet</TableHead>
-                  <TableHead>Tutor</TableHead>
-                  <TableHead>Medicação</TableHead>
-                  <TableHead>Detalhes</TableHead>
-                  <TableHead>Agendado Para</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tasks.map((task) => (
-                  <TableRow key={task.id}>
-                    <TableCell className="font-medium">{task.petName}</TableCell>
-                    <TableCell>{task.ownerName}</TableCell>
-                    <TableCell>{task.medicationName || 'Nome Indisponível'}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{task.details || '-'}</TableCell>
-                    <TableCell>
-                      {task.scheduledTime 
-                        ? format(new Date(task.scheduledTime), "dd/MM/yyyy HH:mm", { locale: ptBR })
-                        : 'Data Indisponível'}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        onClick={() => handleMarkAsAdministered(task.id)}
-                        variant="outline"
-                      >
-                        Marcar como Administrado
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          {!isLoading && !error && (
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+              <TabsList>
+                <TabsTrigger value="pending" className="flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  Pendentes ({getFilteredTasks('Pendente').length})
+                </TabsTrigger>
+                <TabsTrigger value="administered" className="flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4" />
+                  Administrados ({getFilteredTasks('Administrado').length})
+                </TabsTrigger>
+                <TabsTrigger value="cancelled" className="flex items-center gap-2">
+                  <X className="h-4 w-4" />
+                  Cancelados ({getFilteredTasks('Cancelado').length})
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="pending">
+                {renderTaskTable(getFilteredTasks('Pendente'))}
+              </TabsContent>
+
+              <TabsContent value="administered">
+                {renderTaskTable(getFilteredTasks('Administrado'))}
+              </TabsContent>
+
+              <TabsContent value="cancelled">
+                {renderTaskTable(getFilteredTasks('Cancelado'))}
+              </TabsContent>
+            </Tabs>
           )}
         </CardContent>
       </Card>

@@ -719,7 +719,7 @@ export const QueueServiceMock = {
            filteredItems = filteredItems.filter(q => q.status !== filters.status.$ne);
        } else {
            // Filtro por status igual
-           filteredItems = filteredItems.filter(q => q.status === filters.status);
+      filteredItems = filteredItems.filter(q => q.status === filters.status);
        }
     }
     
@@ -850,7 +850,7 @@ export const PurchaseHistoryMock = {
     const data = getMockData();
     return data.purchaseHistory || [];
   },
-  
+
   get: async (id) => {
     const data = getMockData();
     const purchase = (data.purchaseHistory || []).find(p => p.id === id);
@@ -1399,7 +1399,7 @@ export const ProductMock = {
     data.products = (data.products || []).filter(p => p.id !== id);
     setMockData(data);
   }
-};
+}; 
 
 // --- Novas Funções para Motivos de Remoção ---
 
@@ -1570,7 +1570,49 @@ export const ConsultationMock = {
 
 // Mock para MedicationTask
 export const MedicationTaskMock = {
-  // ... (implementação)
+  async filter({ tenant_id, pet_id, status }) {
+    // Simula busca de tarefas de medicação
+    return [
+      {
+        id: '1',
+        tenant_id,
+        pet_id: pet_id || '1',
+        medication_id: '1',
+        dosage: '1 comprimido',
+        frequency: '8/8 horas',
+        start_date: new Date().toISOString(),
+        end_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        status: status || 'pending',
+        notes: 'Tomar com água',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }
+    ];
+  },
+
+  async create(data) {
+    // Simula criação de nova tarefa
+    return {
+      id: Date.now().toString(),
+      ...data,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+  },
+
+  async update(id, data) {
+    // Simula atualização de tarefa
+    return {
+      id,
+      ...data,
+      updated_at: new Date().toISOString()
+    };
+  },
+
+  async delete(id) {
+    // Simula exclusão de tarefa
+    return { success: true, id };
+  }
 };
 
 // Mock para OCRStatistic
@@ -1867,4 +1909,4 @@ export const TransportRouteMock = {
 // Mock para TransportConfig
 export const TransportConfigMock = { // Adicionar export se necessário
   // ... (implementação)
-};
+}; 

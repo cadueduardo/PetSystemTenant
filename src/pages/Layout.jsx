@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
-// import { createPageUrl } from "@/utils"; // Removido - Não usado
+import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -89,11 +89,11 @@ export default function Layout() {
               <LayoutDashboard className="h-5 w-5" />
               <span>Dashboard</span>
             </Link>
-
+            
             <Link
               to="/tenant/clientes"
               onClick={(e) => handleNavigation(e, "/tenant/clientes")}
-              className={classNames(
+        className={classNames(
                 `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
                 isActive("/tenant/clientes") ? "bg-accent font-medium" : ""
               )}
@@ -101,7 +101,7 @@ export default function Layout() {
               <Users className="h-5 w-5" />
               <span>Clientes</span>
             </Link>
-
+            
             <Link
               to="/tenant/calendario"
               onClick={(e) => handleNavigation(e, "/tenant/calendario")}
@@ -161,18 +161,18 @@ export default function Layout() {
               <Package className="h-5 w-5" />
               <span>Produtos</span>
             </Link>
-
-            <Link
+            
+              <Link
               to="/tenant/vendas"
               onClick={(e) => handleNavigation(e, "/tenant/vendas")}
               className={classNames(
                 `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
                 isActive("/tenant/vendas") ? "bg-accent font-medium" : ""
               )}
-            >
-              <ShoppingBag className="h-5 w-5" />
-              <span>Vendas</span>
-            </Link>
+              >
+                <ShoppingBag className="h-5 w-5" />
+                <span>Vendas</span>
+              </Link>
 
             <Link
               to="/tenant/servicos"
@@ -187,7 +187,7 @@ export default function Layout() {
             </Link>
 
             {/* <<< COMENTANDO/REMOVENDO O LINK DE TRANSPORTE >>>
-            <Link
+              <Link
               to="/tenant/transporte"
               onClick={(e) => handleNavigation(e, "/tenant/transporte")}
               className={classNames(
@@ -197,7 +197,7 @@ export default function Layout() {
             >
               <Truck className="h-5 w-5" />
               <span>Transporte</span>
-            </Link>
+              </Link>
             */}
 
             <Link
@@ -226,14 +226,14 @@ export default function Layout() {
           </nav>
         </div>
 
-        <div className="border-t p-4">
-          <div className="flex items-center gap-3">
-            <Avatar>
+          <div className="border-t p-4">
+            <div className="flex items-center gap-3">
+              <Avatar>
               <AvatarFallback className="bg-primary/10 text-primary">
                 U
-              </AvatarFallback>
-            </Avatar>
-            <div className="overflow-hidden">
+                </AvatarFallback>
+              </Avatar>
+              <div className="overflow-hidden">
               <p className="truncate font-medium">Usuário</p>
               <p className="truncate text-sm text-muted-foreground">
               </p>

@@ -23,7 +23,7 @@ export default function DashboardContent({ tenant, user, customization, storePar
   const navigate = useNavigate();
   
   const getStoreUrl = (pageName) => {
-    return createPageUrl(`${pageName}?store=${storeParam || 'demo'}`);
+    return createPageUrl(pageName, { store: storeParam || 'demo' });
   };
   
   const hasClinicAccess = () => {

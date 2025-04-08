@@ -3,7 +3,7 @@ import { Pet } from "@/api/entities";
 import { Customer } from "@/api/entities";
 import { PurchaseHistory } from "@/api/entities";
 import { QueueService } from "@/api/entities";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { toast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ import PetGroomingHistory from "../components/pets/PetGroomingHistory";
 
 export default function PetDetails() {
   const navigate = useNavigate();
+  const { id: petId } = useParams();
   const [pet, setPet] = useState(null);
   const [owner, setOwner] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -35,14 +36,13 @@ export default function PetDetails() {
   
   // Obter parâmetros da URL
   const urlParams = new URLSearchParams(window.location.search);
-  const petId = urlParams.get('id');
   const storeParam = urlParams.get('store') || localStorage.getItem('current_tenant');
   
   // Carregar dados do pet e do dono
   useEffect(() => {
     const loadData = async () => {
       if (!petId) {
-        navigate(createPageUrl(`Customers?store=${storeParam}`));
+        navigate(createPageUrl("Customers", { store: storeParam }));
         return;
       }
       
@@ -125,7 +125,7 @@ export default function PetDetails() {
           description: "Não foi possível carregar os dados do pet.",
           variant: "destructive"
         });
-        navigate(createPageUrl(`Customers?store=${storeParam}`));
+        navigate(createPageUrl("Customers", { store: storeParam }));
       } finally {
         setIsLoading(false);
       }
@@ -158,17 +158,17 @@ export default function PetDetails() {
   };
   
   // Voltar para a página de detalhes do cliente
-  const handleBackToCustomer = () => {
-    if (owner) {
-      navigate(createPageUrl(`CustomerDetails?id=${owner.id}&store=${storeParam}`));
-    } else {
-      navigate(createPageUrl(`Customers?store=${storeParam}`));
-    }
+  const handleBack = () => {
+    navigate(createPageUrl("Customers", { store: storeParam }));
   };
   
   // Navegar para o formulário de agendamento
   const handleNewAppointment = () => {
-    navigate(createPageUrl(`AppointmentForm?pet_id=${petId}&customer_id=${owner?.id || ''}&store=${storeParam}`));
+    navigate(createPageUrl("AppointmentForm", { 
+      pet_id: petId, 
+      customer_id: owner?.id || '', 
+      store: storeParam 
+    }));
   };
   
   if (isLoading) {
@@ -185,7 +185,7 @@ export default function PetDetails() {
         <Card>
           <CardContent className="py-10 text-center">
             <p className="text-lg text-gray-500 mb-4">Pet não encontrado</p>
-            <Button onClick={() => navigate(createPageUrl(`Customers?store=${storeParam}`))}>
+            <Button onClick={() => navigate(createPageUrl("Customers", { store: storeParam }))}>
               Voltar para Clientes
             </Button>
           </CardContent>
@@ -219,7 +219,7 @@ export default function PetDetails() {
               <Button 
                 variant="outline" 
                 size="icon" 
-                onClick={handleBackToCustomer}
+                onClick={handleBack}
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
