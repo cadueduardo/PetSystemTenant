@@ -5,26 +5,22 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, CheckCircle, AlertCircle, Clock, X } from 'lucide-react';
-import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
+import { Loader2, CheckCircle, Clock, X } from 'lucide-react';
 
 export default function MedicationQueue() {
   const [tasks, setTasks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("pending");
   const { toast } = useToast();
 
   const fetchTasks = useCallback(async () => {
     console.log("[MedicationQueue] Iniciando fetchTasks...");
     setIsLoading(true);
-    setError(null);
     try {
       const tenantId = localStorage.getItem('current_tenant');
       if (!tenantId) {
          console.error("[MedicationQueue] Tenant ID não encontrado no localStorage.");
-         setError("Identificação da clínica não encontrada. Recarregue a página ou faça login novamente.");
+         toast({ title: "Erro", description: "Identificação da clínica não encontrada.", variant: "destructive" });
          setIsLoading(false);
          return;
       }
@@ -101,10 +97,9 @@ export default function MedicationQueue() {
       }
     } catch (err) {
       console.error("[MedicationQueue] Erro GERAL no fetchTasks:", err);
-      setError("Falha ao carregar as tarefas de medicação.");
       toast({
         title: "Erro",
-        description: "Não foi possível buscar as tarefas.",
+        description: "Falha ao carregar as tarefas de medicação.",
         variant: "destructive",
       });
     } finally {
@@ -295,14 +290,7 @@ export default function MedicationQueue() {
               <p className="ml-2">Carregando tarefas...</p>
             </div>
           )}
-          {!isLoading && error && (
-             <div className="flex flex-col items-center justify-center py-10 text-destructive">
-               <AlertCircle className="h-8 w-8 mb-2" />
-               <p className="text-center font-medium">{error}</p>
-               <Button onClick={fetchTasks} className="mt-4">Tentar Novamente</Button>
-             </div>
-           )}
-          {!isLoading && !error && (
+          {!isLoading && (
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
               <TabsList>
                 <TabsTrigger value="pending" className="flex items-center gap-2">

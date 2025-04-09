@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { format } from "date-fns";
+import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import PropTypes from "prop-types";
 import { Calendar as CalendarIcon } from "lucide-react";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Popover,
   PopoverContent,
@@ -22,7 +23,8 @@ import {
 import { Pet } from "@/api/entities";
 import { HealthPlan } from "@/api/entities";
 import { toast } from "@/components/ui/use-toast";
-import { Loader2 } from "lucide-react"; // Adicionado para o loader
+import { Loader2 } from "lucide-react";
+import { UploadFile } from "@/api/entities";
 
 const breedsBySpecies = {
   dog: [
@@ -79,14 +81,17 @@ const breedsBySpecies = {
 
 PetForm.propTypes = {
   onSuccess: PropTypes.func.isRequired,
-  customerId: PropTypes.string.isRequired
+  customerId: PropTypes.string,
+  pet: PropTypes.object
 };
 
-export default function PetForm({ onSuccess, customerId }) {
-  console.log('[PetForm] Renderizado com customerId:', customerId);
+export default function PetForm({ onSuccess, customerId, pet = null }) {
+  console.log('[PetForm] Renderizado com:', { customerId, pet });
   const [isLoading, setIsLoading] = useState(false);
   const [healthPlans, setHealthPlans] = useState([]);
-  const [dateInputValue, setDateInputValue] = useState("");
+  const [birthDateInputValue, setBirthDateInputValue] = useState("");
+  const [deathDateInputValue, setDeathDateInputValue] = useState("");
+  const [breedOptions, setBreedOptions] = useState([]);
   const [formData, setFormData] = useState({
     name: "",
     species: "",
@@ -95,8 +100,11 @@ export default function PetForm({ onSuccess, customerId }) {
     birth_date: "",
     health_plan_id: "",
     photo_url: "",
-    owner_id: customerId,
-    tenant_id: localStorage.getItem('current_tenant')
+    owner_id: customerId || "",
+    tenant_id: localStorage.getItem('current_tenant') || "",
+    is_inactive: false,
+    inactivation_reason: "",
+    date_of_death: null
   });
   const [imagePreview, setImagePreview] = useState(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
@@ -104,6 +112,84 @@ export default function PetForm({ onSuccess, customerId }) {
   useEffect(() => {
     loadHealthPlans();
   }, []);
+
+  useEffect(() => {
+    if (pet) {
+      console.log('[PetForm] Populando formulário com dados do pet:', pet);
+      setFormData(prev => ({
+        ...prev,
+        name: pet.name || "",
+        species: pet.species || "",
+        gender: pet.gender || "",
+        birth_date: pet.birth_date || "",
+        health_plan_id: pet.health_plan_id || "",
+        photo_url: pet.photo_url || "",
+        owner_id: pet.owner_id || customerId || "",
+        tenant_id: pet.tenant_id || localStorage.getItem('current_tenant') || "",
+        is_inactive: pet.is_inactive || false,
+        inactivation_reason: pet.inactivation_reason || "",
+        date_of_death: pet.date_of_death || null,
+      }));
+      
+      if (pet.photo_url) {
+        setImagePreview(pet.photo_url);
+      }
+      if (pet.birth_date) {
+        try {
+          setBirthDateInputValue(format(parseISO(pet.birth_date), 'dd/MM/yyyy', { locale: ptBR }));
+        } catch {
+           // console.warn("Invalid birth date format:", pet.birth_date);
+           setBirthDateInputValue("");
+        }
+      }
+      if (pet.is_inactive && pet.inactivation_reason === 'Óbito' && pet.date_of_death) {
+         try {
+           setDeathDateInputValue(format(parseISO(pet.date_of_death), 'dd/MM/yyyy', { locale: ptBR }));
+         } catch {
+           // console.warn("Invalid date of death format:", pet.date_of_death);
+           setDeathDateInputValue("");
+         }
+      }
+    } else {
+      setFormData({
+        name: "",
+        species: "",
+        breed: "",
+        gender: "",
+        birth_date: "",
+        health_plan_id: "",
+        photo_url: "",
+        owner_id: customerId || "",
+        tenant_id: localStorage.getItem('current_tenant') || "",
+        is_inactive: false,
+        inactivation_reason: "",
+        date_of_death: null,
+      });
+      setImagePreview(null);
+      setBirthDateInputValue("");
+      setDeathDateInputValue("");
+    }
+  }, [pet, customerId]);
+
+  useEffect(() => {
+    if (formData.species && breedsBySpecies[formData.species]) {
+      setBreedOptions(breedsBySpecies[formData.species]);
+    } else {
+      setBreedOptions([]);
+    }
+  }, [formData.species]);
+
+  useEffect(() => {
+    if (pet && pet.breed && breedOptions.length > 0) {
+      if (breedOptions.includes(pet.breed)) {
+         console.log(`[PetForm Breed useEffect] Setting breed to: ${pet.breed}`);
+         setFormData(prev => ({ ...prev, breed: pet.breed }));
+      } else {
+         console.warn(`[PetForm Breed useEffect] Pet's breed "${pet.breed}" not found in options for species "${pet.species}". Resetting breed.`);
+         setFormData(prev => ({ ...prev, breed: "" }));
+      }
+    }
+  }, [pet, breedOptions]);
 
   const loadHealthPlans = async () => {
     try {
@@ -120,11 +206,22 @@ export default function PetForm({ onSuccess, customerId }) {
   };
 
   const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
+    const { name, value, type, checked } = e.target;
+    const newValue = type === 'checkbox' ? checked : value;
+
+    setFormData(prev => {
+      const updated = { ...prev, [name]: newValue };
+      if (name === 'is_inactive' && !newValue) {
+        updated.inactivation_reason = "";
+        updated.date_of_death = null;
+        setDeathDateInputValue("");
+      }
+      if (name === 'inactivation_reason' && newValue !== 'Óbito') {
+        updated.date_of_death = null;
+        setDeathDateInputValue("");
+      }
+      return updated;
+    });
   };
 
   const handleImageChange = async (e) => {
@@ -141,8 +238,7 @@ export default function PetForm({ onSuccess, customerId }) {
       }
 
       console.log('[PetForm] Iniciando upload do arquivo:', file);
-      const { UploadFile } = await import("@/api/integrations");
-      const result = await UploadFile(file);
+      const result = await UploadFile.uploadFile(file, 'pet_avatars/');
       console.log('[PetForm] Resultado do upload:', result);
       
       if (result.success && result.url) {
@@ -182,34 +278,66 @@ export default function PetForm({ onSuccess, customerId }) {
     }
   };
 
-  const handleDateChange = (date) => {
+  const handleDateChange = (date, fieldName, setInputValueFunc) => {
+    const formattedDate = date ? format(date, 'yyyy-MM-dd') : '';
     setFormData(prev => ({
       ...prev,
-      birth_date: date ? format(date, 'yyyy-MM-dd') : ''
+      [fieldName]: formattedDate
     }));
-    setDateInputValue(date ? format(date, 'dd/MM/yyyy') : '');
+    setInputValueFunc(date ? format(date, 'dd/MM/yyyy', { locale: ptBR }) : '');
   };
 
-  const handleDateInputChange = (e) => {
-    const value = e.target.value;
-    setDateInputValue(value);
+  const handleDateInputChange = (e, fieldName, setInputValueFunc) => {
+    let value = e.target.value;
     
+    // Remove non-digit characters
+    value = value.replace(/\D/g, '');
+
+    // Apply mask DD/MM/AAAA
+    if (value.length > 2) {
+      value = value.substring(0, 2) + '/' + value.substring(2);
+    }
+    if (value.length > 5) {
+      value = value.substring(0, 5) + '/' + value.substring(5, 9); // Limit to 8 digits (DDMMYYYY)
+    }
+
+    // Limit total length (including slashes)
+    value = value.substring(0, 10);
+
+    setInputValueFunc(value);
+
+    // --- Validation logic (remains the same) ---
     const parts = value.split('/');
-    if (parts.length === 3) {
-      const date = new Date(parts[2], parts[1] - 1, parts[0]);
-      if (!isNaN(date.getTime())) {
-        setFormData(prev => ({
-          ...prev,
-          birth_date: format(date, 'yyyy-MM-dd')
-        }));
+    if (parts.length === 3 && parts[0].length === 2 && parts[1].length === 2 && parts[2].length === 4) {
+      const day = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+      const year = parseInt(parts[2], 10);
+      // Basic validation for year range and valid date parts
+      if (year >= 1900 && year <= new Date().getFullYear() + 1 && month >= 0 && month <= 11 && day >= 1 && day <= 31) {
+        const date = new Date(year, month, day);
+        // Final check for valid date object (handles month days, leap years implicitly)
+        if (!isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
+          setFormData(prev => ({
+            ...prev,
+            [fieldName]: format(date, 'yyyy-MM-dd')
+          }));
+        } else {
+           setFormData(prev => ({ ...prev, [fieldName]: '' })); // Clear if invalid date (e.g., 31/02/2024)
+        }
+      } else {
+         setFormData(prev => ({ ...prev, [fieldName]: '' })); // Clear if invalid date parts (e.g., month 13)
       }
+    } else {
+      // Clear if format is not complete DD/MM/AAAA
+      setFormData(prev => ({ ...prev, [fieldName]: '' }));
     }
   };
 
-  const handleSpeciesChange = (value) => {
+  const handleSpeciesChange = (newSpeciesValue) => {
+    console.log(`[PetForm handleSpeciesChange] Setting species to ${newSpeciesValue}, resetting breed.`);
     setFormData(prev => ({
       ...prev,
-      species: value,
+      species: newSpeciesValue,
       breed: ""
     }));
   };
@@ -219,22 +347,62 @@ export default function PetForm({ onSuccess, customerId }) {
     e.preventDefault();
     setIsLoading(true);
 
+    if (!formData.name || !formData.species || !formData.breed || !formData.gender || !formData.birth_date) {
+      toast({
+          title: "Erro de Validação",
+          description: "Por favor, preencha todos os campos obrigatórios (*).",
+          variant: "destructive",
+      });
+      setIsLoading(false);
+      return;
+    }
+    
+    if (formData.is_inactive && !formData.inactivation_reason) {
+       toast({
+          title: "Erro de Validação",
+          description: "Por favor, selecione um motivo para a inativação.",
+          variant: "destructive",
+      });
+      setIsLoading(false);
+      return;
+    }
+     if (formData.is_inactive && formData.inactivation_reason === 'Óbito' && !formData.date_of_death) {
+       toast({
+          title: "Erro de Validação",
+          description: "Por favor, informe a data do óbito.",
+          variant: "destructive",
+      });
+      setIsLoading(false);
+      return;
+    }
+
     try {
+      const currentTenant = localStorage.getItem('current_tenant') || "";
       const petData = {
         ...formData,
-        owner_id: customerId,
-        tenant_id: localStorage.getItem('current_tenant')
+        tenant_id: currentTenant,
+        owner_id: formData.owner_id || customerId,
+        inactivation_reason: formData.is_inactive ? formData.inactivation_reason : "",
+        date_of_death: formData.is_inactive && formData.inactivation_reason === 'Óbito' ? formData.date_of_death : null,
       };
-      
-      console.log('[PetForm] Dados a serem enviados para Pet.create:', petData);
-      
-      await Pet.create(petData);
-      
-      console.log('[PetForm] Pet.create executado com sucesso (aparentemente).');
-      
+
+      let successMessage = "";
+
+      if (pet) {
+        console.log('[PetForm] Dados a serem enviados para Pet.update:', pet.id, petData);
+        await Pet.update(pet.id, petData);
+        successMessage = "Pet atualizado com sucesso!";
+      } else {
+        console.log('[PetForm] Dados a serem enviados para Pet.create:', petData);
+        await Pet.create(petData);
+        successMessage = "Pet cadastrado com sucesso!";
+      }
+
+      console.log('[PetForm] Operação (create/update) executada com sucesso (aparentemente).');
+
       toast({
         title: "Sucesso",
-        description: "Pet cadastrado com sucesso!"
+        description: successMessage
       });
 
       if (onSuccess) {
@@ -245,7 +413,7 @@ export default function PetForm({ onSuccess, customerId }) {
       console.error("Erro ao salvar pet:", error);
       toast({
         title: "Erro",
-        description: "Não foi possível salvar o pet. Tente novamente.",
+        description: error.message || "Não foi possível salvar o pet. Tente novamente.",
         variant: "destructive"
       });
     } finally {
@@ -254,7 +422,7 @@ export default function PetForm({ onSuccess, customerId }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
+    <form id="pet-form" onSubmit={handleSubmit} className="space-y-6">
       <div className="flex flex-col items-center gap-4 mb-6">
         <div className="relative w-32 h-32">
           {(imagePreview || formData.photo_url) && (
@@ -319,18 +487,21 @@ export default function PetForm({ onSuccess, customerId }) {
           </Select>
         </div>
 
+        {/* Log values just before rendering Breed Select */}
+        {console.log('[PetForm Render] Breed Select - Species:', formData.species, 'Breed:', formData.breed, 'Options:', formData.species ? breedsBySpecies[formData.species] : 'N/A')}
+
         <div className="space-y-2">
           <Label htmlFor="pet-breed">Raça *</Label>
           <Select
             value={formData.breed}
             onValueChange={(value) => setFormData(prev => ({ ...prev, breed: value }))}
-            disabled={!formData.species}
+            disabled={!formData.species || isLoading}
           >
             <SelectTrigger id="pet-breed">
               <SelectValue placeholder="Selecione a raça" />
             </SelectTrigger>
             <SelectContent>
-              {formData.species && breedsBySpecies[formData.species].map((breed) => (
+              {breedOptions.map((breed) => (
                 <SelectItem key={breed} value={breed}>
                   {breed}
                 </SelectItem>
@@ -359,24 +530,25 @@ export default function PetForm({ onSuccess, customerId }) {
           <Label htmlFor="pet-birth-date">Data de Nascimento *</Label>
           <div className="flex gap-2">
             <Input
-              id="pet-birth-date"
+              id="pet-birth-date-input"
               type="text"
-              value={dateInputValue}
-              onChange={handleDateInputChange}
+              value={birthDateInputValue}
+              onChange={(e) => handleDateInputChange(e, 'birth_date', setBirthDateInputValue)}
               placeholder="DD/MM/AAAA"
               className="flex-1"
+              disabled={isLoading}
             />
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="outline" size="icon">
+                <Button variant="outline" size="icon" disabled={isLoading}>
                   <CalendarIcon className="h-4 w-4" />
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="end">
                 <Calendar
                   mode="single"
-                  selected={formData.birth_date ? new Date(formData.birth_date) : undefined}
-                  onSelect={handleDateChange}
+                  selected={formData.birth_date ? parseISO(formData.birth_date) : undefined}
+                  onSelect={(date) => handleDateChange(date, 'birth_date', setBirthDateInputValue)}
                   locale={ptBR}
                   captionLayout="dropdown-buttons"
                   fromYear={1990}
@@ -407,11 +579,87 @@ export default function PetForm({ onSuccess, customerId }) {
         </div>
       </div>
 
-      <div className="flex justify-end gap-3">
-        <Button type="submit" disabled={isLoading}>
-          {isLoading ? "Salvando..." : "Salvar Pet"}
-        </Button>
-      </div>
+      {/* --- Inactivation Section - Only show when editing (pet prop exists) --- */}
+      {pet && (
+        <div className="space-y-4 border-t pt-6 mt-6">
+            <h3 className="text-lg font-medium">Status do Pet</h3>
+            <div className="flex items-center space-x-2">
+              <Checkbox 
+                id="is_inactive"
+                name="is_inactive"
+                checked={formData.is_inactive}
+                onCheckedChange={(checked) => {
+                  handleChange({ target: { name: 'is_inactive', type: 'checkbox', checked } });
+                }}
+                disabled={isLoading}
+              />
+              <Label htmlFor="is_inactive" className="cursor-pointer">
+                Inativar Pet (ex: óbito, doação)
+              </Label>
+            </div>
+
+            {formData.is_inactive && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pl-6 border-l-2 ml-2">
+                <div className="space-y-2">
+                   <Label htmlFor="inactivation_reason">Motivo da Inativação *</Label>
+                   <Select
+                     value={formData.inactivation_reason}
+                     onValueChange={(value) => handleChange({ target: { name: 'inactivation_reason', value } })}
+                     disabled={isLoading}
+                   >
+                     <SelectTrigger id="inactivation_reason">
+                       <SelectValue placeholder="Selecione o motivo" />
+                     </SelectTrigger>
+                     <SelectContent>
+                       <SelectItem value="Óbito">Óbito</SelectItem>
+                       <SelectItem value="Doado">Doado</SelectItem>
+                       <SelectItem value="Fugiu">Fugiu</SelectItem>
+                       <SelectItem value="Perdido">Perdido</SelectItem>
+                       <SelectItem value="Outro">Outro</SelectItem>
+                     </SelectContent>
+                   </Select>
+                </div>
+
+                {formData.inactivation_reason === 'Óbito' && (
+                  <div className="space-y-2">
+                    <Label htmlFor="date_of_death">Data do Óbito *</Label>
+                     <div className="flex gap-2">
+                        <Input
+                          id="date_of_death-input"
+                          type="text"
+                          value={deathDateInputValue}
+                          onChange={(e) => handleDateInputChange(e, 'date_of_death', setDeathDateInputValue)}
+                          placeholder="DD/MM/AAAA"
+                          className="flex-1"
+                          disabled={isLoading}
+                        />
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button variant="outline" size="icon" disabled={isLoading}>
+                              <CalendarIcon className="h-4 w-4" />
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0" align="end">
+                            <Calendar
+                              mode="single"
+                              selected={formData.date_of_death ? parseISO(formData.date_of_death) : undefined}
+                              onSelect={(date) => handleDateChange(date, 'date_of_death', setDeathDateInputValue)}
+                              locale={ptBR}
+                              captionLayout="dropdown-buttons"
+                              fromYear={1990}
+                              toYear={new Date().getFullYear()}
+                            />
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                  </div>
+                )}
+              </div>
+            )}
+        </div>
+      )}
+      {/* End Inactivation Section */}
+
     </form>
   );
 }

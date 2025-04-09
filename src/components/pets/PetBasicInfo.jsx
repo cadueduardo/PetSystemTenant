@@ -8,8 +8,10 @@ import {
   Circle,
   CircleDot,
   Calendar, 
-  User 
+  User, 
+  AlertCircle
 } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import PetAvatar from "@/components/pets/PetAvatar";
 import PropTypes from "prop-types";
 
@@ -112,6 +114,19 @@ export default function PetBasicInfo({ pet, owner }) {
   return (
     <Card>
       <CardContent className="p-6">
+        {pet.is_inactive && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Pet Inativo</AlertTitle>
+            <AlertDescription>
+              Motivo: {pet.inactivation_reason || "Não especificado"}
+              {pet.inactivation_reason === 'Óbito' && pet.date_of_death && (
+                 <span> - Data: {format(new Date(pet.date_of_death), "dd/MM/yyyy", { locale: ptBR })}</span>
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <div className="flex items-center gap-4 mb-4">
@@ -194,7 +209,10 @@ PetBasicInfo.propTypes = {
     breed: PropTypes.string,
     birth_date: PropTypes.string,
     gender: PropTypes.string,
-    photo_url: PropTypes.string
+    photo_url: PropTypes.string,
+    is_inactive: PropTypes.bool,
+    inactivation_reason: PropTypes.string,
+    date_of_death: PropTypes.string
   }).isRequired,
   owner: PropTypes.shape({
     full_name: PropTypes.string,

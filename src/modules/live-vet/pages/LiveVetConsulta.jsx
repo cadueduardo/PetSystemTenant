@@ -9,13 +9,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { useToast } from "@/components/ui/use-toast";
 import { ArrowLeft, Loader2, ClipboardList, Save, Bot, FileText, Mic, Square, ThumbsUp, ThumbsDown, Pill as PillIcon, Printer } from 'lucide-react';
-import { format, parseISO, differenceInMinutes } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
 import PrescriptionModal from '@/components/medical/PrescriptionModal';
 import PrintablePrescriptionContent from '@/components/medical/PrintablePrescription';
 import { useTenant } from '@/components/tenant/TenantContext';
-import { createPageUrl } from "@/utils";
 import PetAvatar from '@/components/pets/PetAvatar';
+import { format, parseISO, differenceInMinutes } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 // URLs do NOVO serviço de áudio mock
 const AUDIO_SERVICE_BASE_URL = 'http://localhost:8001';
@@ -600,7 +599,7 @@ export default function LiveVetConsulta() {
       // 4. Exibe toast e Navega para a fila (COM o prefixo /tenant)
       toast({ title: "Sucesso", description: "Atendimento salvo e concluído!" });
       console.log("[saveConsultationDataAndComplete] Navegando para /tenant/live-vet...");
-      navigate(createPageUrl('/tenant/live-vet'));
+      navigate('/tenant/live-vet');
 
     } catch (error) {
       console.error("[saveConsultationDataAndComplete] Erro geral:", error);

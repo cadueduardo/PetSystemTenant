@@ -63,7 +63,7 @@ export default function CustomersPage() {
 
   const handleEdit = (customerId) => {
     console.log('[CustomersPage] handleEdit chamado para cliente:', customerId);
-    navigate(createPageUrl(`/tenant/cliente/${customerId}`));
+    navigate(createPageUrl('CustomerDetails', { id: customerId }));
   };
 
   const handleDelete = async (id) => {
@@ -77,6 +77,7 @@ export default function CustomersPage() {
       });
       loadData();
     } catch (error) {
+      console.error("Erro ao excluir cliente:", error);
       toast({
         title: "Erro",
         description: "Não foi possível excluir o cliente.",

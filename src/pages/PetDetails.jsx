@@ -2,12 +2,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
 import { ChevronLeft, Loader2, Pencil, Filter, Eye, FileText, Sparkles, ShoppingCart, Stethoscope } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { createPageUrl } from "@/utils";
 import { Pet, Customer, QueueService, Appointment, Consultation, Service, PurchaseHistory } from "@/api/entities";
 import { useState, useEffect } from "react";
 import PetForm from "@/components/pets/PetForm";
 import PetBasicInfo from "@/components/pets/PetBasicInfo";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { parseISO, differenceInMinutes, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -18,8 +18,7 @@ export default function DetalhesPet() {
   const [pet, setPet] = useState(null);
   const [dono, setDono] = useState(null);
   const [carregando, setCarregando] = useState(true);
-  const [mostrarFormularioEdicao, setMostrarFormularioEdicao] = useState(false);
-  const [historicoPrescricoes, setHistoricoPrescricoes] = useState([]);
+  const [isEditPetDialogOpen, setIsEditPetDialogOpen] = useState(false);
   const [historicoLiveVet, setHistoricoLiveVet] = useState([]);
   const [historicoPetshop, setHistoricoPetshop] = useState([]);
   const [historicoCompras, setHistoricoCompras] = useState([]);
@@ -30,178 +29,165 @@ export default function DetalhesPet() {
   const storeParam = urlParams.get('store') || localStorage.getItem('current_tenant');
   
   // Carregar dados do pet e do dono
-  useEffect(() => {
-    const carregarDados = async () => {
-      if (!petId) {
-        navigate(createPageUrl(`Customers?store=${storeParam}`));
-        return;
+  const carregarDados = async () => {
+    if (!petId) {
+      navigate(createPageUrl(`Customers?store=${storeParam}`));
+      return;
+    }
+    
+    setCarregando(true);
+    try {
+      // Carregar dados do pet
+      const dadosPet = await Pet.get(petId);
+      if (!dadosPet) {
+        throw new Error("Pet não encontrado");
+      }
+      setPet(dadosPet);
+      
+      // Carregar dados do dono
+      if (dadosPet.owner_id) {
+        try {
+          const dadosDono = await Customer.get(dadosPet.owner_id);
+          setDono(dadosDono);
+        } catch (error) {
+          console.error("Erro ao carregar dados do dono:", error);
+          toast({
+            title: "Aviso",
+            description: "Não foi possível carregar dados do dono.",
+            variant: "warning"
+          });
+        }
       }
       
-      setCarregando(true);
+      // --- Buscar Histórico de Petshop (QueueService Concluídos) --- 
       try {
-        // Carregar dados do pet
-        const dadosPet = await Pet.get(petId);
-        if (!dadosPet) {
-          throw new Error("Pet não encontrado");
-        }
-        setPet(dadosPet);
-        
-        // Carregar dados do dono
-        if (dadosPet.owner_id) {
-          try {
-            const dadosDono = await Customer.get(dadosPet.owner_id);
-            setDono(dadosDono);
-          } catch (error) {
-            console.error("Erro ao carregar dados do dono:", error);
-            toast({
-              title: "Aviso",
-              description: "Não foi possível carregar dados do dono.",
-              variant: "warning"
-            });
+        const petshopQueueItems = await QueueService.filter({ pet_id: petId, status: 'completed' });
+        const petshopHistory = await Promise.all(petshopQueueItems.map(async (item) => {
+          let serviceName = 'Serviço Desconhecido';
+          let servicePrice = null; // <<< Variavel para preço
+          if (item.service_id) {
+            try {
+              const service = await Service.get(item.service_id);
+              serviceName = service?.name || serviceName;
+              servicePrice = service?.price; // <<< Pega o preço
+            } catch (serviceError) {
+              console.warn(`[PetDetails] Erro ao buscar serviço ${item.service_id} para item da fila ${item.id}:`, serviceError);
+            }
           }
-        }
-        
-        // --- Buscar Histórico de Petshop (QueueService Concluídos) --- 
-        try {
-          const petshopQueueItems = await QueueService.filter({ pet_id: petId, status: 'completed' });
-          const petshopHistory = await Promise.all(petshopQueueItems.map(async (item) => {
-            let serviceName = 'Serviço Desconhecido';
-            let servicePrice = null; // <<< Variavel para preço
-            if (item.service_id) {
-              try {
-                const service = await Service.get(item.service_id);
-                serviceName = service?.name || serviceName;
-                servicePrice = service?.price; // <<< Pega o preço
-              } catch (serviceError) {
-                console.warn(`[PetDetails] Erro ao buscar serviço ${item.service_id} para item da fila ${item.id}:`, serviceError);
-              }
-            }
-            let duration = 'N/A';
-            if (item.start_time && item.end_time) {
-              duration = differenceInMinutes(parseISO(item.end_time), parseISO(item.start_time));
-            }
-            // Inclui servicePrice no retorno
-            return { ...item, serviceName, durationMinutes: duration, servicePrice }; 
-          }));
-          setHistoricoPetshop(petshopHistory);
-        } catch (error) {
-          console.error("Erro ao carregar histórico de Petshop:", error);
-          setHistoricoPetshop([]);
-        }
-        // ---------------------------------------------------------------
-        
-        // Carregar histórico de prescrições (mock data por enquanto)
-        try {
-          // Aqui você implementaria a chamada real para buscar prescrições
-          const prescricoes = [
-            { id: 1, data: "2023-05-15", medicamento: "Antiparasitário", dose: "1 comprimido", frequencia: "Mensal", status: "Ativa" },
-            { id: 2, data: "2023-07-22", medicamento: "Anti-inflamatório", dose: "1/2 comprimido", frequencia: "Diária", status: "Concluída" }
-          ];
-          setHistoricoPrescricoes(prescricoes);
-        } catch (error) {
-          console.error("Erro ao carregar histórico de prescrições:", error);
-          setHistoricoPrescricoes([]);
-        }
-        
-        // Carregar histórico de Live Vet (atendimentos concluídos)
-        try {
-          // Buscar todos os agendamentos do pet
-          const agendamentos = await Appointment.filter({
-            pet_id: petId,
-            tenant_id: storeParam
-          });
-          
-          // Filtrar apenas os agendamentos concluídos
-          const agendamentosConcluidos = agendamentos.filter(appt => appt.status === 'completed');
-          
-          // Buscar dados adicionais para cada agendamento
-          const atendimentosCompletos = await Promise.all(
-            agendamentosConcluidos.map(async (appt) => {
-              try {
-                // Buscar dados do serviço
-                const service = await Service.get(appt.service_id).catch(() => ({ name: 'Serviço não encontrado' }));
-                
-                // Buscar dados da consulta (se existir)
-                const consultas = await Consultation.filter({ appointmentId: appt.id });
-                const consulta = consultas.length > 0 ? consultas[0] : null;
-                
-                // Calcular duração
-                let duracao = 'N/A';
-                if (appt.start_time && appt.end_time) {
-                  try {
-                    const startDate = parseISO(appt.start_time);
-                    const endDate = parseISO(appt.end_time);
-                    const minutes = differenceInMinutes(endDate, startDate);
-                    
-                    if (!isNaN(minutes) && minutes >= 0) {
-                      if (minutes < 60) {
-                        duracao = `${minutes} min`;
-                      } else {
-                        const hours = Math.floor(minutes / 60);
-                        const remainingMinutes = minutes % 60;
-                        duracao = `${hours}h ${remainingMinutes > 0 ? `${remainingMinutes}min` : ''}`.trim();
-                      }
-                    }
-                  } catch (e) {
-                    console.error("Erro ao calcular duração:", e);
-                  }
-                }
-                
-                return {
-                  id: appt.id,
-                  data: appt.date,
-                  veterinario: appt.vet_name || 'Veterinário não especificado',
-                  motivo: appt.reason || service.name || 'Motivo não especificado',
-                  duracao: duracao,
-                  status: 'Concluída',
-                  consulta: consulta
-                };
-              } catch (err) {
-                console.error(`Erro ao processar agendamento ${appt.id}:`, err);
-                return {
-                  id: appt.id,
-                  data: appt.date,
-                  veterinario: 'Erro ao carregar',
-                  motivo: 'Erro ao carregar',
-                  duracao: 'N/A',
-                  status: 'Concluída',
-                  consulta: null
-                };
-              }
-            })
-          );
-          
-          // Ordenar por data (mais recente primeiro)
-          atendimentosCompletos.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
-          
-          setHistoricoLiveVet(atendimentosCompletos);
-        } catch (error) {
-          console.error("Erro ao carregar histórico de Live Vet:", error);
-          setHistoricoLiveVet([]);
-        }
-        
-        // Buscar Histórico de Compras (Exemplo, ajuste conforme sua entidade)
-        try {
-          const purchaseHistoryData = await PurchaseHistory.filter({ pet_id: petId }); // Ajuste o filtro se necessário
-          setHistoricoCompras(purchaseHistoryData);
-        } catch (purchaseError) {
-          console.warn("[PetDetails] Módulo de Histórico de Compras não encontrado ou erro ao buscar:", purchaseError);
-          // Lidar com o erro ou definir como vazio se o módulo não existir
-          setHistoricoCompras([]);
-        }
-        
+          let duration = 'N/A';
+          if (item.start_time && item.end_time) {
+            duration = differenceInMinutes(parseISO(item.end_time), parseISO(item.start_time));
+          }
+          // Inclui servicePrice no retorno
+          return { ...item, serviceName, durationMinutes: duration, servicePrice }; 
+        }));
+        setHistoricoPetshop(petshopHistory);
       } catch (error) {
-        console.error("Erro ao carregar dados:", error);
-        toast({
-          title: "Erro",
-          description: "Não foi possível carregar os dados do pet.",
-          variant: "destructive"
-        });
-      } finally {
-        setCarregando(false);
+        console.error("Erro ao carregar histórico de Petshop:", error);
+        setHistoricoPetshop([]);
       }
-    };
+      // ---------------------------------------------------------------
+      
+      // Carregar histórico de Live Vet (atendimentos concluídos)
+      try {
+        // Buscar todos os agendamentos do pet
+        const agendamentos = await Appointment.filter({
+          pet_id: petId,
+          tenant_id: storeParam
+        });
+        
+        // Filtrar apenas os agendamentos concluídos
+        const agendamentosConcluidos = agendamentos.filter(appt => appt.status === 'completed');
+        
+        // Buscar dados adicionais para cada agendamento
+        const atendimentosCompletos = await Promise.all(
+          agendamentosConcluidos.map(async (appt) => {
+            try {
+              // Buscar dados do serviço
+              const service = await Service.get(appt.service_id).catch(() => ({ name: 'Serviço não encontrado' }));
+              
+              // Buscar dados da consulta (se existir)
+              const consultas = await Consultation.filter({ appointmentId: appt.id });
+              const consulta = consultas.length > 0 ? consultas[0] : null;
+              
+              // Calcular duração
+              let duracao = 'N/A';
+              if (appt.start_time && appt.end_time) {
+                try {
+                  const startDate = parseISO(appt.start_time);
+                  const endDate = parseISO(appt.end_time);
+                  const minutes = differenceInMinutes(endDate, startDate);
+                  
+                  if (!isNaN(minutes) && minutes >= 0) {
+                    if (minutes < 60) {
+                      duracao = `${minutes} min`;
+                    } else {
+                      const hours = Math.floor(minutes / 60);
+                      const remainingMinutes = minutes % 60;
+                      duracao = `${hours}h ${remainingMinutes > 0 ? `${remainingMinutes}min` : ''}`.trim();
+                    }
+                  }
+                } catch (e) {
+                  console.error("Erro ao calcular duração:", e);
+                }
+              }
+              
+              return {
+                id: appt.id,
+                data: appt.date,
+                veterinario: appt.vet_name || 'Veterinário não especificado',
+                motivo: appt.reason || service.name || 'Motivo não especificado',
+                duracao: duracao,
+                status: 'Concluída',
+                consulta: consulta
+              };
+            } catch (err) {
+              console.error(`Erro ao processar agendamento ${appt.id}:`, err);
+              return {
+                id: appt.id,
+                data: appt.date,
+                veterinario: 'Erro ao carregar',
+                motivo: 'Erro ao carregar',
+                duracao: 'N/A',
+                status: 'Concluída',
+                consulta: null
+              };
+            }
+          })
+        );
+        
+        // Ordenar por data (mais recente primeiro)
+        atendimentosCompletos.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+        
+        setHistoricoLiveVet(atendimentosCompletos);
+      } catch (error) {
+        console.error("Erro ao carregar histórico de Live Vet:", error);
+        setHistoricoLiveVet([]);
+      }
+      
+      // Buscar Histórico de Compras (Exemplo, ajuste conforme sua entidade)
+      try {
+        const purchaseHistoryData = await PurchaseHistory.filter({ pet_id: petId }); // Ajuste o filtro se necessário
+        setHistoricoCompras(purchaseHistoryData);
+      } catch (purchaseError) {
+        console.warn("[PetDetails] Módulo de Histórico de Compras não encontrado ou erro ao buscar:", purchaseError);
+        // Lidar com o erro ou definir como vazio se o módulo não existir
+        setHistoricoCompras([]);
+      }
+      
+    } catch (error) {
+      console.error("Erro ao carregar dados:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível carregar os dados do pet.",
+        variant: "destructive"
+      });
+    } finally {
+      setCarregando(false);
+    }
+  };
 
+  useEffect(() => {
     carregarDados();
   }, [petId, storeParam, navigate]);
 
@@ -210,16 +196,16 @@ export default function DetalhesPet() {
   };
 
   const editar = () => {
-    setMostrarFormularioEdicao(true);
+    setIsEditPetDialogOpen(true);
   };
 
-  const edicaoConcluida = (petAtualizado) => {
-    setPet(petAtualizado);
-    setMostrarFormularioEdicao(false);
+  const handlePetUpdateSuccess = () => {
+    setIsEditPetDialogOpen(false);
     toast({
       title: "Sucesso",
       description: "Dados do pet atualizados com sucesso!"
     });
+    carregarDados();
   };
 
   const mudarFiltro = (valor) => {
@@ -405,46 +391,68 @@ export default function DetalhesPet() {
           <ChevronLeft className="mr-2 h-4 w-4" />
           Voltar
         </Button>
-        <Button onClick={editar}>
-          <Pencil className="mr-2 h-4 w-4" />
-          Editar
-        </Button>
       </div>
 
-      {mostrarFormularioEdicao ? (
-        <PetForm
-          pet={pet}
-          onSuccess={edicaoConcluida}
-          onCancel={() => setMostrarFormularioEdicao(false)}
-        />
-      ) : (
-        <>
-          <PetBasicInfo pet={pet} owner={dono} />
-          
-          <div className="flex items-center space-x-2 mb-4">
-            <Filter className="h-4 w-4 text-gray-500" />
-            <span className="text-sm font-medium">Filtrar por:</span>
-            <Select value={filtroAtivo} onValueChange={mudarFiltro}>
-              <SelectTrigger className="w-[220px]">
-                <SelectValue placeholder="Filtrar histórico..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="consultas">
-                  <span className="flex items-center"><Stethoscope className="h-4 w-4 mr-2" /> Consultas Live Vet</span>
-                </SelectItem>
-                <SelectItem value="petshop">
-                   <span className="flex items-center"><Sparkles className="h-4 w-4 mr-2" /> Atendimentos Petshop</span>
-                </SelectItem>
-                <SelectItem value="compras">
-                  <span className="flex items-center"><ShoppingCart className="h-4 w-4 mr-2" /> Histórico de Compras</span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
+      <div className="relative">
+        <PetBasicInfo pet={pet} owner={dono} />
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={editar} 
+          className="absolute top-4 right-4"
+          disabled={pet?.is_inactive || carregando}
+        >
+          <Pencil className="mr-2 h-4 w-4" />
+          Editar Pet
+        </Button>
+      </div>
+      
+      <div className="flex items-center space-x-2 mb-4">
+        <Filter className="h-4 w-4 text-gray-500" />
+        <span className="text-sm font-medium">Filtrar por:</span>
+        <Select value={filtroAtivo} onValueChange={mudarFiltro}>
+          <SelectTrigger className="w-[220px]">
+            <SelectValue placeholder="Filtrar histórico..." />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="consultas">
+              <span className="flex items-center"><Stethoscope className="h-4 w-4 mr-2" /> Consultas Live Vet</span>
+            </SelectItem>
+            <SelectItem value="petshop">
+              <span className="flex items-center"><Sparkles className="h-4 w-4 mr-2" /> Atendimentos Petshop</span>
+            </SelectItem>
+            <SelectItem value="compras">
+              <span className="flex items-center"><ShoppingCart className="h-4 w-4 mr-2" /> Histórico de Compras</span>
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      
+      {renderConteudoFiltrado()}
+
+      <Dialog open={isEditPetDialogOpen} onOpenChange={setIsEditPetDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Editar Pet</DialogTitle>
+            <DialogDescription>
+              Atualize as informações de {pet?.name || 'este pet'}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="overflow-y-auto pr-2">
+            <PetForm
+              pet={pet}
+              onSuccess={handlePetUpdateSuccess}
+              customerId={dono?.id}
+            />
           </div>
-          
-          {renderConteudoFiltrado()}
-        </>
-      )}
+          <DialogFooter className="mt-4">
+            <DialogClose asChild>
+              <Button type="button" variant="outline">Cancelar</Button>
+            </DialogClose>
+            <Button type="submit" form="pet-form">Salvar Alterações</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

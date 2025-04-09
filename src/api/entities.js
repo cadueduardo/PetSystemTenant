@@ -1,8 +1,8 @@
 // Importa APENAS os Mocks das entidades de mockData.js
 import { 
     HospitalizationProgressMock,
-    CustomerMock, 
-    PetMock, 
+    // CustomerMock, // Removido - Usaremos o serviço Firebase
+    PetMock,             // <<< Adicionar PetMock aqui
     ServiceMock, 
     AppointmentMock, 
     QueueServiceMock, 
@@ -34,16 +34,22 @@ import {
     TransportVehicleMock, // <<< ADICIONADO TransportVehicleMock >>>
     TransportZonePricingMock, // <<< ADICIONADO TransportZonePricingMock >>>
     // ... adicione outros mocks que você exporta de mockData.js
-    uploadFileMock 
+    // uploadFileMock // Removido
 } from './mockData';
+
+// <<< IMPORTA OS NOVOS SERVIÇOS FIREBASE >>>
+import { customerService } from './firebase/customerService';
+import { petService } from './firebase/petService'; // <<< Adicionado
+import { storageService } from './firebase/storageService'; // <<< Adicionado
 
 // REMOVIDAS outras importações de mockData.js que causavam conflito
 // import { Appointment, QueueService, Service } from "@/api/entities"; // Importação redundante
 // import { getMockData, addRemovalReason, getRemovalReasons } from "@/api/mockData"; 
 
 // Exporta as entidades usando os Mocks importados
-export const Customer = CustomerMock;
-export const Pet = PetMock;
+export const Customer = customerService;
+// export const Pet = petService; // <<< Comente ou remova esta linha
+export const Pet = PetMock; // <<< Adicione esta linha para usar o Mock
 export const Service = ServiceMock;
 export const Appointment = AppointmentMock;
 export const QueueService = QueueServiceMock;
@@ -76,7 +82,10 @@ export const TransportService = TransportServiceMock; // <<< ADICIONADO EXPORT >
 export const TransportVehicle = TransportVehicleMock; // <<< ADICIONADO EXPORT >>>
 export const TransportZonePricing = TransportZonePricingMock; // <<< ADICIONADO EXPORT >>>
 // ... exporte outras entidades mock
-export const UploadFile = uploadFileMock;
+// export const UploadFile = uploadFileMock; // Removido
+
+// Exporta o serviço de storage
+export const UploadFile = storageService; // <<< Alterado para storageService
 
 // Outros mocks que podem estar definidos diretamente aqui (se houver)
 // Exemplo:

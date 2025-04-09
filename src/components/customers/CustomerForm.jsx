@@ -1,20 +1,15 @@
-import React, { useState, useEffect } from "react";
+// import React, { useState, useEffect } from "react"; // Comentado ou Removido
+import { useState, useEffect } from "react"; // Mantém apenas o necessário
+import PropTypes from 'prop-types';
 import { Customer } from "@/api/entities";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/use-toast";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, Save, X } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
-export default function CustomerForm({ open, onOpenChange, customer, onSuccess }) {
+export default function CustomerForm({ customer, onSuccess }) {
+  // console.log('[CustomerForm] Renderizando...', { customerProp: customer });
+
   const [formData, setFormData] = useState({
     full_name: "",
     cpf: "",
@@ -34,9 +29,27 @@ export default function CustomerForm({ open, onOpenChange, customer, onSuccess }
   const [isSearchingCep, setIsSearchingCep] = useState(false);
 
   useEffect(() => {
+    // console.log('[CustomerForm] useEffect executando com customer:', customer);
     if (customer) {
+      // console.log('[CustomerForm] Populando formulário com dados do cliente.');
       setFormData({
         ...customer
+      });
+    } else {
+      // console.log('[CustomerForm] Resetando formulário (sem cliente para editar).');
+      setFormData({
+        full_name: "",
+        cpf: "",
+        phone: "",
+        email: "",
+        address: "",
+        address_number: "",
+        address_complement: "",
+        neighborhood: "",
+        city: "",
+        state: "",
+        cep: "",
+        tenant_id: localStorage.getItem('current_tenant') || ""
       });
     }
   }, [customer]);
@@ -64,7 +77,6 @@ export default function CustomerForm({ open, onOpenChange, customer, onSuccess }
     }
     
     try {
-      let result;
       const currentTenant = localStorage.getItem('current_tenant') || "default";
       const customerData = {
         ...formData,
@@ -72,23 +84,20 @@ export default function CustomerForm({ open, onOpenChange, customer, onSuccess }
       };
 
       if (customer) {
-        result = await Customer.update(customer.id, customerData);
+        await Customer.update(customer.id, customerData);
         toast({
           title: "Sucesso",
           description: "Cliente atualizado com sucesso!"
         });
       } else {
-        result = await Customer.create(customerData);
+        await Customer.create(customerData);
         toast({
           title: "Sucesso",
           description: "Cliente criado com sucesso!"
         });
       }
       
-      if (result) {
-        onSuccess();
-        onOpenChange(false);
-      }
+      onSuccess();
     } catch (error) {
       console.error("Erro ao salvar cliente:", error);
       toast({
@@ -128,180 +137,161 @@ export default function CustomerForm({ open, onOpenChange, customer, onSuccess }
     }
   };
 
+  // console.log('[CustomerForm] Estado atual antes do return:', { formData, isLoading, isSearchingCep });
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[90vw] max-w-[1000px] h-[90vh] max-h-[800px] flex flex-col p-0">
-        <DialogHeader className="p-6 pb-2">
-          <DialogTitle className="text-xl">
-            {customer ? "Editar Cliente" : "Novo Cliente"}
-          </DialogTitle>
-        </DialogHeader>
-        
-        <ScrollArea className="flex-1 p-6 pt-2">
-          <form id="customer-form" onSubmit={handleSubmit} className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <Label htmlFor="full_name">Nome Completo*</Label>
-                <Input
-                  id="full_name"
-                  name="full_name"
-                  value={formData.full_name}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="cpf">CPF</Label>
-                <Input
-                  id="cpf"
-                  name="cpf"
-                  placeholder="000.000.000-00"
-                  value={formData.cpf}
-                  onChange={handleChange}
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="phone">Telefone*</Label>
-                <Input
-                  id="phone"
-                  name="phone"
-                  placeholder="(00) 00000-0000"
-                  value={formData.phone}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="email">Email*</Label>
-                <Input
-                  id="email"
-                  name="email"
-                  type="email"
-                  value={formData.email}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="cep">CEP*</Label>
-                <div className="relative">
-                  <Input
-                    id="cep"
-                    name="cep"
-                    placeholder="00000-000"
-                    value={formData.cep}
-                    onChange={handleChange}
-                    onBlur={handleCepBlur}
-                    required
-                  />
-                  {isSearchingCep && (
-                    <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
-                      <Loader2 className="h-4 w-4 animate-spin text-gray-500" />
-                    </div>
-                  )}
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="address">Endereço*</Label>
-                <Input
-                  id="address"
-                  name="address"
-                  value={formData.address}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="address_number">Número*</Label>
-                <Input
-                  id="address_number"
-                  name="address_number"
-                  value={formData.address_number}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="address_complement">Complemento</Label>
-                <Input
-                  id="address_complement"
-                  name="address_complement"
-                  value={formData.address_complement}
-                  onChange={handleChange}
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="neighborhood">Bairro*</Label>
-                <Input
-                  id="neighborhood"
-                  name="neighborhood"
-                  value={formData.neighborhood}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="city">Cidade*</Label>
-                <Input
-                  id="city"
-                  name="city"
-                  value={formData.city}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="state">Estado*</Label>
-                <Input
-                  id="state"
-                  name="state"
-                  value={formData.state}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
-            </div>
-          </form>
-        </ScrollArea>
-        
-        <DialogFooter className="p-6 pt-2 border-t">
-          <Button
-            type="button"
-            variant="outline" 
-            onClick={() => onOpenChange(false)}
-          >
-            <X className="w-4 h-4 mr-2" />
-            Cancelar
-          </Button>
-          <Button 
-            type="submit"
-            form="customer-form"
+    <form id="customer-form" onSubmit={handleSubmit} className="space-y-6">
+      {/* {console.log('[CustomerForm] Dentro do return, renderizando o <form>')} */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="space-y-2">
+          <Label htmlFor="full_name">Nome Completo*</Label>
+          <Input
+            id="full_name"
+            name="full_name"
+            value={formData.full_name}
+            onChange={handleChange}
+            required
             disabled={isLoading}
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Salvando...
-              </>
-            ) : (
-              <>
-                <Save className="w-4 h-4 mr-2" />
-                Salvar Cliente
-              </>
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <Label htmlFor="cpf">CPF</Label>
+          <Input
+            id="cpf"
+            name="cpf"
+            placeholder="000.000.000-00"
+            value={formData.cpf}
+            onChange={handleChange}
+            disabled={isLoading}
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <Label htmlFor="phone">Telefone*</Label>
+          <Input
+            id="phone"
+            name="phone"
+            placeholder="(00) 00000-0000"
+            value={formData.phone}
+            onChange={handleChange}
+            required
+            disabled={isLoading}
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <Label htmlFor="email">Email*</Label>
+          <Input
+            id="email"
+            name="email"
+            type="email"
+            value={formData.email}
+            onChange={handleChange}
+            required
+            disabled={isLoading}
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <Label htmlFor="cep">CEP*</Label>
+          <div className="relative">
+            <Input
+              id="cep"
+              name="cep"
+              placeholder="00000-000"
+              value={formData.cep}
+              onChange={handleChange}
+              onBlur={handleCepBlur}
+              required
+              disabled={isLoading || isSearchingCep}
+            />
+            {isSearchingCep && (
+              <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                <Loader2 className="h-4 w-4 animate-spin text-gray-500" />
+              </div>
             )}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </div>
+        </div>
+        
+        <div className="space-y-2">
+          <Label htmlFor="address">Endereço*</Label>
+          <Input
+            id="address"
+            name="address"
+            value={formData.address}
+            onChange={handleChange}
+            required
+            disabled={isLoading}
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <Label htmlFor="address_number">Número*</Label>
+          <Input
+            id="address_number"
+            name="address_number"
+            value={formData.address_number}
+            onChange={handleChange}
+            required
+            disabled={isLoading}
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <Label htmlFor="address_complement">Complemento</Label>
+          <Input
+            id="address_complement"
+            name="address_complement"
+            value={formData.address_complement}
+            onChange={handleChange}
+            disabled={isLoading}
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <Label htmlFor="neighborhood">Bairro*</Label>
+          <Input
+            id="neighborhood"
+            name="neighborhood"
+            value={formData.neighborhood}
+            onChange={handleChange}
+            required
+            disabled={isLoading}
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <Label htmlFor="city">Cidade*</Label>
+          <Input
+            id="city"
+            name="city"
+            value={formData.city}
+            onChange={handleChange}
+            required
+            disabled={isLoading}
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <Label htmlFor="state">Estado*</Label>
+          <Input
+            id="state"
+            name="state"
+            value={formData.state}
+            onChange={handleChange}
+            required
+            disabled={isLoading}
+          />
+        </div>
+      </div>
+    </form>
   );
 }
+
+CustomerForm.propTypes = {
+  customer: PropTypes.shape({
+    id: PropTypes.string,
+  }),
+  onSuccess: PropTypes.func.isRequired,
+};

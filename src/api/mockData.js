@@ -14,14 +14,14 @@ const initialData = {
       full_name: "João Silva",
       email: "joao@email.com",
       phone: "(11) 99999-9999",
-      tenant_id: "default"
+      tenant_id: 'clinica-veterinaria-teste'
     },
     {
       id: "cust2",
       full_name: "Maria Santos",
       email: "maria@email.com",
       phone: "(11) 98888-8888",
-      tenant_id: "default"
+      tenant_id: 'clinica-veterinaria-teste'
     }
   ],
   pets: [
@@ -31,7 +31,7 @@ const initialData = {
       species: "dog",
       breed: "Vira-lata",
       owner_id: "cust1",
-      tenant_id: "default",
+      tenant_id: 'clinica-veterinaria-teste',
       gender: "male",
       birth_date: "2022-03-15",
       notes: "Amigável, mas medroso",
@@ -43,7 +43,7 @@ const initialData = {
       species: "cat",
       breed: "Siamês",
       owner_id: "cust2",
-      tenant_id: "default",
+      tenant_id: 'clinica-veterinaria-teste',
       gender: "female",
       birth_date: "2023-01-20",
       notes: "Muito ativa",
@@ -55,7 +55,7 @@ const initialData = {
       species: "dog",
       breed: "Golden Retriever",
       owner_id: "cust1",
-      tenant_id: "default",
+      tenant_id: 'clinica-veterinaria-teste',
       gender: "male",
       birth_date: "2021-08-10",
       notes: "Adora buscar a bola",
@@ -71,7 +71,7 @@ const initialData = {
       price: 80,
       duration: 60,
       module: 'petshop',
-      tenant_id: 'default'
+      tenant_id: 'clinica-veterinaria-teste'
     },
     {
       id: 'serv2',
@@ -81,7 +81,7 @@ const initialData = {
       price: 50,
       duration: 30,
       module: 'petshop',
-      tenant_id: 'default'
+      tenant_id: 'clinica-veterinaria-teste'
     },
     {
       id: 'serv3',
@@ -91,7 +91,7 @@ const initialData = {
       price: 120,
       duration: 30,
       module: 'clinica',
-      tenant_id: 'default'
+      tenant_id: 'clinica-veterinaria-teste'
     },
     {
       id: 'serv4',
@@ -101,7 +101,7 @@ const initialData = {
       price: 70,
       duration: 15,
       module: 'clinica',
-      tenant_id: 'default'
+      tenant_id: 'clinica-veterinaria-teste'
     },
     {
       id: 'serv5',
@@ -111,7 +111,7 @@ const initialData = {
       price: 150,
       duration: 30,
       module: 'clinica',
-      tenant_id: 'default'
+      tenant_id: 'clinica-veterinaria-teste'
     }
   ],
   products: [
@@ -149,76 +149,76 @@ const initialData = {
   ],
   appointments: [
     {
-      id: generateUniqueId(), // Usando nossa função
+      id: generateUniqueId(),
       pet_id: "pet1",
       owner_id: "cust1",
-      service_id: "serv3", // Consulta Veterinária
-      date: new Date().toISOString().split('T')[0], // Data de hoje
+      service_id: "serv3",
+      date: new Date().toISOString().split('T')[0],
       time: "09:00",
       duration: 30,
       notes: "Check-up anual do Rex.",
-      status: "scheduled", // Agendado
-      tenant_id: "default" // Ajustará para o tenant atual se necessário
+      status: "scheduled",
+      tenant_id: 'clinica-veterinaria-teste'
     },
     {
       id: generateUniqueId(),
       pet_id: "pet2",
       owner_id: "cust2",
-      service_id: "serv4", // Vacinação
-      date: new Date().toISOString().split('T')[0], // Data de hoje
+      service_id: "serv4",
+      date: new Date().toISOString().split('T')[0],
       time: "10:30",
       duration: 15,
       notes: "Vacina V10 para Luna.",
-      status: "confirmed", // Confirmado
-      tenant_id: "default"
+      status: "confirmed",
+      tenant_id: 'clinica-veterinaria-teste'
     },
     {
       id: generateUniqueId(),
       pet_id: "pet1",
       owner_id: "cust1",
-      service_id: "serv5", // Exame de Sangue
-      date: new Date().toISOString().split('T')[0], // Data de hoje
+      service_id: "serv5",
+      date: new Date().toISOString().split('T')[0],
       time: "11:00",
       duration: 30,
       notes: "Exame pré-operatório.",
-      status: "waiting", // Chegou e está aguardando
-      tenant_id: "default"
+      status: "waiting",
+      tenant_id: 'clinica-veterinaria-teste'
     },
-    { // Agendamento de Petshop (NÃO deve aparecer na fila Live Vet)
+    {
       id: generateUniqueId(),
       pet_id: "pet2",
       owner_id: "cust2",
-      service_id: "serv1", // Banho Completo
-      date: new Date().toISOString().split('T')[0], // Data de hoje
+      service_id: "serv1",
+      date: new Date().toISOString().split('T')[0],
       time: "14:00",
       duration: 60,
       notes: "Banho e tosa higiênica.",
       status: "scheduled",
-      tenant_id: "default"
+      tenant_id: 'clinica-veterinaria-teste'
     },
-    { // Agendamento de Clínica para AMANHÃ (NÃO deve aparecer hoje)
+    {
       id: generateUniqueId(),
       pet_id: "pet1",
       owner_id: "cust1",
-      service_id: "serv3", // Consulta Veterinária
-      date: new Date(Date.now() + 86400000).toISOString().split('T')[0], // Data de amanhã
+      service_id: "serv3",
+      date: new Date(Date.now() + 86400000).toISOString().split('T')[0],
       time: "15:00",
       duration: 30,
       notes: "Consulta de acompanhamento.",
       status: "scheduled",
-      tenant_id: "default"
+      tenant_id: 'clinica-veterinaria-teste'
     },
-      { // Agendamento de Clínica CONCLUÍDO (NÃO deve aparecer na fila)
+      {
       id: generateUniqueId(),
       pet_id: "pet2",
       owner_id: "cust2",
-      service_id: "serv4", // Vacinação
-      date: new Date().toISOString().split('T')[0], // Data de hoje
+      service_id: "serv4",
+      date: new Date().toISOString().split('T')[0],
       time: "08:00",
       duration: 15,
       notes: "Vacina aplicada.",
-      status: "completed", // Concluído
-      tenant_id: "default"
+      status: "completed",
+      tenant_id: 'clinica-veterinaria-teste'
     }
   ],
   queueServices: [],
@@ -227,7 +227,7 @@ const initialData = {
   medications: [
     {
       id: 'mock-med-1',
-      tenant_id: 'clinica-veterinaria-teste', // Associar ao tenant de teste
+      tenant_id: 'clinica-veterinaria-teste',
       name: 'Dipirona Gotas 500mg/ml',
       description: 'Analgésico e antitérmico',
       category: 'Analgésicos',
@@ -244,7 +244,6 @@ const initialData = {
       created_at: '2024-01-10T10:00:00Z',
       updated_at: '2024-01-10T10:00:00Z'
     }
-    // Adicionar mais medicações mock se necessário
   ],
   medicationTasks: [],
   petshopData: [],
@@ -267,30 +266,15 @@ export const getMockData = (entityName = null) => {
       console.log('[getMockData] Dados encontrados no localStorage');
       const data = JSON.parse(dataString);
       
-      // Verifica se há pets com foto
-      const petsWithPhotos = data.pets.filter(p => p.photo_url);
-      if (petsWithPhotos.length > 0) {
-        console.log('[getMockData] Pets com fotos encontrados:', petsWithPhotos.map(p => ({
-          id: p.id,
-          name: p.name,
-          hasPhoto: !!p.photo_url,
-          photoUrlPreview: p.photo_url?.substring(0, 50) + '...'
-        })));
-      } else {
-        console.log('[getMockData] Nenhum pet com foto encontrado');
-      }
-      
       return entityName ? data[entityName] : data;
     } else {
       console.log('[getMockData] localStorage vazio, inicializando com dados padrão.');
-      // Garante que a estrutura inicial tenha removalReasons
-      const initialData = { ...initialData, removalReasons: initialData.removalReasons || [] };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(initialData));
-      return entityName ? initialData[entityName] : initialData;
+      const initialDataCopy = { ...initialData, removalReasons: initialData.removalReasons || [] };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(initialDataCopy));
+      return entityName ? initialDataCopy[entityName] : initialDataCopy;
     }
   } catch (error) {
     console.error('[getMockData] Erro ao ler localStorage:', error);
-    // Retorna estrutura mínima em caso de erro grave
     const fallbackData = { ...initialData, removalReasons: initialData.removalReasons || [] };
     return entityName ? fallbackData[entityName] : fallbackData;
   }
@@ -298,56 +282,15 @@ export const getMockData = (entityName = null) => {
 
 export function setMockData(newData) {
     try {
-      // Verifica se os dados são válidos antes de salvar
       if (!newData || typeof newData !== 'object') {
         console.error('[setMockData] Dados inválidos:', newData);
         throw new Error('Dados inválidos para salvar');
       }
   
-      // Verifica se há pets com foto antes de salvar
-      const petsWithPhotos = newData.pets?.filter(p => p.photo_url) || [];
-      console.log('[setMockData] Verificando pets antes de salvar:', {
-        totalPets: newData.pets?.length || 0,
-        petsWithPhotos: petsWithPhotos.length,
-        photosInfo: petsWithPhotos.map(p => ({
-          id: p.id,
-          name: p.name,
-          photo_url_length: p.photo_url?.length,
-          photo_url_preview: p.photo_url?.substring(0, 50) + '...',
-          is_base64: p.photo_url?.startsWith('data:')
-        }))
-      });
-  
-      // Garante que os pets com foto mantenham suas fotos
-      if (newData.pets) {
-        newData.pets = newData.pets.map(pet => {
-          if (pet.photo_url) {
-            console.log('[setMockData] Salvando pet com foto:', {
-              id: pet.id,
-              name: pet.name,
-              photo_url_length: pet.photo_url.length,
-              photo_url_preview: pet.photo_url.substring(0, 50) + '...',
-              is_base64: pet.photo_url.startsWith('data:')
-            });
-          }
-          return pet;
-        });
-      }
-  
-      // Converte para string e salva
       const jsonString = JSON.stringify(newData);
       localStorage.setItem(STORAGE_KEY, jsonString);
       console.log('[setMockData] Dados salvos com sucesso');
   
-      // Verificação após salvar
-      const savedData = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-      const savedPetsWithPhotos = savedData.pets?.filter(p => p.photo_url) || [];
-      console.log('[setMockData] Verificação após salvar:', {
-        totalPets: savedData.pets?.length || 0,
-        petsWithPhotos: savedPetsWithPhotos.length,
-        photosInfo: savedPetsWithPhotos.map(p => ({ id: p.id, name: p.name, photo_url_length: p.photo_url?.length }))
-      });
-
     } catch (error) {
       console.error('[setMockData] Erro ao salvar no localStorage:', error);
     }
@@ -361,7 +304,7 @@ export const CustomerMock = {
   },
 
   get: async (id) => {
-    const data = getMockData(); // Busca os dados JÁ atualizados para o tenant atual
+    const data = getMockData();
     const customer = (data.customers || []).find(c => c.id === id);
     if (!customer) {
       console.error(`[CustomerMock.get] Cliente com ID ${id} não encontrado para o tenant atual.`);
@@ -374,7 +317,6 @@ export const CustomerMock = {
     const data = getMockData();
     let filteredCustomers = [...data.customers];
 
-    // Aplica os filtros
     if (filters.tenant_id) {
       filteredCustomers = filteredCustomers.filter(c => c.tenant_id === filters.tenant_id);
     }
@@ -424,7 +366,7 @@ export const PetMock = {
   },
 
   get: async (id) => {
-    const data = getMockData(); // Busca os dados JÁ atualizados para o tenant atual
+    const data = getMockData();
     const pet = (data.pets || []).find(p => p.id === id);
     if (!pet) {
       console.error(`[PetMock.get] Pet com ID ${id} não encontrado para o tenant atual.`);
@@ -438,7 +380,6 @@ export const PetMock = {
     const data = getMockData();
     let filteredPets = [...data.pets];
 
-    // Aplica os filtros
     if (filters.tenant_id) {
       filteredPets = filteredPets.filter(p => p.tenant_id === filters.tenant_id);
     }
@@ -515,7 +456,6 @@ export const TenantMock = {
     const data = getMockData();
     let filteredTenants = [...(data.tenants || [])];
 
-    // Aplica os filtros
     if (filters.status) {
       filteredTenants = filteredTenants.filter(t => t.status === filters.status);
     }
@@ -580,7 +520,6 @@ export const TenantUserMock = {
     const data = getMockData();
     let filteredUsers = [...(data.tenantUsers || [])];
 
-    // Aplica os filtros
     if (filters.tenant_id) {
       filteredUsers = filteredUsers.filter(u => u.tenant_id === filters.tenant_id);
     }
@@ -631,7 +570,7 @@ export const ServiceMock = {
   },
 
   get: async (id) => {
-    const data = getMockData(); // Busca os dados JÁ atualizados para o tenant atual
+    const data = getMockData();
     const service = (data.services || []).find(s => s.id === id);
     if (!service) {
        console.error(`[ServiceMock.get] Serviço com ID ${id} não encontrado para o tenant atual.`);
@@ -644,20 +583,17 @@ export const ServiceMock = {
     const data = getMockData();
     let filteredServices = [...(data.services || [])];
 
-    // Se não houver tenant_id no filtro, usa o tenant atual
     const tenantId = filters.tenant_id || localStorage.getItem('current_tenant') || "default";
     console.log('Filtrando serviços para tenant:', tenantId);
     filteredServices = filteredServices.filter(s => s.tenant_id === tenantId);
     console.log('Serviços após filtro de tenant:', filteredServices);
 
-    // Filtra por módulo (clinica ou petshop)
     if (filters.module) {
       console.log('Filtrando por módulo:', filters.module);
       filteredServices = filteredServices.filter(s => s.module === filters.module);
       console.log('Serviços após filtro de módulo:', filteredServices);
     }
 
-    // Remove serviços sem ID para evitar duplicatas
     filteredServices = filteredServices.filter(s => s.id);
 
     return filteredServices;
@@ -717,7 +653,6 @@ export const QueueServiceMock = {
     let filteredItems = [...(data.queueServices || [])];
     console.log('[QueueServiceMock.filter] Itens antes de filtrar:', filteredItems.length, 'Filtros:', filters);
 
-    // Aplica os filtros
     if (filters.tenant_id) {
       filteredItems = filteredItems.filter(q => q.tenant_id === filters.tenant_id);
     }
@@ -734,18 +669,14 @@ export const QueueServiceMock = {
       filteredItems = filteredItems.filter(q => q.service_id === filters.service_id);
     }
 
-    // Filtro de Status (EXISTENTE, mas também pode suportar $ne)
     if (filters.status) {
        if (typeof filters.status === 'object' && filters.status.$ne) {
-           // Filtro por status diferente de ($ne: 'cancelled')
            filteredItems = filteredItems.filter(q => q.status !== filters.status.$ne);
        } else {
-           // Filtro por status igual
-      filteredItems = filteredItems.filter(q => q.status === filters.status);
+           filteredItems = filteredItems.filter(q => q.status === filters.status);
        }
     }
     
-    // --- ADICIONAR LÓGICA DE FILTRO POR DATA ---
     if (filters.appointment_date && typeof filters.appointment_date === 'object') {
       const filterDate = filters.appointment_date;
       filteredItems = filteredItems.filter(q => {
@@ -761,11 +692,10 @@ export const QueueServiceMock = {
           return match;
         } catch (e) {
           console.error("Erro ao comparar data no filtro da QueueService:", q.appointment_date, e);
-          return false; // Ignora itens com data inválida
+          return false;
         }
       });
     }
-    // --- FIM DA LÓGICA DE FILTRO POR DATA ---
 
     console.log('[QueueServiceMock.filter] Itens DEPOIS de filtrar:', filteredItems.length);
     return filteredItems;
@@ -860,9 +790,8 @@ export const HealthPlanMock = {
   },
 
   delete: async (id) => {
-    const data = getMockData();
-    data.healthPlans = (data.healthPlans || []).filter(p => p.id !== id);
-    setMockData(data);
+    console.log(`Simulando exclusão do plano ${id}`);
+    return true;
   }
 };
 
@@ -881,19 +810,9 @@ export const PurchaseHistoryMock = {
   },
 
   filter: async (filters = {}) => {
+    console.log("[PurchaseHistoryMock.filter] Filtrando por:", { tenant_id: filters.tenant_id, pet_id: filters.pet_id, customer_id: filters.customer_id, dateRange: filters.dateRange });
     const data = getMockData();
-    let filteredHistory = [...(data.purchaseHistory || [])];
-
-    // Aplica os filtros
-    if (filters.tenant_id) {
-      filteredHistory = filteredHistory.filter(p => p.tenant_id === filters.tenant_id);
-    }
-
-    if (filters.pet_id) {
-      filteredHistory = filteredHistory.filter(p => p.pet_id === filters.pet_id);
-    }
-
-    return filteredHistory;
+    return Promise.resolve(data.purchaseHistory || []);
   },
 
   create: async (purchaseData) => {
@@ -1069,7 +988,6 @@ export const PetClinicalDataMock = {
     const data = getMockData();
     let filteredData = [...(data.petClinicalData || [])];
 
-    // Aplica os filtros
     if (filters.tenant_id) {
       filteredData = filteredData.filter(c => c.tenant_id === filters.tenant_id);
     }
@@ -1175,7 +1093,6 @@ export const PetshopDataMock = {
     const data = getMockData();
     let filteredData = [...(data.petshopData || [])];
 
-    // Aplica os filtros
     if (filters.tenant_id) {
       filteredData = filteredData.filter(p => p.tenant_id === filters.tenant_id);
     }
@@ -1296,7 +1213,6 @@ export const AppointmentMock = {
     const data = getMockData();
     let filteredAppointments = [...(data.appointments || [])];
 
-    // Aplica os filtros
     if (filters.tenant_id) {
       filteredAppointments = filteredAppointments.filter(a => a.tenant_id === filters.tenant_id);
     }
@@ -1341,12 +1257,11 @@ export const AppointmentMock = {
       updated_date: new Date().toISOString()
     };
     
-    // Log específico para campos de conclusão
     if (updateData.status === 'completed') {
         console.log('[AppointmentMock.update] Atualizando para COMPLETED:', {
             id: id,
-            end_time: updatedAppointment.end_time, // Verifica se end_time veio
-            duration_minutes: updatedAppointment.duration_minutes // Verifica se duration_minutes veio
+            end_time: updatedAppointment.end_time,
+            duration_minutes: updatedAppointment.duration_minutes
         });
     }
     
@@ -1425,13 +1340,11 @@ export const ProductMock = {
 
 // --- Novas Funções para Motivos de Remoção ---
 
-// Obter todos os motivos de remoção
 export function getRemovalReasons() {
   const data = getMockData();
   return data.removalReasons || [];
 }
 
-// Adicionar um novo motivo de remoção (se ainda não existir)
 export function addRemovalReason(newReason) {
   if (!newReason || typeof newReason !== 'string') return;
   
@@ -1441,7 +1354,6 @@ export function addRemovalReason(newReason) {
   const data = getMockData();
   const currentReasons = data.removalReasons || [];
   
-  // Verifica se o motivo (ignorando maiúsculas/minúsculas) já existe
   const exists = currentReasons.some(reason => reason.toLowerCase() === reasonTrimmed.toLowerCase());
   
   if (!exists) {
@@ -1453,7 +1365,6 @@ export function addRemovalReason(newReason) {
   }
 }
 
-// Inicializa os motivos se não existirem
 const initializeReasons = () => {
     const data = getMockData();
     if (!data.removalReasons) {
@@ -1469,20 +1380,7 @@ const initializeReasons = () => {
     }
 };
 
-initializeReasons(); // Chama a inicialização ao carregar o módulo
-
-// Exemplo de como a entidade poderia ser (opcional, as funções acima são suficientes)
-/*
-export const RemovalReason = {
-  getAll: async () => {
-    return getRemovalReasons();
-  },
-  create: async (data) => {
-    addRemovalReason(data.reason);
-    return { id: data.reason, reason: data.reason }; // Simula um retorno de API
-  }
-};
-*/
+initializeReasons();
 
 // Mock para Customization
 export const CustomizationMock = {
@@ -1555,24 +1453,22 @@ export const ConsultationMock = {
     let data = getMockData();
     if (!data.consultations) data.consultations = [];
     const newItem = {
-        id: newData.appointmentId || generateUniqueId(), // Usa ID do appointment ou gera um novo
+        id: newData.appointmentId || generateUniqueId(),
         date: new Date().toISOString(),
         ...newData,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
     };
-    // Evita duplicados pelo ID do appointment se ele for usado como ID da consulta
     const existingIndex = data.consultations.findIndex(c => c.id === newItem.id);
     if (existingIndex === -1) {
        data.consultations.push(newItem);
        console.log('[ConsultationMock.create] Nova consulta criada:', newItem);
     } else {
        console.warn(`[ConsultationMock.create] Consulta com ID ${newItem.id} já existe. Atualizando...`);
-       // Opcional: Atualizar em vez de não fazer nada
        data.consultations[existingIndex] = {
           ...data.consultations[existingIndex],
-          ...newItem, // Sobrescreve com os novos dados
-          updated_at: new Date().toISOString(), // Atualiza timestamp
+          ...newItem,
+          updated_at: new Date().toISOString(),
        };
        setMockData(data);
        return Promise.resolve(data.consultations[existingIndex]);
@@ -1600,7 +1496,6 @@ export const ConsultationMock = {
 
 // Mock para MedicationTask
 export const MedicationTaskMock = {
-  // CORRIGIDO: filter agora lê do array e aplica filtros
   async filter({ tenant_id, pet_id, status }) {
     console.log(`[MedicationTaskMock.filter] Filtrando por:`, { tenant_id, pet_id, status });
     const allData = getMockData();
@@ -1613,7 +1508,6 @@ export const MedicationTaskMock = {
       tasks = tasks.filter(task => task.pet_id === pet_id);
     }
     if (status) {
-      // Lógica para tratar status 'pending' que inclui 'in_progress' (se necessário aqui)
       if (status === 'pending') {
           tasks = tasks.filter(task => task.status === 'pending' || task.status === 'in_progress');
       } else {
@@ -1628,42 +1522,37 @@ export const MedicationTaskMock = {
     return Promise.resolve(tasks);
   },
 
-  // CORRIGIDO: create agora salva no array
   async create(newData) {
     console.log("[MedicationTaskMock.create] Criando com dados:", newData);
     const allData = getMockData();
     
-    // Padroniza para usar pet_id
-    const { petId, ...restData } = newData; // Separa petId se existir
+    const { petId, ...restData } = newData;
     const finalData = { 
         ...restData, 
-        pet_id: petId || newData.pet_id // Usa petId ou pet_id que veio
+        pet_id: petId || newData.pet_id
     };
 
     const newTask = {
       id: generateUniqueId('task'),
-      ...finalData, // Usa os dados com pet_id padronizado
-      status: finalData.status || 'pending', // Garante status inicial
+      ...finalData,
+      status: finalData.status || 'pending',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
 
-    // Garante que o array existe
     if (!allData.medicationTasks) {
         allData.medicationTasks = [];
     }
 
     allData.medicationTasks.push(newTask);
-    setMockData(allData); // Salva os dados atualizados
+    setMockData(allData);
     console.log("[MedicationTaskMock.create] Tarefa adicionada e salva (com pet_id):");
-    console.log(newTask); // Log da tarefa salva para verificar
+    console.log(newTask);
     return Promise.resolve(newTask);
   },
 
-  // Update continua como estava (com o paliativo para mock-task-1)
   async update(id, updateData) {
-    // ... (implementação anterior do update) ...
-     console.log(`[MedicationTaskMock.update] ID: ${id}, Dados:`, updateData);
+    console.log(`[MedicationTaskMock.update] ID: ${id}, Dados:`, updateData);
     const allData = getMockData(); 
     if (!allData.medicationTasks) {
         allData.medicationTasks = [];
@@ -1675,7 +1564,6 @@ export const MedicationTaskMock = {
           console.warn(`[MedicationTaskMock.update] Tarefa mock ${id} não encontrada no array, aplicando virtualmente.`);
            return Promise.resolve({ 
                id: id, 
-               // Removido: ...(await this.filter({})[0]), // Não podemos mais assumir que filter retorna a task mockada
                ...updateData, 
                updated_at: new Date().toISOString() 
            });
@@ -1694,7 +1582,6 @@ export const MedicationTaskMock = {
     return Promise.resolve(allData.medicationTasks[index]);
   },
 
-  // Delete agora remove do array
   async delete(id) {
     console.log(`[MedicationTaskMock.delete] Tentando deletar ID: ${id}`);
     const allData = getMockData();
@@ -1708,7 +1595,7 @@ export const MedicationTaskMock = {
         return Promise.resolve({ success: true, id });
     } else {
         console.warn(`[MedicationTaskMock.delete] Tarefa ${id} não encontrada para deletar.`);
-        return Promise.resolve({ success: false, id }); // Indica que não deletou
+        return Promise.resolve({ success: false, id });
     }
   }
 };
@@ -1716,7 +1603,6 @@ export const MedicationTaskMock = {
 // Mock para OCRStatistic
 export const OCRStatisticMock = {
   async filter({ tenant_id }) {
-    // ... (implementação existente)
     return [
       {
         id: '1',
@@ -1729,18 +1615,14 @@ export const OCRStatisticMock = {
       }
     ];
   },
-  // eslint-disable-next-line no-unused-vars
   async create(data) { /*...*/ },
-  // eslint-disable-next-line no-unused-vars
   async update(id, data) { /*...*/ },
   async delete() { /*...*/ }
 };
 
 // Mock para SupportTicket
 export const SupportTicketMock = {
-  // Adicionar export se necessário
-   // ... (implementação existente)
-   async filter({ tenant_id }) {
+  async filter({ tenant_id }) {
     return [
       {
         id: '1',
@@ -1777,7 +1659,6 @@ export const SupportTicketMock = {
 // Mock para SupportMessage
 export const SupportMessageMock = {
   async filter({ ticket_id }) {
-    // ... (implementação)
     return [
       {
         id: '1',
@@ -1788,14 +1669,12 @@ export const SupportMessageMock = {
       }
     ];
   },
-  // eslint-disable-next-line no-unused-vars
   async create(data) { 
-    // TODO: Implementar
+    console.warn("[SupportMessageMock.create] Mock não implementado para salvar dados.");
     return { id: 'new-msg-id', ...data }; 
   },
-  // eslint-disable-next-line no-unused-vars
   async update(id, data) { 
-    // TODO: Implementar
+    console.warn("[SupportMessageMock.update] Mock não implementado para salvar dados.");
     return { id, ...data }; 
   },
   async delete() { /*...*/ }
@@ -1804,7 +1683,6 @@ export const SupportMessageMock = {
 // Mock para User
 export const UserMock = {
   async me() {
-    // ... (implementação existente)
     return {
       id: '1',
       email: 'user@example.com',
@@ -1813,19 +1691,16 @@ export const UserMock = {
       created_at: new Date().toISOString()
     };
   },
-  // eslint-disable-next-line no-unused-vars
-  async filter({ tenant_id }) { 
-    // TODO: Implementar filtro real
+  async filter() { 
+    console.warn("[UserMock.filter] Mock não implementado para filtrar, retornando usuário fixo.");
     return [{ id: '1', email: 'user@example.com', name: 'Usuário Teste', role: 'admin' }];
    },
-  // eslint-disable-next-line no-unused-vars
   async create(data) { 
-    // TODO: Implementar
+    console.warn("[UserMock.create] Mock não implementado para salvar dados.");
     return { id: 'new-user-id', ...data }; 
   },
-  // eslint-disable-next-line no-unused-vars
   async update(id, data) { 
-    // TODO: Implementar
+    console.warn("[UserMock.update] Mock não implementado para salvar dados.");
     return { id, ...data }; 
   },
   async delete() { /*...*/ }
@@ -1836,20 +1711,14 @@ export const UserMock = {
 
 // Mock para KnowledgeArticle
 export const KnowledgeArticleMock = {
-  // eslint-disable-next-line no-unused-vars
   async filter({ tenant_id }) {
-    // TODO: Implementar filtro real ou usar tenant_id
-    console.log('[KnowledgeArticleMock] Filtrando para tenant:', tenant_id); // Exemplo de uso
+    console.log('[KnowledgeArticleMock] Filtrando para tenant:', tenant_id);
     return [{ id: '1', title: 'Artigo Mock' }];
   },
-  // eslint-disable-next-line no-unused-vars
   async create(data) { 
-    // TODO: Implementar
     return { id: 'new-article-id', ...data };
   },
-  // eslint-disable-next-line no-unused-vars
   async update(id, data) { 
-    // TODO: Implementar
     return { id, ...data };
   },
   async delete() { /*...*/ }
@@ -1860,20 +1729,14 @@ export const KnowledgeArticleMock = {
 
 // Mock para HospitalizationProgress
 export const HospitalizationProgressMock = {
-  // eslint-disable-next-line no-unused-vars
   async filter({ hospitalization_id }) {
-    // TODO: Implementar filtro real ou usar hospitalization_id
     console.log("[HospitalizationProgressMock] Filtrando para hospitalização:", hospitalization_id);
     return [{ id: '1', description: 'Progresso mock' }];
   },
-  // eslint-disable-next-line no-unused-vars
   async create(data) { 
-    // TODO: Implementar
     return { id: 'new-progress-id', ...data }; 
   },
-  // eslint-disable-next-line no-unused-vars
   async update(id, data) { 
-    // TODO: Implementar
     return { id, ...data }; 
   },
   async delete() { /*...*/ }
@@ -1883,7 +1746,6 @@ export const HospitalizationProgressMock = {
 export const TransportServiceMock = {
   async filter({ tenant_id }) {
     console.log("[TransportServiceMock] Filtrando para tenant:", tenant_id);
-    // TODO: Implementar filtro real e retornar dados mockados
     return [
       {
         id: 'tserv1',
@@ -1896,46 +1758,31 @@ export const TransportServiceMock = {
       }
     ];
   },
-  // eslint-disable-next-line no-unused-vars
   async create(data) {
-    // TODO: Implementar
     console.log("[TransportServiceMock] Criando com dados:", data);
     const newService = { id: generateUniqueId(), ...data, created_at: new Date().toISOString() };
-    // Adicionar lógica para salvar em data.transportServices se necessário
     return newService;
   },
-  // eslint-disable-next-line no-unused-vars
   async update(id, data) {
-    // TODO: Implementar
     console.log("[TransportServiceMock] Atualizando ID", id, "com dados:", data);
-    // Adicionar lógica para atualizar em data.transportServices se necessário
     return { id, ...data, updated_at: new Date().toISOString() };
   },
-  // eslint-disable-next-line no-unused-vars
   async delete(id) {
-    // TODO: Implementar
     console.log("[TransportServiceMock] Deletando ID", id);
-    // Adicionar lógica para deletar de data.transportServices se necessário
     return true;
   }
 };
 
 // Mock para TransportZonePricing
 export const TransportZonePricingMock = {
-  // eslint-disable-next-line no-unused-vars
   async filter({ tenant_id }) {
-    // TODO: Implementar filtro real
     console.log("[TransportZonePricingMock] Filtrando para tenant:", tenant_id);
     return [{ id: 'zone1', zone: 'Zona Mock', price: 30.00 }];
   },
-  // eslint-disable-next-line no-unused-vars
   async create(data) { 
-    // TODO: Implementar
     return { id: 'new-zone-id', ...data }; 
   },
-  // eslint-disable-next-line no-unused-vars
   async update(id, data) { 
-    // TODO: Implementar
     return { id, ...data }; 
   },
   async delete() { /*...*/ }
@@ -1943,41 +1790,29 @@ export const TransportZonePricingMock = {
 
 // Mock para TransportDriver
 export const TransportDriverMock = {
-  // eslint-disable-next-line no-unused-vars
   async filter({ tenant_id }) {
-    // TODO: Implementar filtro real ou usar tenant_id
     console.log("[TransportDriverMock] Filtrando para tenant:", tenant_id);
     return [{ id: '1', name: 'Motorista Mock' }];
   },
-  // eslint-disable-next-line no-unused-vars
   async create(data) { 
-    // TODO: Implementar
     return { id: 'new-driver-id', ...data }; 
   },
-  // eslint-disable-next-line no-unused-vars
   async update(id, data) { 
-    // TODO: Implementar
     return { id, ...data }; 
   },
   async delete() { /*...*/ }
 };
 
 // Mock para TransportVehicle
-export const TransportVehicleMock = { // <<< ADICIONADO EXPORT
-  // eslint-disable-next-line no-unused-vars
+export const TransportVehicleMock = {
   async filter({ tenant_id }) {
-    // TODO: Implementar filtro real
     console.log("[TransportVehicleMock] Filtrando para tenant:", tenant_id);
     return [{ id: 'v1', model: 'Modelo Mock', plate: 'ABC1234' }];
   },
-  // eslint-disable-next-line no-unused-vars
   async create(data) { 
-    // TODO: Implementar
     return { id: 'new-vehicle-id', ...data }; 
   },
-  // eslint-disable-next-line no-unused-vars
   async update(id, data) { 
-    // TODO: Implementar
     return { id, ...data }; 
   },
   async delete() { /*...*/ }
@@ -1985,26 +1820,20 @@ export const TransportVehicleMock = { // <<< ADICIONADO EXPORT
 
 // Mock para TransportRoute
 export const TransportRouteMock = {
-  // eslint-disable-next-line no-unused-vars
   async filter({ tenant_id }) {
-    // TODO: Implementar filtro real ou usar tenant_id
     console.log("[TransportRouteMock] Filtrando para tenant:", tenant_id);
     return [{ id: '1', origin: 'Origem Mock', destination: 'Destino Mock' }];
   },
-  // eslint-disable-next-line no-unused-vars
   async create(data) { 
-    // TODO: Implementar
     return { id: 'new-route-id', ...data }; 
   },
-  // eslint-disable-next-line no-unused-vars
   async update(id, data) { 
-    // TODO: Implementar
     return { id, ...data }; 
   },
   async delete() { /*...*/ }
 };
 
 // Mock para TransportConfig
-export const TransportConfigMock = { // Adicionar export se necessário
+export const TransportConfigMock = {
   // ... (implementação)
 }; 

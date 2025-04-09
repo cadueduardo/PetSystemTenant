@@ -5,11 +5,13 @@ import { createPageUrl } from "@/utils";
 import { toast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter, DialogClose } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
 import { Dog, CalendarDays as Calendar, Plus, Edit, ArrowLeft, User, Mail, Phone, MapPin, Loader2 } from "lucide-react";
 import PetForm from "@/components/pets/PetForm";
 import CustomerForm from "@/components/customers/CustomerForm";
 import PetAvatar from "@/components/pets/PetAvatar";
+import { format, parseISO } from "date-fns";
 
 export default function CustomerDetailsPage() {
   console.log('[CustomerDetailsPage] Componente montado/renderizado.');
@@ -46,8 +48,19 @@ export default function CustomerDetailsPage() {
       console.log(`[CustomerDetailsPage] Buscando Customer.get(${id}) e Pet.filter({ owner_id: ${id} })`);
       const [customerData, petsData] = await Promise.all([
         Customer.get(id),
-        Pet.filter({ owner_id: id })
+        Pet.filter({ owner_id: id, tenant_id: currentTenant })
       ]);
+
+      if (!customerData) {
+        console.warn(`[CustomerDetailsPage] Cliente com ID ${id} não encontrado no Firestore.`);
+        toast({
+          title: "Erro",
+          description: "Cliente não encontrado.",
+          variant: "destructive"
+        });
+        navigate(createPageUrl("Customers"));
+        return;
+      }
 
       if (customerData.tenant_id !== currentTenant) {
         throw new Error("Cliente não pertence a este tenant");
@@ -226,23 +239,45 @@ export default function CustomerDetailsPage() {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {pets.map((pet) => (
-                <div
-                  key={pet.id}
-                  className="p-4 border rounded-lg hover:bg-gray-50 cursor-pointer"
-                  onClick={() => handleViewPet(pet.id)}
-                >
-                  <div className="flex items-center gap-3 mb-2">
-                    <PetAvatar pet={pet} size="md" />
-                    <div>
-                      <h3 className="font-medium">{pet.name}</h3>
-                      <p className="text-sm text-gray-500">
-                        {pet.species === 'dog' ? 'Cachorro' : pet.species === 'cat' ? 'Gato' : pet.species} • {pet.breed}
-                      </p>
+              {pets.map((pet) => {
+                let deathDateFormatted = '';
+                if (pet.is_inactive && pet.inactivation_reason === 'Óbito' && pet.date_of_death) {
+                  try {
+                    deathDateFormatted = format(parseISO(pet.date_of_death), 'dd/MM/yyyy');
+                  } catch {
+                    deathDateFormatted = 'Data inválida';
+                  }
+                }
+
+                return (
+                  <div
+                    key={pet.id}
+                    className={`p-4 border rounded-lg hover:bg-gray-50 cursor-pointer ${pet.is_inactive ? 'opacity-60' : ''}`}
+                    onClick={() => handleViewPet(pet.id)}
+                  >
+                    <div className="flex items-center gap-3 mb-2">
+                      <PetAvatar pet={pet} size="md" />
+                      <div>
+                        <h3 className="font-medium">{pet.name}</h3>
+                        <p className="text-sm text-gray-500">
+                          {pet.species === 'dog' ? 'Cachorro' : pet.species === 'cat' ? 'Gato' : pet.species} • {pet.breed}
+                        </p>
+                      </div>
                     </div>
+                    {pet.is_inactive && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        <Badge variant="destructive">Inativo</Badge>
+                        {pet.inactivation_reason && (
+                          <Badge variant="secondary">{pet.inactivation_reason}</Badge>
+                        )}
+                        {deathDateFormatted && (
+                           <Badge variant="secondary">{deathDateFormatted}</Badge>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </CardContent>
@@ -262,6 +297,12 @@ export default function CustomerDetailsPage() {
               customerId={customer.id}
             />
           </div>
+          <DialogFooter className="mt-4">
+            <DialogClose asChild>
+              <Button type="button" variant="outline">Cancelar</Button>
+            </DialogClose>
+            <Button type="submit" form="pet-form">Salvar Novo Pet</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -276,9 +317,15 @@ export default function CustomerDetailsPage() {
           <div className="overflow-y-auto max-h-[60vh] pr-2">
             <CustomerForm 
               onSuccess={handleCustomerSuccess} 
-              customerId={customer.id}
+              customer={customer}
             />
           </div>
+          <DialogFooter className="mt-4">
+            <DialogClose asChild>
+              <Button type="button" variant="outline">Cancelar</Button>
+            </DialogClose>
+            <Button type="submit" form="customer-form">Salvar</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
