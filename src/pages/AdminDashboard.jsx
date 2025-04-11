@@ -1,12 +1,9 @@
-
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import {
   Building,
   Globe,
-  Users,
-  Package,
   PlusCircle,
   Trash2,
   Edit,
@@ -19,7 +16,8 @@ import {
   Loader2,
   CheckCircle,
   XCircle,
-  CalendarCheck
+  CalendarCheck,
+  MoreVertical
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -46,6 +44,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -58,6 +57,7 @@ import {
 } from "@/components/ui/select";
 
 import TenantForm from "../components/admin/TenantForm";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
@@ -69,6 +69,9 @@ export default function AdminDashboard() {
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [showNewTenantForm, setShowNewTenantForm] = useState(false);
   const [editingTenant, setEditingTenant] = useState(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [tenantToDelete, setTenantToDelete] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   
   useEffect(() => {
     const isAuthenticated = localStorage.getItem('admin_authenticated') === 'true';
@@ -116,7 +119,7 @@ export default function AdminDashboard() {
   const confirmDeleteTenant = async () => {
     if (!selectedTenant) return;
     
-    setIsLoading(true);
+    setIsDeleting(true);
     
     setTimeout(() => {
       const updatedTenants = tenants.filter(t => t.id !== selectedTenant.id);
@@ -130,7 +133,7 @@ export default function AdminDashboard() {
         description: `${selectedTenant.company_name} foi removido com sucesso.`,
       });
       
-      setIsLoading(false);
+      setIsDeleting(false);
       setShowDeleteDialog(false);
       setSelectedTenant(null);
     }, 800);
@@ -171,9 +174,21 @@ export default function AdminDashboard() {
   };
   
   const filteredTenants = tenants.filter(tenant => {
-    const matchesSearch = tenant.company_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        tenant.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        tenant.access_url?.toLowerCase().includes(searchQuery.toLowerCase());
+    // Verifica se os campos existem e são strings antes de chamar toLowerCase
+    const nameMatch = (tenant.name || tenant.company_name) && typeof (tenant.name || tenant.company_name) === 'string' 
+                      ? (tenant.name || tenant.company_name).toLowerCase().includes(searchQuery.toLowerCase()) 
+                      : false; 
+    // Usar 'name' ou 'company_name' para garantir compatibilidade temporária
+
+    const emailMatch = tenant.email && typeof tenant.email === 'string' 
+                       ? tenant.email.toLowerCase().includes(searchQuery.toLowerCase()) 
+                       : false;
+
+    const urlMatch = tenant.access_url && typeof tenant.access_url === 'string' 
+                     ? tenant.access_url.toLowerCase().includes(searchQuery.toLowerCase()) 
+                     : false;
+
+    const matchesSearch = nameMatch || emailMatch || urlMatch;
     
     const matchesStatus = selectedStatus === "all" || tenant.status === selectedStatus;
     
@@ -343,12 +358,21 @@ export default function AdminDashboard() {
                       <TableRow key={tenant.id}>
                         <TableCell>
                           <div>
-                            <p className="font-medium">{tenant.company_name}</p>
+                            <p className="font-medium">{tenant.name || tenant.company_name}</p>
                             <p className="text-sm text-gray-500">{tenant.email}</p>
                           </div>
                         </TableCell>
                         <TableCell>{getBusinessTypeDisplay(tenant.business_type)}</TableCell>
-                        <TableCell>{tenant.access_url}</TableCell>
+                        <TableCell>
+                          <a 
+                            href={`http://${tenant.access_url}.petgestor.com.br`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:underline text-sm"
+                          >
+                            {tenant.access_url}.petgestor.com.br
+                          </a>
+                        </TableCell>
                         <TableCell>{getStatusBadge(tenant.status)}</TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1">
@@ -385,30 +409,23 @@ export default function AdminDashboard() {
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button variant="ghost" size="icon">
-                                <span className="sr-only">Abrir menu</span>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-                                  <circle cx="12" cy="12" r="1" />
-                                  <circle cx="12" cy="5" r="1" />
-                                  <circle cx="12" cy="19" r="1" />
-                                </svg>
+                                <MoreVertical className="h-4 w-4" />
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              <DropdownMenuLabel>Ações</DropdownMenuLabel>
+                              <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => handleAccessTenant(tenant)}>
-                                <Globe className="h-4 w-4 mr-2" />
-                                Acessar
+                                <Building className="h-4 w-4 mr-2" /> Acessar Painel
                               </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => handleEditTenant(tenant)}>
-                                <Edit className="h-4 w-4 mr-2" />
-                                Editar
+                                <Edit className="h-4 w-4 mr-2" /> Editar
                               </DropdownMenuItem>
-                              <DropdownMenuSeparator />
                               <DropdownMenuItem 
-                                className="text-red-600 focus:text-red-600"
-                                onClick={() => handleDeleteTenant(tenant)}
+                                onClick={() => handleDeleteTenant(tenant)} 
+                                className="text-red-600 focus:text-red-700 focus:bg-red-50"
                               >
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                Excluir
+                                <Trash2 className="h-4 w-4 mr-2" /> Excluir
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
@@ -433,15 +450,15 @@ export default function AdminDashboard() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeleteDialog(false)} disabled={isLoading}>
+            <Button variant="outline" onClick={() => setShowDeleteDialog(false)} disabled={isDeleting}>
               Cancelar
             </Button>
             <Button 
               variant="destructive" 
               onClick={confirmDeleteTenant}
-              disabled={isLoading}
+              disabled={isDeleting}
             >
-              {isLoading ? (
+              {isDeleting ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   Excluindo...
@@ -463,6 +480,28 @@ export default function AdminDashboard() {
         onSuccess={handleTenantFormSuccess}
         tenant={editingTenant}
       />
+
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar Exclusão</AlertDialogTitle>
+            <AlertDialogDescription>
+              {`Tem certeza que deseja excluir o tenant "${tenantToDelete?.name || tenantToDelete?.company_name}"? Esta ação não pode ser desfeita e removerá todos os dados associados.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setTenantToDelete(null)}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={confirmDeleteTenant} 
+              className="bg-red-600 hover:bg-red-700"
+              disabled={isDeleting}
+            >
+              {isDeleting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Confirmar Exclusão
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

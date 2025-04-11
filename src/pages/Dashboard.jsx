@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import {
@@ -8,19 +8,45 @@ import {
   TrendingUp,
   Package,
   Clock,
-  Calendar,
   Loader2,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useTheme } from "next-themes";
+// import { db } from '@/lib/firebaseConfig'; // Keep commented for now
+// import { doc, getDoc } from "firebase/firestore"; // Keep commented for now
+// import { getAuth } from "firebase/auth"; // Keep commented for now
+// import { toast } from "@/components/ui/use-toast"; // Keep commented for now
+
+/* // Keep getTenantDetails function commented out
+async function getTenantDetails(tenantId) {
+  if (!tenantId) return null;
+  console.log(`[Firestore] Buscando detalhes do Tenant ID: ${tenantId}`);
+  try {
+    const docRef = doc(db, "tenants", tenantId); 
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      console.log("[Firestore] Tenant encontrado:", { id: docSnap.id, ...docSnap.data() });
+      return { id: docSnap.id, ...docSnap.data() };
+    } else {
+      console.warn(`[Firestore] Tenant com ID ${tenantId} não encontrado.`);
+      return null;
+    }
+  } catch (error) {
+    console.error("[Firestore] Erro ao buscar Tenant:", error);
+    throw new Error('Erro ao buscar informações da loja.'); 
+  }
+}
+*/
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { theme } = useTheme();
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true); // Start as true
   const [tenantInfo, setTenantInfo] = useState(null);
 
   useEffect(() => {
+    // <<< Reverted to original logic >>>
+    setIsLoading(true); // Set loading at the beginning
     const urlParams = new URLSearchParams(window.location.search);
     let storeParam = urlParams.get('store');
     
@@ -29,22 +55,30 @@ export default function Dashboard() {
     }
     
     if (!storeParam) {
-      navigate(createPageUrl("Landing"));
+      console.warn("Dashboard: Tenant ID/store param not found. Redirecting...");
+      // Decide where to redirect, maybe TenantLogin is better than Landing
+      navigate(createPageUrl("TenantLogin")); 
       return;
     }
     
-    localStorage.setItem('current_tenant', storeParam);
-    const tenantName = localStorage.getItem('tenant_name') || 'PetClinic';
+    // Ensure current_tenant is set in localStorage
+    localStorage.setItem('current_tenant', storeParam); 
+
+    // Get name from localStorage or use fallback
+    const tenantName = localStorage.getItem('tenant_name') || 'PetClinic'; // Using fallback
     
     setTenantInfo({
-      name: tenantName,
-      accessUrl: storeParam
+      name: tenantName, // Use the potentially stale name or fallback
+      accessUrl: storeParam // Use the ID as accessUrl for now
     });
     
-    setIsLoading(false);
+    // Simulate loading or finish immediately
+    // If you have other async operations, manage isLoading accordingly
+    setIsLoading(false); // Set loading to false after setup
+
   }, [navigate]);
 
-  if (isLoading) {
+  if (isLoading) { // Check isLoading state
     return (
       <div className="flex justify-center items-center min-h-screen">
         <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
@@ -55,7 +89,7 @@ export default function Dashboard() {
   return (
     <div>
       <h2 className={`text-xl mb-6 ${theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}`}>
-        Bem-vindo ao painel de controle de {tenantInfo?.name}
+        Bem-vindo ao painel de controle de {tenantInfo?.name || 'Loja'}
       </h2>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

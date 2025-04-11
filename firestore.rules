@@ -1,0 +1,77 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // === Função Auxiliar Principal ===
+    // Verifica se o usuário está logado e se o tenant_id do token corresponde ao do documento
+    function isTenantMember(tenantId) {
+      return request.auth != null && request.auth.token.tenant_id == tenantId;
+    }
+
+    // === Coleções Específicas do Tenant ===
+
+    match /pets/{petId} {
+      allow read, write: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /customers/{customerId} {
+      allow read, write: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /appointments/{appointmentId} {
+      allow read, write: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /services/{serviceId} {
+      // Assumindo que serviços são por tenant. Se forem globais, ajustar a regra.
+      allow read, write: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /consultations/{consultationId} {
+       // Nota: O ID do documento pode ser o mesmo que appointmentId
+       // A regra ainda depende do tenant_id DENTRO do documento.
+      allow read, write: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /medicalRecords/{recordId} {
+      allow read, write: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /medicationTasks/{taskId} {
+      allow read, write: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /queue/{queueId} {
+      allow read, write: if isTenantMember(resource.data.tenant_id);
+    }
+
+    // === Coleções de Administração/Globais ===
+
+    match /tenants/{tenantId} {
+      // Função para verificar se é o super admin (ex: sem tenant_id ou com role específica)
+      function isSuperAdmin() {
+        return request.auth != null && !('tenant_id' in request.auth.token);
+        // Alternativa: return request.auth != null && request.auth.token.role == 'superAdmin';
+      }
+      // Super admin pode ler e escrever tudo
+      allow read, write: if isSuperAdmin();
+      
+      // Opcional: Permitir que o admin do tenant leia seu próprio documento de tenant?
+      // allow get: if isSuperAdmin() || (request.auth != null && request.auth.uid == resource.data.ownerAdminUid);
+    }
+
+    match /cancellationReasons/{reasonId} {
+      // Permitir leitura para qualquer usuário autenticado (de qualquer tenant ou super admin)
+      allow read: if request.auth != null;
+      // Permitir escrita apenas para super admin (ou admins de tenant, se eles puderem criar motivos?)
+      function isSuperAdmin() {
+          return request.auth != null && !('tenant_id' in request.auth.token);
+      }
+      allow write: if isSuperAdmin();
+    }
+
+    // Adicione regras para outras coleções conforme necessário...
+
+  }
+} 

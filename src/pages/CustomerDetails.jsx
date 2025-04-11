@@ -129,7 +129,7 @@ export default function CustomerDetailsPage() {
       console.log(`[CustomerDetailsPage] Buscando Customer.get(${id}) e Pet.filter({ owner_id: ${id} })`);
       const [customerData, petsData] = await Promise.all([
         Customer.get(id),
-        Pet.filter({ owner_id: id, tenant_id: currentTenant })
+        Pet.filter(id)
       ]);
 
       if (!customerData) {

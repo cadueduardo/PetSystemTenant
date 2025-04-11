@@ -1,12 +1,15 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { getAuth, signInWithEmailAndPassword, setPersistence, browserLocalPersistence } from "firebase/auth";
 import { createPageUrl } from "@/utils";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/use-toast";
-import { User, Lock, ArrowRight, Shield } from "lucide-react";
+import { User, Lock, ArrowRight, Shield, Loader2 } from "lucide-react";
+
+const auth = getAuth();
 
 export default function AdminLogin() {
   const navigate = useNavigate();
@@ -14,36 +17,44 @@ export default function AdminLogin() {
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
 
-    // Simular delay para feedback visual
-    setTimeout(() => {
-      try {
-        // Simular login bem-sucedido
-        localStorage.setItem('admin_authenticated', 'true');
-        localStorage.setItem('admin_email', email || 'admin@petclinic.com');
-        localStorage.setItem('admin_role', 'admin');
-        
-        toast({
-          title: "Login bem-sucedido",
-          description: "Bem-vindo ao painel administrativo.",
-        });
-        
-        // Navegar para o dashboard administrativo
-        navigate(createPageUrl("AdminDashboard"));
-      } catch (error) {
-        console.error("Erro no login:", error);
-        toast({
-          title: "Erro no login",
-          description: "Verifique suas credenciais e tente novamente.",
-          variant: "destructive"
-        });
-      } finally {
-        setIsSubmitting(false);
+    try {
+      await setPersistence(auth, browserLocalPersistence);
+
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      console.log("Admin logado com sucesso:", user);
+
+      toast({
+        title: "Login bem-sucedido",
+        description: "Bem-vindo ao painel administrativo.",
+      });
+
+      navigate(createPageUrl("AdminDashboard"));
+
+    } catch (error) {
+      console.error("Erro no login do admin:", error);
+      let errorMessage = "Verifique suas credenciais e tente novamente.";
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        errorMessage = "Email ou senha inválidos.";
+      } else if (error.code === 'auth/invalid-email') {
+        errorMessage = "Formato de email inválido.";
+      } else if (error.code === 'auth/too-many-requests') {
+        errorMessage = "Muitas tentativas de login. Tente novamente mais tarde.";
       }
-    }, 1000);
+      
+      toast({
+        title: "Erro no login",
+        description: errorMessage,
+        variant: "destructive"
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -96,14 +107,11 @@ export default function AdminLogin() {
               <Button 
                 type="submit" 
                 disabled={isSubmitting}
-                className="mt-4 bg-blue-600 hover:bg-blue-700"
+                className="mt-4 bg-blue-600 hover:bg-blue-700 w-full"
               >
                 {isSubmitting ? (
                   <>
-                    <svg className="animate-spin -ml-1 mr-3 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     Processando...
                   </>
                 ) : (
@@ -116,11 +124,6 @@ export default function AdminLogin() {
             </div>
           </form>
         </CardContent>
-        <CardFooter className="block text-center">
-          <p className="text-sm text-gray-600 mt-2">
-            Para fins de demonstração, você pode entrar com qualquer email e senha.
-          </p>
-        </CardFooter>
       </Card>
     </div>
   );

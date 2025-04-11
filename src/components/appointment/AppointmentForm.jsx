@@ -176,7 +176,7 @@ export default function AppointmentForm({ appointment = null /*, onSuccess, onCa
 
   const handleCustomerChange = async (customerId) => {
     try {
-      const petsData = await Pet.filter({ owner_id: customerId });
+      const petsData = await Pet.filter(customerId);
       setPets(petsData);
       form.setValue("customer_id", customerId);
       form.setValue("pet_id", ""); // Limpa o pet selecionado

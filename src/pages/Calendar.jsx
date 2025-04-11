@@ -74,6 +74,10 @@ const AppointmentCard = ({ appointment, onNavigate, onCancelClick, onRemovalReas
 
   }, [appointment.date, appointment.start_time, appointment.end_time, appointment.duration_minutes]); 
 
+  console.log("[AppointmentCard] Received date value:", appointment.date);
+  const isValidDate = appointment.date && !isNaN(new Date(appointment.date).getTime());
+  console.log("[AppointmentCard] Is date valid for format(HH:mm)?", isValidDate);
+
   return (
     <Card className="p-4 relative group">
       <div className="flex justify-between items-start">
@@ -122,7 +126,7 @@ const AppointmentCard = ({ appointment, onNavigate, onCancelClick, onRemovalReas
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-500">
-            {appointment.date && !isNaN(new Date(appointment.date).getTime()) 
+            {isValidDate 
               ? format(new Date(appointment.date), 'HH:mm')
               : '--:--'}
           </span>
@@ -223,19 +227,17 @@ export default function CalendarPage() {
       console.log(`[loadData] Buscando dados para ${format(date, 'dd/MM/yyyy')} Tenant: ${tenantId}`);
       const [appointmentsData, queueServicesData, allCustomers, allPets, allServices] = await Promise.all([
         Appointment.filter({ 
-          tenant_id: tenantId,
           date: { 
             $gte: selectedDayStart.toISOString(),
             $lte: selectedDayEnd.toISOString()
           }
         }),
         QueueService.list({ 
-          tenant_id: tenantId,
           status: ['in_progress']
         }),
-        Customer.filter({ tenant_id: tenantId }), 
-        Pet.filter({ tenant_id: tenantId }),      
-        Service.list({ tenant_id: tenantId })
+        Customer.filter(),
+        Pet.filter(),
+        Service.list()
       ]);
       console.log(`[loadData] Dados brutos: Appts(${appointmentsData.length}), Queue(${queueServicesData.length}), Cust(${allCustomers.length}), Pets(${allPets.length}), Serv(${allServices.length})`);
 
@@ -250,6 +252,8 @@ export default function CalendarPage() {
         const customer = customerMap.get(appointment.customer_id);
         const service = serviceMap.get(appointment.service_id);
         
+        console.log(`[Calendar loadData enrich] Date for appt ${appointment.id} before enrich:`, appointment.date);
+
         return {
           ...appointment,
           // Provide fallback objects to prevent errors in the UI

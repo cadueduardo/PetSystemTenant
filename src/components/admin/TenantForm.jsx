@@ -1,10 +1,12 @@
-
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
+import PropTypes from 'prop-types';
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { getApp } from "firebase/app";
+import { toast } from "@/components/ui/use-toast";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -31,14 +33,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { 
   Loader2, 
   CreditCard, 
-  Building, 
-  User, 
-  MapPin,
   DollarSign,
-  Package,
   CheckCircle2
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+
+const app = getApp();
+const functions = getFunctions(app, 'southamerica-east1');
 
 export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -51,6 +52,7 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
     document_type: "cnpj",
     document: "",
     responsible_name: "",
+    adminEmail: "",
     email: "",
     phone: "",
     address: {
@@ -85,6 +87,7 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
         document_type: tenant.document_type || "cnpj",
         document: tenant.document || "",
         responsible_name: tenant.responsible_name || "",
+        adminEmail: tenant.adminEmail || "",
         email: tenant.email || "",
         phone: tenant.phone || "",
         address: tenant.address || {
@@ -117,6 +120,7 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
         document_type: "cnpj",
         document: "",
         responsible_name: "",
+        adminEmail: "",
         email: "",
         phone: "",
         address: {
@@ -172,52 +176,39 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
     e.preventDefault();
     setIsSubmitting(true);
     
-    try {
-      if (!formData.access_url || formData.access_url.trim() === "") {
-        formData.access_url = generateUrl();
-      }
-      
-      let tenants = [];
-      const tenantsStr = localStorage.getItem('admin_tenants');
-      if (tenantsStr) {
-        tenants = JSON.parse(tenantsStr);
-      }
+    const finalFormData = {
+      ...formData,
+      access_url: formData.access_url || generateUrl()
+    };
 
-      const newTenant = {
-        ...formData,
-        id: tenant?.id || Date.now().toString(),
-        created_date: tenant?.created_date || new Date().toISOString()
-      };
-      
-      if (tenant) {
-        const index = tenants.findIndex(t => t.id === tenant.id);
-        if (index !== -1) {
-          tenants[index] = newTenant;
+    console.log("Dados a serem enviados para a Cloud Function:", finalFormData);
+    
+    const createTenantAndAdmin = httpsCallable(functions, 'createTenantAndAdmin');
+    try {
+        const result = await createTenantAndAdmin(finalFormData);
+        console.log("Resultado da Cloud Function:", result.data);
+        
+        const newTenantData = result.data?.tenantData; 
+
+        if (!newTenantData) {
+          console.error("Resposta da função cloud inválida:", result.data);
+          throw new Error("A resposta da criação da loja foi inválida.");
         }
-      } else {
-        tenants.unshift(newTenant);
-      }
-      
-      localStorage.setItem('admin_tenants', JSON.stringify(tenants));
-      
-      const persistentTenants = JSON.parse(localStorage.getItem('persistent_tenants') || '[]');
-      if (tenant) {
-        const index = persistentTenants.findIndex(t => t.id === tenant.id);
-        if (index !== -1) {
-          persistentTenants[index] = newTenant;
-        } else {
-          persistentTenants.unshift(newTenant);
-        }
-      } else {
-        persistentTenants.unshift(newTenant);
-      }
-      localStorage.setItem('persistent_tenants', JSON.stringify(persistentTenants));
-      
-      onSuccess(newTenant, !tenant);
-      setIsSubmitting(false);
+
+        toast({ title: "Sucesso!", description: "Loja e administrador criados. Um email será enviado para o admin configurar a senha." });
+        onSuccess(newTenantData, !tenant);
+
     } catch (error) {
-      console.error("Erro ao processar tenant:", error);
-      setIsSubmitting(false);
+        console.error("Erro ao chamar Cloud Function:", error);
+        const message = error.message || "Falha ao criar a loja."; 
+        const details = error.details ? ` (${JSON.stringify(error.details)})` : "";
+        toast({ 
+          variant: "destructive", 
+          title: "Erro ao Criar Loja", 
+          description: `${message}${details}` 
+        });
+    } finally {
+        setIsSubmitting(false);
     }
   };
 
@@ -347,14 +338,6 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
     }));
   };
 
-  const validateCPF = (cpf) => {
-    return cpf.length === 11;
-  };
-  
-  const validateCNPJ = (cnpj) => {
-    return cnpj.length === 14;
-  };
-  
   const getTierDetails = (tier) => {
     switch(tier) {
       case "basic":
@@ -490,9 +473,22 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
                     />
                   </div>
                   
+                  <div>
+                    <Label htmlFor="adminEmail">Email do Admin Principal *</Label>
+                    <Input
+                      id="adminEmail"
+                      name="adminEmail"
+                      type="email"
+                      value={formData.adminEmail}
+                      onChange={handleChange}
+                      required
+                      placeholder="email@dominio.com"
+                    />
+                  </div>
+                  
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <Label htmlFor="email">Email *</Label>
+                      <Label htmlFor="email">Email (Contato Geral) *</Label>
                       <Input
                         id="email"
                         name="email"
@@ -513,6 +509,24 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
                         required
                       />
                     </div>
+                  </div>
+                  
+                  <div>
+                    <Label htmlFor="access_url">URL de Acesso Personalizada</Label>
+                    <div className="flex items-center">
+                      <span className="text-sm text-muted-foreground p-2 bg-muted rounded-l-md border border-r-0">
+                        app.petgestor.com.br/
+                      </span>
+                      <Input
+                        id="access_url"
+                        name="access_url"
+                        value={formData.access_url}
+                        onChange={handleChange}
+                        placeholder={generateUrl()}
+                        className="rounded-l-none"
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">Será usado para o login da loja. Use apenas letras minúsculas e números.</p>
                   </div>
                   
                   <div className="flex justify-between mt-6">
@@ -1044,3 +1058,10 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
     </Dialog>
   );
 }
+
+TenantForm.propTypes = {
+  open: PropTypes.bool.isRequired,
+  onOpenChange: PropTypes.func.isRequired,
+  tenant: PropTypes.object,
+  onSuccess: PropTypes.func.isRequired,
+};
