@@ -29,6 +29,8 @@ export default function AdminLogin() {
 
       console.log("Admin logado com sucesso:", user);
 
+      localStorage.setItem('admin_authenticated', 'true');
+
       toast({
         title: "Login bem-sucedido",
         description: "Bem-vindo ao painel administrativo.",

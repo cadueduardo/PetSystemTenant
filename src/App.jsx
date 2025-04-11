@@ -7,7 +7,7 @@ import { BrowserRouter } from 'react-router-dom'
 function App() {
   return (
     <BrowserRouter>
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+      <ThemeProvider attribute="class" defaultTheme="light" enableSystem={true} storageKey="vite-ui-theme">
         <Pages />
         <Toaster />
       </ThemeProvider>

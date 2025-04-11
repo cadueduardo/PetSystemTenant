@@ -219,10 +219,52 @@ async function update(id, dataToUpdate) {
   }
 }
 
+/**
+ * Lista todos os pets no Firestore para o tenant atual.
+ * @returns {Promise<Array<object>>} - Array com os pets encontrados para o tenant.
+ */
+async function list() { 
+  console.log('[Firestore] Listando todos os Pets para o tenant atual');
+  const tenantId = localStorage.getItem('current_tenant');
+  if (!tenantId) {
+    console.error("[Firestore] Erro: Tenant ID não encontrado no localStorage para listar Pets.");
+    throw new Error('Tenant não identificado. Faça login novamente.');
+  }
+
+  try {
+    const petsCollectionRef = collection(db, "pets");
+    // <<< Sempre filtra pelo tenant_id do localStorage >>>
+    let q = query(petsCollectionRef, where("tenant_id", "==", tenantId)); 
+    
+    // Poderia adicionar ordenação aqui se necessário, ex: query(q, orderBy("name"));
+
+    const querySnapshot = await getDocs(q);
+    const pets = [];
+    querySnapshot.forEach((doc) => {
+      pets.push({ id: doc.id, ...doc.data() });
+    });
+
+    console.log(`[Firestore] Pets listados para o Tenant ID ${tenantId} (${pets.length}):`, pets);
+    return pets;
+
+  } catch (error) {
+    console.error("[Firestore] Erro ao listar Pets:", error);
+    if (error.code === 'failed-precondition') {
+       console.error("ERRO FIREBASE: Índice ausente? Verifique o console.");
+       throw new Error('Erro de configuração do Firestore (índice ausente?). Verifique o console.');
+    } else if (error.code === 'permission-denied') {
+        console.error("PERMISSION DENIED: Verifique as regras do Firestore para listagem de Pets.");
+        throw new Error('Permissão negada para listar pets.');
+    }
+    throw new Error('Erro ao listar pets no banco de dados.');
+  }
+}
+
 // Exporta as funções
 export const petService = {
   get,
   filter,
+  list,
   create,
   update,
   // Adicionaremos delete aqui depois

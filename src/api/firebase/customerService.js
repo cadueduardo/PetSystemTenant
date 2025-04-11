@@ -87,6 +87,47 @@ async function filter() { // Remove 'filters' parameter, always filters by curre
 }
 
 /**
+ * Lista todos os clientes no Firestore para o tenant atual.
+ * @returns {Promise<Array<object>>} - Array com os clientes encontrados para o tenant.
+ */
+async function list() { 
+  console.log('[Firestore] Listando todos os Customers para o tenant atual');
+  const tenantId = localStorage.getItem('current_tenant');
+  if (!tenantId) {
+    console.error("[Firestore] Erro: Tenant ID não encontrado no localStorage para listar Customers.");
+    throw new Error('Tenant não identificado. Faça login novamente.');
+  }
+
+  try {
+    const customersCollectionRef = collection(db, "customers");
+    // <<< Sempre filtra pelo tenant_id do localStorage >>>
+    let q = query(customersCollectionRef, where("tenant_id", "==", tenantId)); 
+    
+    // Poderia adicionar ordenação aqui se necessário, ex: query(q, orderBy("full_name"));
+
+    const querySnapshot = await getDocs(q);
+    const customers = [];
+    querySnapshot.forEach((doc) => {
+      customers.push({ id: doc.id, ...doc.data() });
+    });
+
+    console.log(`[Firestore] Customers listados para o Tenant ID ${tenantId} (${customers.length}):`, customers);
+    return customers;
+
+  } catch (error) {
+    console.error("[Firestore] Erro ao listar Customers:", error);
+    if (error.code === 'failed-precondition') {
+       console.error("ERRO FIREBASE: Índice ausente? Verifique o console.");
+       throw new Error('Erro de configuração do Firestore (índice ausente?). Verifique o console.');
+    } else if (error.code === 'permission-denied') {
+        console.error("PERMISSION DENIED: Verifique as regras do Firestore para listagem de Customers.");
+        throw new Error('Permissão negada para listar clientes.');
+    }
+    throw new Error('Erro ao listar clientes no banco de dados.');
+  }
+}
+
+/**
  * Cria um novo cliente no Firestore associado ao tenant atual.
  * @param {object} customerData - Os dados do cliente a serem salvos (sem tenant_id).
  * @returns {Promise<object>} - O objeto do cliente recém-criado (incluindo o ID gerado e tenant_id).
@@ -248,6 +289,7 @@ async function inactivate(id, reasonId) {
 export const customerService = {
   get,
   filter,
+  list,
   create,
   update,
   inactivate,

@@ -9,7 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { useToast } from "@/components/ui/use-toast";
-import { ArrowLeft, Loader2, ClipboardList, Save, Bot, FileText, Mic, Square, ThumbsUp, ThumbsDown, Pill as PillIcon, Printer } from 'lucide-react';
+import { ArrowLeft, Loader2, ClipboardList, Save, Bot, FileText, Mic, Square, ThumbsUp, ThumbsDown, Pill as PillIcon, Printer, RefreshCcw } from 'lucide-react';
 import { PrescriptionModal } from '@/modules/live-vet/components/PrescriptionModal';
 import PrintablePrescriptionContent from '@/components/medical/PrintablePrescription';
 import { useTenant } from '@/components/tenant/TenantContext';
@@ -38,6 +38,7 @@ export default function LiveVetConsulta() {
   const [service, setService] = useState(null);
   const [consultationHistory, setConsultationHistory] = useState([]);
   const [followUpQueueId, setFollowUpQueueId] = useState(null);
+  const [followUpTaskDetails, setFollowUpTaskDetails] = useState([]);
   const diagnosticAgentRef = useRef(new DiagnosticAgent());
 
   // Estados para os campos da consulta atual
@@ -98,6 +99,7 @@ export default function LiveVetConsulta() {
     setBackendReport(null);
     setStreamingTranscript('');
     finalTranscriptRef.current = '';
+    setFollowUpTaskDetails([]);
 
     const loadConsultationData = async () => {
       if (!appointmentId) {
@@ -200,6 +202,41 @@ export default function LiveVetConsulta() {
 
         console.log('[useEffect Main] Agendamento carregado:', apptData);
         setAppointment(apptData);
+
+        // <<< LÓGICA ATUALIZADA PARA BUSCAR DETALHES DAS TAREFAS DE RETORNO >>>
+        if (queueIdFromUrl) {
+          try {
+            console.log(`[useEffect Main] É um retorno (Fila ID: ${queueIdFromUrl}). Buscando detalhes das tarefas administradas para Appt ID: ${appointmentId}...`);
+            const administeredTasks = await medicationTaskService.filter({
+              appointment_id: appointmentId, 
+              status: 'administrada',
+              // Adicionar filtro requires_follow_up diretamente se o serviço permitir
+              // requires_follow_up: true // Se a API suportar, senão filtramos no frontend
+            });
+            
+            // Filtrar no frontend caso a API não suporte o filtro direto
+            const followUpRequiredTasks = administeredTasks.filter(task => task.requires_follow_up === true);
+
+            if (followUpRequiredTasks.length > 0) {
+              const taskDetails = followUpRequiredTasks.map(task => ({
+                id: task.id,
+                medicationName: task.medication_name || 'Nome não encontrado',
+                details: task.details || 'Sem detalhes',
+                observations: task.observations || '' // Observação copiada da prescrição
+              }));
+              console.log('[useEffect Main] Detalhes das tarefas de retorno encontradas:', taskDetails);
+              setFollowUpTaskDetails(taskDetails); // <<< Atualiza estado com array de detalhes
+            } else {
+              console.warn('[useEffect Main] Retorno detectado, mas nenhuma tarefa de medicação administrada COM requires_follow_up encontrada.');
+              setFollowUpTaskDetails([]); // Garante que esteja vazio
+            }
+          } catch (medError) {
+            console.error('[useEffect Main] Erro ao buscar tarefas de medicação para retorno:', medError);
+            // Poderia setar um estado de erro específico para isso
+            setFollowUpTaskDetails([]); 
+          }
+        }
+        // <<< FIM DA LÓGICA DE RETORNO >>>
 
       } catch (err) {
         console.error("[useEffect Main] ERRO DETALHADO no catch:", err);
@@ -959,23 +996,56 @@ export default function LiveVetConsulta() {
                 <Card>
                     <CardHeader>
                         <CardTitle>Histórico de Consultas</CardTitle>
+                        {followUpQueueId && followUpTaskDetails.length > 0 && (
+                          <p className="text-sm font-semibold text-orange-600 pt-1">
+                            <RefreshCcw className="h-4 w-4 mr-1 inline-block" /> 
+                            Retorno para acompanhamento de: {followUpTaskDetails.map(task => task.medicationName).join(', ')}
+                          </p>
+                        )}
                         <CardDescription>{consultationHistory.length} consulta(s) anterior(es)</CardDescription>
                     </CardHeader>
                     <CardContent>
-                        {consultationHistory.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">Nenhum histórico de consulta anterior para este pet.</p>
-                        ) : (
-                            <ul className="space-y-3">
-                                {consultationHistory.slice(0, 5).map((hist) => (
-                                    <li key={hist.id} className="text-sm">
-                                        <span className="font-medium">
-                                            {hist.date ? format(parseISO(hist.date), 'dd/MM/yyyy', { locale: ptBR }) : 'Data Indisponível'}
-                                        </span>
-                                        : {hist.diagnosis || hist.clinical_exam_notes?.substring(0, 50) || 'Consulta Rápida'}
-                                    </li>
-                                ))}
-                            </ul>
+                        {followUpQueueId && followUpTaskDetails.length > 0 && (
+                            <div className="mb-4 pb-4 border-b border-dashed border-orange-300">
+                                <h4 className="text-sm font-semibold mb-2 text-orange-700">Itens que Motivaram o Retorno:</h4>
+                                <ul className="space-y-2 pl-2">
+                                    {followUpTaskDetails.map(task => (
+                                        <li key={task.id} className="text-sm">
+                                            <p>
+                                                <span className="font-medium">Item:</span> {task.medicationName} ({task.details})
+                                            </p>
+                                            {task.observations && (
+                                                <p className="text-xs text-muted-foreground pl-3">
+                                                    <span className="font-medium">Obs. Prescrição:</span> {task.observations}
+                                                 </p>
+                                            )}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
                         )}
+
+                        {consultationHistory.length === 0 && (!followUpQueueId || followUpTaskDetails.length === 0) ? (
+                            <p className="text-sm text-muted-foreground">
+                                {followUpQueueId ? 'Nenhum histórico adicional encontrado.' : 'Nenhum histórico de consulta anterior para este pet.'}
+                            </p>
+                        ) : consultationHistory.length > 0 ? (
+                             <div>
+                                 {(followUpQueueId || consultationHistory.length > 0) && (
+                                     <h4 className="text-sm font-semibold mb-2 mt-2">Consultas Anteriores:</h4>
+                                 )}
+                                <ul className="space-y-3">
+                                    {consultationHistory.slice(0, 5).map((hist) => (
+                                        <li key={hist.id} className="text-sm">
+                                            <span className="font-medium">
+                                                {hist.date ? format(parseISO(hist.date), 'dd/MM/yyyy', { locale: ptBR }) : 'Data Indisponível'}
+                                            </span>
+                                            : {hist.diagnosis || hist.clinical_exam_notes?.substring(0, 50) || 'Consulta Rápida'}
+                                        </li>
+                                    ))}
+                                </ul>
+                             </div>
+                        ) : null}
                     </CardContent>
                 </Card>
             </div>

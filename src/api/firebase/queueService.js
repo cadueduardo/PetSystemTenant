@@ -163,9 +163,14 @@ export const queueService = {
       };
       const docRef = await addDoc(queueCollection, dataToSave);
       console.log(`[queueService.create] Queue entry created with ID: ${docRef.id} for Tenant ${tenantId}`);
-      // Fetch created doc to return consistent data?
-      const createdEntry = await this.get(docRef.id);
-      return createdEntry;
+
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        return { id: docSnap.id, ...docSnap.data() };
+      } else {
+        console.error(`[queueService.create] Failed to fetch the created document ${docRef.id}`);
+        return { id: docRef.id, ...dataToSave, entry_time: new Date(), created_at: new Date() };
+      }
     } catch (error) {
       console.error(`[queueService.create] Error creating queue entry for Tenant ${tenantId}:`, error);
       if (error.code === 'permission-denied') {

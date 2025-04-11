@@ -61,7 +61,7 @@ export default function DetalhesPet() {
         
       // --- Buscar Histórico de Petshop (QueueService Concluídos) --- 
       try {
-        const petshopQueueItems = await QueueService.filter({ pet_id: petId, status: 'completed' });
+        const petshopQueueItems = await QueueService.list({ pet_id: petId, status: 'completed' });
         const petshopHistory = await Promise.all(petshopQueueItems.map(async (item) => {
           let serviceName = 'Serviço Desconhecido';
           let servicePrice = null; // <<< Variavel para preço

@@ -12,6 +12,7 @@ import { isToday, parseISO, differenceInSeconds, format } from 'date-fns';
 import { createPageUrl } from '@/utils'; // Precisamos desta função
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"; // Importar Tooltip
 import { queueService } from '@/api/firebase/queueService';
+import { medicationTaskService } from '@/api/firebase/medicationTaskService';
 
 export default function LiveVetDashboard() {
   const navigate = useNavigate(); // Inicializando useNavigate
@@ -57,8 +58,12 @@ export default function LiveVetDashboard() {
         let appointmentDate = null;
         let isScheduledToday = false;
         try {
-          appointmentDate = parseISO(appt.date); // Assume que appt.date está em formato ISO
-          isScheduledToday = isToday(appointmentDate);
+          if (appt.date && typeof appt.date === 'string') {
+            appointmentDate = parseISO(appt.date);
+            isScheduledToday = isToday(appointmentDate);
+          } else {
+            console.warn(`[LiveVetDash] Agendamento ${appt.id} sem data válida ou formato incorreto:`, appt.date);
+          }
         } catch (e) {
            console.error(`[LiveVetDash] Erro ao parsear data para agendamento ${appt.id}:`, appt.date, e);
         }
@@ -125,31 +130,50 @@ export default function LiveVetDashboard() {
       const followUpQueueEntries = await queueService.list({
         tenant_id: tenantId,
         queue_type: 'medication_followup',
-        status: ['waiting', 'in_progress'] // Buscar apenas os que estão aguardando ou em progresso?
+        status: ['waiting', 'in_progress']
       });
       console.log(`[LiveVetDash] Encontrados ${followUpQueueEntries.length} itens na fila de retorno.`);
 
-      // Popular dados dos itens da fila (Pet, Cliente, Serviço Original se necessário)
+      // Popular dados dos itens da fila (Pet, Cliente, Serviço Original E MEDICAÇÃO)
       const populatedFollowUps = await Promise.all(
          followUpQueueEntries.map(async (entry) => {
            try {
              // O appointment_id na fila é o ID do agendamento ORIGINAL
              const originalAppointment = allClinicAppointmentsToday.find(appt => appt.id === entry.appointment_id);
+             
+             // Buscar tarefas de medicação administradas para o agendamento original
+             const administeredTasks = await medicationTaskService.filter({
+               tenant_id: tenantId, // Garantir filtro por tenant
+               appointment_id: entry.appointment_id,
+               status: 'administrada'
+             });
+             
+             // Pega o nome das medicações (pode haver mais de uma)
+             const medicationNames = administeredTasks.map(task => task.medication_name).join(', ') || 'N/A';
+             
              const [pet, customer] = await Promise.all([
                Pet.get(entry.pet_id).catch(() => ({ name: 'Pet não encontrado' })),
                Customer.get(entry.customer_id).catch(() => ({ full_name: 'Cliente não encontrado' }))
              ]);
+             
              return {
                ...entry, // Dados da fila (id da fila, status da fila, etc)
-               original_appointment_id: entry.appointment_id, // Renomear para clareza
+               original_appointment_id: entry.appointment_id, 
                original_service_name: originalAppointment?.serviceName || 'Serviço original não encontrado',
                petName: pet.name,
                customerName: customer.full_name,
-               follow_up_time: entry.created_at // Usar created_at da fila como referência
+               follow_up_time: entry.created_at,
+               administeredMedication: medicationNames // Adiciona nome da medicação
              };
            } catch (err) {
              console.error(`Erro ao popular dados para item de fila ${entry.id}:`, err);
-             return { ...entry, petName: 'Erro', customerName: 'Erro', original_service_name: 'Erro' };
+             return { 
+                 ...entry, 
+                 petName: 'Erro', 
+                 customerName: 'Erro', 
+                 original_service_name: 'Erro',
+                 administeredMedication: 'Erro ao buscar' // Indica erro na medicação
+             };
            }
          })
       );
@@ -359,6 +383,7 @@ export default function LiveVetDashboard() {
                        <TableHead>Pet</TableHead>
                        <TableHead>Cliente</TableHead>
                        <TableHead>Serviço Original</TableHead>
+                       <TableHead>Medicação</TableHead>
                        <TableHead>Status Fila</TableHead>
                        <TableHead className="text-right">Ações</TableHead>
                      </TableRow>
@@ -370,6 +395,7 @@ export default function LiveVetDashboard() {
                          <TableCell className="font-medium text-orange-600 font-bold">{item.petName}</TableCell>
                          <TableCell>{item.customerName}</TableCell>
                          <TableCell className="text-orange-600 font-bold">{item.original_service_name}</TableCell>
+                         <TableCell className="text-orange-600 font-bold">{item.administeredMedication}</TableCell>
                          <TableCell>
                             <span className={`px-2 py-0.5 rounded-full text-xs capitalize font-medium bg-orange-100 text-orange-800`}>
                               {item.status === 'waiting' ? 'Aguardando Retorno' : item.status}

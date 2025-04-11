@@ -3,16 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import {
   Building,
-  Globe,
   PlusCircle,
   Trash2,
   Edit,
-  ArrowRight,
-  Shield,
-  Settings,
-  LogOut,
   Search,
-  BarChart3,
   Loader2,
   CheckCircle,
   XCircle,
@@ -33,13 +27,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  // Removing unused imports below
+  // Dialog,
+  // DialogContent,
+  // DialogDescription,
+  // DialogFooter,
+  // DialogHeader,
+  // DialogTitle, 
+} from "@/components/ui/dialog"; // Comment out or remove the entire import if Dialog is not used anywhere else
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,7 +52,17 @@ import {
 } from "@/components/ui/select";
 
 import TenantForm from "../components/admin/TenantForm";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { 
+    AlertDialog, 
+    AlertDialogAction, 
+    AlertDialogCancel, 
+    AlertDialogContent, 
+    AlertDialogDescription,
+    AlertDialogFooter, 
+    AlertDialogHeader, 
+    AlertDialogTitle 
+} from "@/components/ui/alert-dialog";
+import { adminTenantService } from "@/api/firebase/adminTenantService";
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
@@ -65,8 +70,6 @@ export default function AdminDashboard() {
   const [tenants, setTenants] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("all");
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [selectedTenant, setSelectedTenant] = useState(null);
   const [showNewTenantForm, setShowNewTenantForm] = useState(false);
   const [editingTenant, setEditingTenant] = useState(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -74,26 +77,29 @@ export default function AdminDashboard() {
   const [isDeleting, setIsDeleting] = useState(false);
   
   useEffect(() => {
-    const isAuthenticated = localStorage.getItem('admin_authenticated') === 'true';
-    if (!isAuthenticated) {
-      navigate(createPageUrl("AdminLogin"));
-      return;
-    }
-    
-    const persistentTenants = localStorage.getItem('persistent_tenants');
-    const currentTenants = localStorage.getItem('admin_tenants');
-    
-    let tenants = [];
-    if (persistentTenants) {
-      tenants = JSON.parse(persistentTenants);
-      localStorage.setItem('admin_tenants', persistentTenants);
-    } else if (currentTenants) {
-      tenants = JSON.parse(currentTenants);
-      localStorage.setItem('persistent_tenants', currentTenants);
-    }
-    
-    setTenants(tenants);
-    setIsLoading(false);
+    const checkAuthAndFetchTenants = async () => {
+      const isAuthenticated = localStorage.getItem('admin_authenticated') === 'true';
+      if (!isAuthenticated) {
+        console.log("[AdminDashboard] Admin not authenticated. Redirecting to login.");
+        navigate(createPageUrl("AdminLogin"));
+        return;
+      }
+
+      setIsLoading(true);
+      try {
+        console.log("[AdminDashboard] Fetching tenants from adminTenantService...");
+        const fetchedTenants = await adminTenantService.listAll();
+        setTenants(fetchedTenants);
+        console.log("[AdminDashboard] Tenants fetched successfully:", fetchedTenants);
+      } catch (error) {
+        console.error("[AdminDashboard] Error fetching tenants:", error);
+        toast({ title: "Erro ao buscar Tenants", description: error.message, variant: "destructive" });
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    checkAuthAndFetchTenants();
   }, [navigate]);
   
   const handleAccessTenant = (tenant) => {
@@ -111,59 +117,54 @@ export default function AdminDashboard() {
     setShowNewTenantForm(true);
   };
   
-  const handleDeleteTenant = (tenant) => {
-    setSelectedTenant(tenant);
-    setShowDeleteDialog(true);
+  const promptDeleteTenant = (tenant) => {
+    setTenantToDelete(tenant);
+    setIsDeleteDialogOpen(true);
   };
   
   const confirmDeleteTenant = async () => {
-    if (!selectedTenant) return;
+    if (!tenantToDelete) return;
     
     setIsDeleting(true);
-    
-    setTimeout(() => {
-      const updatedTenants = tenants.filter(t => t.id !== selectedTenant.id);
+    try {
+      console.warn(`[AdminDashboard] SIMULATING delete for tenant ID: ${tenantToDelete.id}. Implement actual Firestore deletion.`);
+      
+      await new Promise(resolve => setTimeout(resolve, 800)); 
+
+      const updatedTenants = tenants.filter(t => t.id !== tenantToDelete.id);
       setTenants(updatedTenants);
       
-      localStorage.setItem('admin_tenants', JSON.stringify(updatedTenants));
-      localStorage.setItem('persistent_tenants', JSON.stringify(updatedTenants));
-      
       toast({
-        title: "Tenant excluído",
-        description: `${selectedTenant.company_name} foi removido com sucesso.`,
+        title: "Tenant Excluído (Simulado)",
+        description: `${tenantToDelete.company_name || tenantToDelete.name} foi removido da lista.`,
       });
       
+    } catch (error) {
+       console.error("[AdminDashboard] Error during tenant deletion (simulation):", error);
+       toast({ title: "Erro ao Excluir", description: "Não foi possível excluir o tenant.", variant: "destructive" });
+    } finally {
       setIsDeleting(false);
-      setShowDeleteDialog(false);
-      setSelectedTenant(null);
-    }, 800);
+      setIsDeleteDialogOpen(false); 
+      setTenantToDelete(null);
+    }
   };
   
   const handleTenantFormSuccess = (updatedTenant, isNew = true) => {
     if (isNew) {
-      const newTenants = [updatedTenant, ...tenants];
-      setTenants(newTenants);
-      
-      localStorage.setItem('admin_tenants', JSON.stringify(newTenants));
-      localStorage.setItem('persistent_tenants', JSON.stringify(newTenants));
-      
+      setTenants(prevTenants => [updatedTenant, ...prevTenants]);
       toast({
         title: "Tenant criado com sucesso",
         description: `${updatedTenant.company_name} foi adicionado à plataforma.`
       });
     } else {
-      const updatedTenants = tenants.map(t => t.id === updatedTenant.id ? updatedTenant : t);
-      setTenants(updatedTenants);
-      
-      localStorage.setItem('admin_tenants', JSON.stringify(updatedTenants));
-      localStorage.setItem('persistent_tenants', JSON.stringify(updatedTenants));
-      
+      setTenants(prevTenants => 
+        prevTenants.map(t => t.id === updatedTenant.id ? updatedTenant : t)
+      );
       toast({
         title: "Tenant atualizado",
         description: `${updatedTenant.company_name} foi atualizado com sucesso.`
       });
     }
-    
     setShowNewTenantForm(false);
     setEditingTenant(null);
   };
@@ -174,12 +175,9 @@ export default function AdminDashboard() {
   };
   
   const filteredTenants = tenants.filter(tenant => {
-    // Verifica se os campos existem e são strings antes de chamar toLowerCase
     const nameMatch = (tenant.name || tenant.company_name) && typeof (tenant.name || tenant.company_name) === 'string' 
                       ? (tenant.name || tenant.company_name).toLowerCase().includes(searchQuery.toLowerCase()) 
                       : false; 
-    // Usar 'name' ou 'company_name' para garantir compatibilidade temporária
-
     const emailMatch = tenant.email && typeof tenant.email === 'string' 
                        ? tenant.email.toLowerCase().includes(searchQuery.toLowerCase()) 
                        : false;
@@ -338,7 +336,7 @@ export default function AdminDashboard() {
           <CardContent className="p-6">
             {filteredTenants.length === 0 ? (
               <div className="text-center py-10">
-                <p className="text-gray-500">Nenhum tenant encontrado. Clique em "Novo Tenant" para adicionar uma clínica ou pet shop.</p>
+                <p className="text-gray-500">Nenhum tenant encontrado. Clique em &quot;Novo Tenant&quot; para adicionar uma clínica ou pet shop.</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -408,24 +406,28 @@ export default function AdminDashboard() {
                         <TableCell className="text-right">
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon">
+                              <Button variant="ghost" className="h-8 w-8 p-0">
+                                <span className="sr-only">Abrir menu</span>
                                 <MoreVertical className="h-4 w-4" />
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuLabel>Ações</DropdownMenuLabel>
-                              <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => handleAccessTenant(tenant)}>
-                                <Building className="h-4 w-4 mr-2" /> Acessar Painel
+                                <Building className="mr-2 h-4 w-4" />
+                                Acessar Tenant
                               </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => handleEditTenant(tenant)}>
-                                <Edit className="h-4 w-4 mr-2" /> Editar
+                                <Edit className="mr-2 h-4 w-4" />
+                                Editar
                               </DropdownMenuItem>
+                              <DropdownMenuSeparator />
                               <DropdownMenuItem 
-                                onClick={() => handleDeleteTenant(tenant)} 
-                                className="text-red-600 focus:text-red-700 focus:bg-red-50"
+                                className="text-red-600 focus:text-red-600"
+                                onClick={() => promptDeleteTenant(tenant)}
                               >
-                                <Trash2 className="h-4 w-4 mr-2" /> Excluir
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Excluir
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
@@ -439,40 +441,6 @@ export default function AdminDashboard() {
           </CardContent>
         </Card>
       )}
-      
-      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Confirmar exclusão</DialogTitle>
-            <DialogDescription>
-              Tem certeza que deseja excluir o tenant <strong>{selectedTenant?.company_name}</strong>?
-              Esta ação é irreversível e todos os dados relacionados serão perdidos.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeleteDialog(false)} disabled={isDeleting}>
-              Cancelar
-            </Button>
-            <Button 
-              variant="destructive" 
-              onClick={confirmDeleteTenant}
-              disabled={isDeleting}
-            >
-              {isDeleting ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Excluindo...
-                </>
-              ) : (
-                <>
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Excluir
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       
       <TenantForm 
         open={showNewTenantForm} 

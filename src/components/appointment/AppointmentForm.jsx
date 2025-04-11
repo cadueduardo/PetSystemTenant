@@ -66,7 +66,7 @@ export default function AppointmentForm({ appointment = null /*, onSuccess, onCa
       date: new Date(),
       time: "09:00",
       notes: "",
-      status: "scheduled",
+    status: "scheduled",
       service_type: "clinica"
     }
   });
@@ -345,7 +345,7 @@ export default function AppointmentForm({ appointment = null /*, onSuccess, onCa
         <CardContent>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                   control={form.control}
                   name="customer_id"
@@ -413,20 +413,20 @@ export default function AppointmentForm({ appointment = null /*, onSuccess, onCa
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Tipo de Agendamento</FormLabel>
-                      <Select
+          <Select
                         onValueChange={handleServiceTypeChange}
                         value={field.value}
-                      >
+          >
                         <FormControl>
-                          <SelectTrigger>
+            <SelectTrigger>
                             <SelectValue placeholder="Selecione um tipo" />
-                          </SelectTrigger>
+            </SelectTrigger>
                         </FormControl>
-                        <SelectContent>
+            <SelectContent>
                           <SelectItem value="clinica">Clínica</SelectItem>
                           <SelectItem value="petshop">Petshop</SelectItem>
-                        </SelectContent>
-                      </Select>
+            </SelectContent>
+          </Select>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -515,7 +515,7 @@ export default function AppointmentForm({ appointment = null /*, onSuccess, onCa
                       <FormItem>
                         <FormLabel>Horário</FormLabel>
                         <FormControl>
-                          <Input
+          <Input
                             type="time"
                             {...field}
                           />
@@ -523,9 +523,9 @@ export default function AppointmentForm({ appointment = null /*, onSuccess, onCa
                         <FormMessage />
                       </FormItem>
                     )}
-                  />
-                </div>
-              </div>
+          />
+        </div>
+      </div>
 
               <FormField
                 control={form.control}
@@ -534,7 +534,7 @@ export default function AppointmentForm({ appointment = null /*, onSuccess, onCa
                   <FormItem>
                     <FormLabel>Observações</FormLabel>
                     <FormControl>
-                      <Textarea
+        <Textarea
                         placeholder="Adicione observações sobre o agendamento..."
                         {...field}
                       />
@@ -556,9 +556,9 @@ export default function AppointmentForm({ appointment = null /*, onSuccess, onCa
                 >
                   Adicionar automaticamente à fila de atendimento
                 </label>
-              </div>
+      </div>
 
-              <div className="flex justify-end gap-4">
+      <div className="flex justify-end gap-4">
                 <Button
                   type="button"
                   variant="outline"
@@ -570,20 +570,20 @@ export default function AppointmentForm({ appointment = null /*, onSuccess, onCa
                     }
                   }}
                 >
-                  Cancelar
-                </Button>
+          Cancelar
+        </Button>
                 <Button type="submit" disabled={isLoading}>
                   {isLoading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Salvando...
-                    </>
-                  ) : (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Salvando...
+            </>
+          ) : (
                     "Salvar Agendamento"
-                  )}
-                </Button>
-              </div>
-            </form>
+          )}
+        </Button>
+      </div>
+    </form>
           </Form>
         </CardContent>
       </Card>

@@ -64,7 +64,6 @@ export default function CustomersPage() {
   const [showOtherInactivateInput, setShowOtherInactivateInput] = useState(false);
   const [showPetConfirmationAlert, setShowPetConfirmationAlert] = useState(false);
   const [reactivatedCustomerData, setReactivatedCustomerData] = useState(null);
-  const storeParam = localStorage.getItem('current_tenant');
 
   useEffect(() => {
     loadData();
@@ -99,10 +98,12 @@ export default function CustomersPage() {
     setIsLoading(true);
     try {
       const [customersData, petsData] = await Promise.all([
-        Customer.filter({ tenant_id: storeParam }),
-        Pet.filter({ tenant_id: storeParam })
+        Customer.list(),
+        Pet.list()
       ]);
       
+      console.log('[CustomersPage loadData] Pets carregados:', petsData);
+
       customersData.sort((a, b) => a.full_name.localeCompare(b.full_name));
 
       setCustomers(customersData);
@@ -207,7 +208,10 @@ export default function CustomersPage() {
   };
 
   const getPetsForCustomer = (customerId) => {
-    return pets.filter(pet => pet.owner_id === customerId);
+    console.log(`[CustomersPage getPetsForCustomer] Buscando pets para Customer ID: ${customerId}. Total de pets no estado: ${pets.length}`);
+    const filtered = pets.filter(pet => pet.owner_id === customerId);
+    console.log(`[CustomersPage getPetsForCustomer] Pets encontrados para ${customerId}:`, filtered);
+    return filtered;
   };
 
   const filteredCustomers = customers.filter(customer => {
@@ -281,6 +285,7 @@ export default function CustomersPage() {
             ) : (
               filteredCustomers.map((customer) => {
                 const customerPets = getPetsForCustomer(customer.id);
+                console.log(`[CustomersPage Table Render] Customer ID: ${customer.id}, Nome: ${customer.full_name}, Contagem de Pets: ${customerPets.length}`);
                 const isInactive = customer.status === 'inactive';
                 
                 return (
