@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { Appointment, Pet, Customer, Service, Consultation, MedicationTask /*, MedicalRecord */ } from "@/api/entities";
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { Appointment, Pet, Customer, Service, Consultation /*, MedicalRecord */ } from "@/api/entities";
+import { petService } from "@/api/firebase/petService";
 import { DiagnosticAgent } from '@/lib/DiagnosticAgent';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -9,12 +10,14 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { useToast } from "@/components/ui/use-toast";
 import { ArrowLeft, Loader2, ClipboardList, Save, Bot, FileText, Mic, Square, ThumbsUp, ThumbsDown, Pill as PillIcon, Printer } from 'lucide-react';
-import PrescriptionModal from '@/components/medical/PrescriptionModal';
+import { PrescriptionModal } from '@/modules/live-vet/components/PrescriptionModal';
 import PrintablePrescriptionContent from '@/components/medical/PrintablePrescription';
 import { useTenant } from '@/components/tenant/TenantContext';
 import PetAvatar from '@/components/pets/PetAvatar';
 import { format, parseISO, differenceInMinutes } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { medicationTaskService } from '@/api/firebase/medicationTaskService';
+import { queueService } from '@/api/firebase/queueService';
 
 // URLs do NOVO serviço de áudio mock
 const AUDIO_SERVICE_BASE_URL = 'http://localhost:8001';
@@ -25,6 +28,7 @@ const WEBSOCKET_URL_BASE = 'ws://localhost:8001/audio_stream'; // WebSocket URL
 export default function LiveVetConsulta() {
   const { appointmentId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -33,6 +37,7 @@ export default function LiveVetConsulta() {
   const [customer, setCustomer] = useState(null);
   const [service, setService] = useState(null);
   const [consultationHistory, setConsultationHistory] = useState([]);
+  const [followUpQueueId, setFollowUpQueueId] = useState(null);
   const diagnosticAgentRef = useRef(new DiagnosticAgent());
 
   // Estados para os campos da consulta atual
@@ -70,6 +75,8 @@ export default function LiveVetConsulta() {
   // <<< Adicionar Estados para Prescrição >>>
   const [isPrescriptionModalOpen, setIsPrescriptionModalOpen] = useState(false);
   const [currentPrescriptionItems, setCurrentPrescriptionItems] = useState([]);
+  const [currentPrescriptionObservations, setCurrentPrescriptionObservations] = useState('');
+  const [currentRequiresFollowUp, setCurrentRequiresFollowUp] = useState(false);
   const { tenant } = useTenant();
   const [isPrinting, setIsPrinting] = useState(false);
 
@@ -78,6 +85,11 @@ export default function LiveVetConsulta() {
 
   useEffect(() => {
     console.log('[useEffect Main] Rodando com appointmentId:', appointmentId);
+    const searchParams = new URLSearchParams(location.search);
+    const queueIdFromUrl = searchParams.get('followUpQueueId');
+    setFollowUpQueueId(queueIdFromUrl);
+    console.log('[useEffect Main] Follow-up Queue ID da URL:', queueIdFromUrl);
+
     diagnosticAgentRef.current.clearContext();
     setSelectedSuggestionsHistory([]);
     setInitialSuggestions([]);
@@ -107,23 +119,64 @@ export default function LiveVetConsulta() {
         // <<< MARCAR COMO EM ANDAMENTO E DEFINIR START_TIME >>>
         if ( (apptData.status === 'scheduled' || apptData.status === 'confirmed') && !apptData.start_time ) {
            console.log('[useEffect Main] Agendamento precisa ser iniciado. Atualizando status e start_time...');
-           const startTimeUpdate = new Date().toISOString();
            try {
-              const updatedAppt = await Appointment.update(appointmentId, {
+              const startTimeUpdate = new Date().toISOString();
+              // Chama update mas não usa o valor de retorno (que é undefined)
+              await Appointment.update(appointmentId, {
                  status: 'in_progress',
                  start_time: startTimeUpdate
               });
-              console.log('[useEffect Main] Agendamento atualizado para in_progress:', updatedAppt);
-              currentApptData = updatedAppt; // Usa os dados atualizados
+              console.log('[useEffect Main] Agendamento marcado como in_progress (sem retorno verificado).');
+              // Atualiza a variável local com os novos dados
+              currentApptData = {
+                ...apptData, // Começa com os dados originais
+                status: 'in_progress', // Define o novo status
+                start_time: startTimeUpdate // Define o novo start_time
+              };
            } catch (startError) {
               console.error("[useEffect Main] Erro ao atualizar agendamento para in_progress:", startError);
               toast({ title: "Erro", description: "Não foi possível marcar o início do atendimento.", variant: "destructive" });
-              // Continuaremos com os dados originais (apptData)
+              // Em caso de erro ao atualizar, continua com os dados originais (apptData)
+              // currentApptData já é apptData neste ponto, então não precisa fazer nada
            }
         }
         // <<< FIM DA LÓGICA DE INÍCIO >>>
         
-        setAppointment(currentApptData); // <<< Define o estado com os dados potencialmente atualizados
+        // Define o estado com os dados corretos (originais ou atualizados localmente)
+        setAppointment(currentApptData);
+
+        // <<< CARREGAR DADOS DA CONSULTA ANTERIOR (SE EXISTIR) >>>
+        try {
+          const existingConsultations = await Consultation.filter({ appointmentId: appointmentId });
+          if (existingConsultations && existingConsultations.length > 0) {
+              // Assumir que a primeira é a mais relevante/recente para este ID de agendamento
+              const latestConsultation = existingConsultations[0]; 
+              console.log('[useEffect Main] Consulta anterior encontrada, carregando dados:', latestConsultation);
+              setAnamnesisNotes(latestConsultation.anamnesis?.notes || '');
+              setClinicalExamNotes(latestConsultation.clinicalExam || '');
+              setDiagnosisNotes(latestConsultation.diagnosis || '');
+              setTreatmentNotes(latestConsultation.treatment || '');
+              // Carregar também dados da prescrição, se houver
+              setCurrentPrescriptionItems(latestConsultation.prescriptionItems || []);
+              setCurrentPrescriptionObservations(latestConsultation.prescriptionObservations || '');
+              setCurrentRequiresFollowUp(latestConsultation.requiresFollowUp || false);
+          } else {
+              console.log('[useEffect Main] Nenhuma consulta anterior encontrada para este agendamento.');
+              // Garantir que os campos estejam vazios se não houver consulta prévia
+              setAnamnesisNotes('');
+              setClinicalExamNotes('');
+              setDiagnosisNotes('');
+              setTreatmentNotes('');
+              setCurrentPrescriptionItems([]);
+              setCurrentPrescriptionObservations('');
+              setCurrentRequiresFollowUp(false);
+          }
+        } catch (consultationError) {
+            console.error("[useEffect Main] Erro ao buscar consulta anterior:", consultationError);
+            // Não definir erro principal, mas talvez mostrar um aviso?
+            toast({ variant: "warning", title: "Aviso", description: "Não foi possível carregar as notas da consulta anterior." });
+        }
+        // <<< FIM DO CARREGAMENTO DA CONSULTA ANTERIOR >>>
 
         // <<< GARANTIR APENAS UMA DECLARAÇÃO AQUI >>>
         const [petDataResult, customerDataResult, serviceDataResult, historyDataResult] = await Promise.all([
@@ -163,7 +216,7 @@ export default function LiveVetConsulta() {
     return () => {
       console.log('[useEffect Main] Limpeza ao desmontar ou antes de re-rodar.');
     };
-  }, [appointmentId]);
+  }, [appointmentId, location.search]);
 
   const handleStartStreamingRecording = useCallback(async () => {
     if (isStreaming) return;
@@ -486,6 +539,10 @@ export default function LiveVetConsulta() {
               clinicalExam: clinicalExamNotes,
               diagnosis: diagnosisNotes,
               treatment: treatmentNotes,
+              // <<< Adicionar dados da prescrição >>>
+              prescriptionItems: currentPrescriptionItems, 
+              prescriptionObservations: currentPrescriptionObservations, 
+              requiresFollowUp: currentRequiresFollowUp, 
               // Status NÃO é alterado aqui
               tenant_id: appointment.tenant_id,
               fullInteraction: interactionDataForRAG
@@ -519,7 +576,7 @@ export default function LiveVetConsulta() {
                  };
                  const updatedHistory = [...(currentPetData.consultationHistory || []), historySummary];
                  const uniqueHistory = updatedHistory.filter((item, index, self) => index === self.findIndex((t) => (t.consultationId === item.consultationId)));
-                 await Pet.update(petId, { consultationHistory: uniqueHistory });
+                 await petService.update(petId, { consultationHistory: uniqueHistory });
                  console.log(`[saveProgressAndUpdateHistory] Histórico do pet ${petId} atualizado.`);
               } else { console.warn(`[saveProgressAndUpdateHistory] Pet ${petId} não encontrado.`); }
             } else { console.warn('[saveProgressAndUpdateHistory] ID do Pet não encontrado nos dados.'); }
@@ -595,8 +652,37 @@ export default function LiveVetConsulta() {
       } else {
          throw new Error("ID do agendamento não disponível para conclusão.");
       }
+      
+      // <<< 4. (NOVO) Se for um retorno, marca o item da fila como concluído >>>
+      if (followUpQueueId) {
+        console.log(`[saveConsultationDataAndComplete] Marcando item da fila de retorno ${followUpQueueId} como concluído.`);
+        try {
+          await queueService.update(followUpQueueId, {
+            status: 'completed',
+            end_time: new Date().toISOString()
+          });
+          console.log(`[saveConsultationDataAndComplete] Item da fila ${followUpQueueId} concluído com sucesso.`);
 
-      // 4. Exibe toast e Navega para a fila (COM o prefixo /tenant)
+          // <<< Adicionar atualização do Agendamento original >>>
+          try {
+            console.log(`[saveConsultationDataAndComplete] Marcando Agendamento ${appointment.id} com follow_up_completed.`);
+            await Appointment.update(appointment.id, { follow_up_completed: true });
+            console.log(`[saveConsultationDataAndComplete] Agendamento ${appointment.id} marcado com sucesso.`);
+          } catch (apptUpdateError) {
+            console.error(`[saveConsultationDataAndComplete] Erro ao marcar follow_up_completed no Agendamento ${appointment.id}:`, apptUpdateError);
+            toast({ variant: "warning", title: "Aviso", description: "Não foi possível marcar o agendamento original como tendo retorno concluído." });
+          }
+          // <<< Fim da atualização do Agendamento >>>
+
+        } catch (queueError) {
+          console.error(`[saveConsultationDataAndComplete] Erro ao concluir item da fila ${followUpQueueId}:`, queueError);
+          // Não lançar erro aqui, apenas logar. A conclusão principal já ocorreu.
+          toast({ variant: "warning", title: "Aviso", description: "Atendimento concluído, mas houve um erro ao finalizar o item na fila de retorno." });
+        }
+      }
+      // <<< Fim do passo 4 >>>
+
+      // 5. Exibe toast e Navega para a fila (COM o prefixo /tenant)
       toast({ title: "Sucesso", description: "Atendimento salvo e concluído!" });
       console.log("[saveConsultationDataAndComplete] Navegando para /tenant/live-vet...");
       navigate('/tenant/live-vet');
@@ -709,51 +795,50 @@ export default function LiveVetConsulta() {
       // 1. Salva localmente (opcional)
       setCurrentPrescriptionItems(prescriptionData.items);
 
-      // <<< TENTAR ATUALIZAR OU CRIAR A CONSULTA COM OS ITENS >>>
-      const consultationPayload = { 
-          // Incluir outros dados da consulta se necessário/disponível
-          pet_id: pet?.id,
-          tenant_id: localStorage.getItem('current_tenant'),
-          appointmentId: appointmentId, // Usado como ID pelo mock
-          prescription_items: prescriptionData.items 
-      };
-
-      try {
-          console.log(`[handleSavePrescription] Tentando ATUALIZAR consulta ${appointmentId} com prescription_items`);
-          await Consultation.update(appointmentId, consultationPayload);
-          console.log(`[handleSavePrescription] Consulta ${appointmentId} atualizada no mock.`);
-      } catch (updateError) {
-          // Se update falhou (provavelmente "Não encontrada"), tenta criar
-          if (updateError.message.includes('Consulta não encontrada')) { // Checa a msg de erro
-              console.log(`[handleSavePrescription] Consulta ${appointmentId} não encontrada, tentando CRIAR...`);
-              await Consultation.create(consultationPayload);
-              console.log(`[handleSavePrescription] Consulta ${appointmentId} criada no mock com prescription_items.`);
-          } else {
-              // Se foi outro erro no update, relança para o catch principal
-              throw updateError; 
-          }
-      }
-      
       // 2. Criar MedicationTasks para itens de uso interno
-      const internalMedicationItems = prescriptionData.items.filter(item => item.usage === 'internal');
-      console.log("[handleSavePrescription] Itens internos para criar tasks:", internalMedicationItems);
+      // console.log("[handleSavePrescription] Verificando items ANTES do filtro:", JSON.stringify(prescriptionData.items, null, 2)); // Remover log
+      
+      const internalMedicationItems = prescriptionData.items.filter(item => {
+        // console.log(`[handleSavePrescription] Filtrando item.usage: '${item.usage}', Comparando com: 'interno', Resultado: ${item.usage === 'interno'}`); // Remover log
+        return item.usage === 'interno'; // <<< CORRIGIDO para comparar com 'interno' (Português)
+      });
+      // console.log("[handleSavePrescription] Itens internos para criar tasks (APÓS filtro):", internalMedicationItems); // Remover log
 
       if (internalMedicationItems.length > 0) {
         const tenantId = localStorage.getItem('current_tenant');
-        const tasksPromises = internalMedicationItems.map(item => 
-          MedicationTask.create({
+        const tasksPromises = internalMedicationItems.map(item =>
+          medicationTaskService.create({
             tenant_id: tenantId,
-            petId: pet?.id,
-            appointmentId: appointmentId,
-            prescriptionItemId: item.id,
-            medicationName: item.medication,
-            details: `${item.dosage} - ${item.duration} - ${item.notes || ''}`.trim(),
-            scheduledTime: new Date().toISOString(),
-            status: 'Pendente' 
+            pet_id: pet?.id,
+            appointment_id: appointmentId,
+            medication_name: item.itemName, // Corrigido para usar itemName
+            details: item.details,          // Corrigido para usar details diretamente
+            scheduled_time: new Date().toISOString(), 
+            status: 'Pendente',
+            // <<< Adicionar campos da prescrição >>>
+            observations: prescriptionData.observations,
+            requires_follow_up: prescriptionData.requiresFollowUp 
+            // <<< Fim da adição >>>
           })
         );
         await Promise.all(tasksPromises);
         console.log(`[handleSavePrescription] ${internalMedicationItems.length} MedicationTasks criadas.`);
+        
+        // <<< Atualiza os estados com dados da prescrição salva >>>
+        setCurrentPrescriptionObservations(prescriptionData.observations);
+        setCurrentRequiresFollowUp(prescriptionData.requiresFollowUp);
+
+        // <<< MARCAR O AGENDAMENTO SE NECESSITAR RETORNO >>>
+        if (prescriptionData.requiresFollowUp) {
+          try {
+            console.log(`[handleSavePrescription] Marcando agendamento ${appointmentId} como necessitando retorno de medicação.`);
+            await Appointment.update(appointmentId, { requires_medication_follow_up: true });
+          } catch (apptUpdateError) {
+            console.error(`[handleSavePrescription] Erro ao marcar retorno no agendamento ${appointmentId}:`, apptUpdateError);
+            toast({ title: "Aviso", description: "Não foi possível marcar o agendamento como necessitando retorno.", variant: "warning" });
+          }
+        }
+
         toast({ title: "Tarefas de Medicação Criadas", description: "Itens de uso interno foram adicionados à fila.", });
       }
 
@@ -817,7 +902,7 @@ export default function LiveVetConsulta() {
   return (
     <div className="p-4 md:p-6 lg:p-8 max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-             <Button variant="outline" size="sm" onClick={() => navigate('/LiveVetDashboard')}>
+             <Button variant="outline" size="sm" onClick={() => navigate('/tenant/live-vet')}>
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Voltar para Dashboard Live Vet
              </Button>
@@ -1061,8 +1146,10 @@ export default function LiveVetConsulta() {
         <PrescriptionModal 
           isOpen={isPrescriptionModalOpen} 
           onClose={handleClosePrescriptionModal} 
-          onSave={handleSavePrescription} 
+          onSaveSuccess={handleSavePrescription} 
           initialItems={currentPrescriptionItems.length > 0 ? currentPrescriptionItems : undefined} 
+          appointmentId={appointmentId} 
+          petId={pet?.id} 
         />
 
         {/* Componente de Impressão (escondido VISUALMENTE, mas presente para @media print) */}

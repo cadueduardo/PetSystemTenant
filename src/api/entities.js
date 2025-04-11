@@ -2,57 +2,57 @@
 import { 
     HospitalizationProgressMock,
     // CustomerMock, // Removido - Usaremos o serviço Firebase
-    PetMock,             // <<< Adicionar PetMock aqui
-    ServiceMock, 
-    AppointmentMock, 
-    QueueServiceMock, 
-    ProductMock,        // Adiciona ProductMock se foi definido lá
-    TenantMock,         // Adiciona TenantMock
-    CustomizationMock,  // Adiciona CustomizationMock
-    FinancialConfigMock, // etc...
+    // PetMock,             // <<< Não usado mais
+    // ServiceMock,         // <<< Removido - Usaremos Serviço Firebase
+    // QueueServiceMock,    // <<< Removido - Usaremos Serviço Firebase
+    ProductMock,        
+    TenantMock,         
+    CustomizationMock,  
+    FinancialConfigMock,
     FinancialTransactionMock,
     HealthPlanMock,
-    HospitalizationMock, // Adiciona HospitalizationMock
-    MedicalRecordMock,   // Adiciona MedicalRecordMock
-    ConsultationMock,    // Adiciona ConsultationMock
-    MedicationTaskMock,  // Adiciona MedicationTaskMock
-    AllergyMock,         // Adiciona AllergyMock
-    VaccineMock,         // Adiciona VaccineMock
-    PetClinicalDataMock, // Adiciona PetClinicalDataMock
-    MedicationMock,      // Adiciona MedicationMock
-    PetshopDataMock,     // <<< ADICIONADO PetshopDataMock >>>
-    PurchaseHistoryMock, // <<< ADICIONADO PurchaseHistoryMock >>>
-    OCRStatisticMock,    // <<< ADICIONADO OCRStatisticMock >>>
-    SupportTicketMock,   // <<< ADICIONADO SupportTicketMock >>>
-    SupportMessageMock,  // <<< ADICIONADO SupportMessageMock >>>
-    UserMock,            // <<< ADICIONADO UserMock >>>
-    KnowledgeArticleMock, // <<< ADICIONADO KnowledgeArticleMock >>>
-    TenantUserMock,      // <<< ADICIONADO TenantUserMock >>>
-    TransportDriverMock, // <<< ADICIONADO TransportDriverMock >>>
-    TransportRouteMock,  // <<< ADICIONADO TransportRouteMock >>>
-    TransportServiceMock, // <<< ADICIONADO TransportServiceMock >>>
-    TransportVehicleMock, // <<< ADICIONADO TransportVehicleMock >>>
-    TransportZonePricingMock, // <<< ADICIONADO TransportZonePricingMock >>>
-    // ... adicione outros mocks que você exporta de mockData.js
+    HospitalizationMock, 
+    MedicalRecordMock,   
+    ConsultationMock,    
+    MedicationTaskMock,  
+    AllergyMock,         
+    VaccineMock,         
+    PetClinicalDataMock, 
+    MedicationMock,      
+    PetshopDataMock,     
+    PurchaseHistoryMock, 
+    OCRStatisticMock,    
+    SupportTicketMock,   
+    SupportMessageMock,  
+    UserMock,            
+    KnowledgeArticleMock,
+    TenantUserMock,      
+    TransportDriverMock, 
+    TransportRouteMock,  
+    TransportServiceMock,
+    TransportVehicleMock,
+    TransportZonePricingMock,
     // uploadFileMock // Removido
 } from './mockData';
 
 // <<< IMPORTA OS NOVOS SERVIÇOS FIREBASE >>>
 import { customerService } from './firebase/customerService';
-import { petService } from './firebase/petService'; // <<< Adicionado
-import { storageService } from './firebase/storageService'; // <<< Adicionado
+import { petService } from './firebase/petService'; 
+import { storageService } from './firebase/storageService'; 
+import { appointmentService } from './firebase/appointmentService'; 
+import { cancellationReasonService } from './firebase/cancellationReasonService'; 
+// <<< Adiciona imports dos novos serviços >>>
+import { serviceService } from './firebase/serviceService';
+import { queueService } from './firebase/queueService'; 
 
 // REMOVIDAS outras importações de mockData.js que causavam conflito
-// import { Appointment, QueueService, Service } from "@/api/entities"; // Importação redundante
-// import { getMockData, addRemovalReason, getRemovalReasons } from "@/api/mockData"; 
 
-// Exporta as entidades usando os Mocks importados
+// Exporta as entidades usando os Mocks ou Serviços Firebase
 export const Customer = customerService;
-// export const Pet = petService; // <<< Comente ou remova esta linha
-export const Pet = PetMock; // <<< Adicione esta linha para usar o Mock
-export const Service = ServiceMock;
-export const Appointment = AppointmentMock;
-export const QueueService = QueueServiceMock;
+export const Pet = petService;
+export const Service = serviceService; // <<< Usa Serviço Firebase
+export const Appointment = appointmentService;
+export const QueueService = queueService; // <<< Usa Serviço Firebase
 export const Product = ProductMock;
 export const Tenant = TenantMock;
 export const Customization = CustomizationMock;
@@ -67,25 +67,24 @@ export const Allergy = AllergyMock;
 export const Vaccine = VaccineMock;
 export const PetClinicalData = PetClinicalDataMock;
 export const Medication = MedicationMock;
-export const PetshopData = PetshopDataMock;   // <<< ADICIONADO EXPORT >>>
-export const PurchaseHistory = PurchaseHistoryMock; // <<< ADICIONADO EXPORT >>>
-export const OCRStatistic = OCRStatisticMock;      // <<< ADICIONADO EXPORT >>>
-export const SupportTicket = SupportTicketMock;    // <<< ADICIONADO EXPORT >>>
-export const SupportMessage = SupportMessageMock; // <<< ADICIONADO EXPORT >>>
-export const User = UserMock;                      // <<< ADICIONADO EXPORT >>>
-export const KnowledgeArticle = KnowledgeArticleMock; // <<< ADICIONANDO EXPORT QUE FALTOU >>>
+export const PetshopData = PetshopDataMock;   
+export const PurchaseHistory = PurchaseHistoryMock; 
+export const OCRStatistic = OCRStatisticMock;      
+export const SupportTicket = SupportTicketMock;    
+export const SupportMessage = SupportMessageMock; 
+export const User = UserMock;                      
+export const KnowledgeArticle = KnowledgeArticleMock;
 export const HospitalizationProgress = HospitalizationProgressMock;
-export const TenantUser = TenantUserMock;           // <<< ADICIONADO EXPORT >>>
-export const TransportDriver = TransportDriverMock; // <<< ADICIONADO EXPORT >>>
-export const TransportRoute = TransportRouteMock;   // <<< ADICIONADO EXPORT >>>
-export const TransportService = TransportServiceMock; // <<< ADICIONADO EXPORT >>>
-export const TransportVehicle = TransportVehicleMock; // <<< ADICIONADO EXPORT >>>
-export const TransportZonePricing = TransportZonePricingMock; // <<< ADICIONADO EXPORT >>>
-// ... exporte outras entidades mock
-// export const UploadFile = uploadFileMock; // Removido
+export const TenantUser = TenantUserMock;           
+export const TransportDriver = TransportDriverMock; 
+export const TransportRoute = TransportRouteMock;   
+export const TransportService = TransportServiceMock; 
+export const TransportVehicle = TransportVehicleMock; 
+export const TransportZonePricing = TransportZonePricingMock; 
+export const CancellationReason = cancellationReasonService;
 
 // Exporta o serviço de storage
-export const UploadFile = storageService; // <<< Alterado para storageService
+export const UploadFile = storageService;
 
 // Outros mocks que podem estar definidos diretamente aqui (se houver)
 // Exemplo:

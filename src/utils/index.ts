@@ -1,10 +1,11 @@
 // Mapeamento de nomes de página para rotas específicas
 const routeMappings: Record<string, string> = {
     AppointmentForm: '/tenant/agendamento/novo',
+    EditAppointment: '/tenant/agendamento/editar/:id',
     PetDetails: '/tenant/pet/:id',
     CustomerDetails: '/tenant/cliente/:id',
+    LiveVetConsulta: '/tenant/live-vet/consulta/:appointmentId',
     // Adicione outros mapeamentos conforme necessário
-    // Exemplo: EditAppointment: '/tenant/agendamento/editar', // :id será tratado pelos params
     // Exemplo: MedicalRecordForm: '/tenant/prontuario/novo'
 };
 
@@ -21,7 +22,8 @@ export function createPageUrl(pageName: string, params?: Record<string, string |
         basePath = routeMappings[pageName];
     } else {
         // Lógica padrão se não houver mapeamento
-        basePath = pageName.toLowerCase().replace(/ /g, '-');
+        basePath = pageName.toLowerCase().replace(/ /g, '-'); // Aplica toLowerCase inicialmente
+
         if (!basePath.startsWith('/')) {
             basePath = '/' + basePath;
         }

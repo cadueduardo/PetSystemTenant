@@ -1,12 +1,10 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Service } from "@/api/entities";
-import { STORAGE_KEY, getMockData } from "@/api/mockData";
 import {
   Plus,
   Search,
-  Filter,
   MoreHorizontal,
   Edit,
   Trash2,
@@ -21,9 +19,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import {
   DropdownMenu,
@@ -40,7 +35,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -72,6 +66,7 @@ export default function Services() {
   const [activeTab, setActiveTab] = useState("all");
   const [showForm, setShowForm] = useState(false);
   const [editingService, setEditingService] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -118,11 +113,25 @@ export default function Services() {
     setShowConfirmDelete(true);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (serviceToDelete) {
-      setServices(services.filter(s => s.id !== serviceToDelete.id));
-      setShowConfirmDelete(false);
-      setServiceToDelete(null);
+      setIsDeleting(true);
+      try {
+        await Service.delete(serviceToDelete.id);
+        toast({ title: "Sucesso", description: "Serviço excluído." });
+        setShowConfirmDelete(false);
+        setServiceToDelete(null);
+        await loadServices();
+      } catch (error) {
+        console.error("Erro ao excluir serviço:", error);
+        toast({
+          title: "Erro",
+          description: "Não foi possível excluir o serviço.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsDeleting(false);
+      }
     }
   };
 
@@ -135,19 +144,16 @@ export default function Services() {
     setIsLoading(true);
     try {
       const tenantId = localStorage.getItem('current_tenant');
-      const mockData = getMockData();
+      if (!tenantId) {
+        toast({ title: "Erro", description: "Tenant não identificado.", variant: "destructive" });
+        setIsLoading(false);
+        return;
+      }
       
-      // Carregar serviços do mock data e remover duplicatas baseado no ID
-      const servicesData = mockData.services
-        .filter(service => service.tenant_id === tenantId)
-        .reduce((unique, service) => {
-          if (!unique.find(s => s.id === service.id)) {
-            unique.push(service);
-          }
-          return unique;
-        }, []);
+      const servicesData = await Service.list({ tenant_id: tenantId });
+      console.log('[ServicesPage] Serviços carregados:', servicesData);
       
-      setServices(servicesData);
+      setServices(servicesData || []);
     } catch (error) {
       console.error("Erro ao carregar serviços:", error);
       toast({
@@ -155,6 +161,7 @@ export default function Services() {
         description: "Não foi possível carregar os serviços.",
         variant: "destructive"
       });
+      setServices([]);
     } finally {
       setIsLoading(false);
     }
@@ -350,8 +357,13 @@ export default function Services() {
             <Button variant="outline" onClick={() => setShowConfirmDelete(false)}>
               Cancelar
             </Button>
-            <Button variant="destructive" onClick={confirmDelete}>
-              Excluir
+            <Button 
+              variant="destructive" 
+              onClick={confirmDelete} 
+              disabled={isDeleting}
+            >
+              {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null} 
+              Confirmar Exclusão
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Appointment, QueueService /*, Service, Pet, Customer */ } from "@/api/entities";
-import { getMockData, addRemovalReason /*, getRemovalReasons */ } from "@/api/mockData";
+import { Appointment, QueueService, Customer, Pet, Service, CancellationReason } from "@/api/entities";
 import { createPageUrl } from "@/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +9,7 @@ import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { format, isToday, isBefore, startOfDay, endOfDay, differenceInMinutes, differenceInSeconds, parseISO } from "date-fns";
+import { format, isToday, isBefore, startOfDay, endOfDay, differenceInSeconds, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "@/components/ui/use-toast";
 import PropTypes from "prop-types";
@@ -22,7 +21,9 @@ import {
   Edit,
   RefreshCw,
   Plus,
-  Info
+  Info,
+  Play,
+  CheckSquare
 } from "lucide-react";
 import PetAvatar from "@/components/pets/PetAvatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -41,23 +42,6 @@ const getStatusBadge = (status) => {
   return <Badge className={statusConfig[status]?.className || "bg-gray-100 text-gray-800"}>
     {statusConfig[status]?.label || "Desconhecido"}
   </Badge>;
-};
-
-const calculateDuration = (start, end) => {
-  if (!start || !end) return null;
-  try {
-    const startDate = parseISO(start);
-    const endDate = parseISO(end);
-    const minutes = differenceInMinutes(endDate, startDate);
-    if (isNaN(minutes) || minutes < 0) return null;
-    if (minutes < 60) return `${minutes} min`;
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
-    return `${hours}h ${remainingMinutes > 0 ? `${remainingMinutes}min` : ''}`.trim();
-  } catch (e) {
-    console.error("Erro ao calcular duração:", e);
-    return null;
-  }
 };
 
 const AppointmentCard = ({ appointment, onNavigate, onCancelClick, onRemovalReasonClick }) => {
@@ -81,7 +65,9 @@ const AppointmentCard = ({ appointment, onNavigate, onCancelClick, onRemovalReas
         if (seconds > 0) {
           return '< 1 min';
         }
-      } catch (e) { /* ignora erro */ }
+      } catch {
+        /* ignora erro */ 
+      }
     }
 
     return null;
@@ -182,6 +168,7 @@ export default function CalendarPage() {
   const [isViewingHistory, setIsViewingHistory] = useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [itemToCancel, setItemToCancel] = useState(null);
+  const [awaitingAppointments, setAwaitingAppointments] = useState([]);
   const [cancelledAppointments, setCancelledAppointments] = useState([]);
   const [completedAppointments, setCompletedAppointments] = useState([]);
 
@@ -220,80 +207,126 @@ export default function CalendarPage() {
     try {
       setIsLoading(true);
       const tenantId = localStorage.getItem('current_tenant');
+      if (!tenantId) {
+        // Handle missing tenant ID (e.g., redirect to login or tenant selection)
+        console.error("Tenant ID não encontrado no localStorage.");
+        toast({ title: "Erro", description: "Tenant não identificado.", variant: "destructive" });
+        setIsLoading(false);
+        // navigate('/login'); // Example redirect
+        return; 
+      }
+      
       const selectedDayStart = startOfDay(date);
       const selectedDayEnd = endOfDay(date);
 
-      const mockData = getMockData();
-      const isViewingHistory = isBefore(selectedDayStart, startOfDay(new Date())); 
+      // --- 1. Fetch data --- 
+      console.log(`[loadData] Buscando dados para ${format(date, 'dd/MM/yyyy')} Tenant: ${tenantId}`);
+      const [appointmentsData, queueServicesData, allCustomers, allPets, allServices] = await Promise.all([
+        Appointment.filter({ 
+          tenant_id: tenantId,
+          date: { 
+            $gte: selectedDayStart.toISOString(),
+            $lte: selectedDayEnd.toISOString()
+          }
+        }),
+        QueueService.list({ 
+          tenant_id: tenantId,
+          status: ['in_progress']
+        }),
+        Customer.filter({ tenant_id: tenantId }), 
+        Pet.filter({ tenant_id: tenantId }),      
+        Service.list({ tenant_id: tenantId })
+      ]);
+      console.log(`[loadData] Dados brutos: Appts(${appointmentsData.length}), Queue(${queueServicesData.length}), Cust(${allCustomers.length}), Pets(${allPets.length}), Serv(${allServices.length})`);
 
-      const allAppointmentsData = await Appointment.filter({
-        tenant_id: tenantId,
-        date: { 
-          $gte: selectedDayStart.toISOString(),
-          $lte: selectedDayEnd.toISOString()
-        }
-      });
+      // --- 2. Create Lookup Maps --- 
+      const customerMap = new Map(allCustomers.map(c => [c.id, c]));
+      const petMap = new Map(allPets.map(p => [p.id, p]));
+      const serviceMap = new Map(allServices.map(s => [s.id, s]));
 
-      const allQueueServicesData = await QueueService.filter({
-        tenant_id: tenantId,
-        appointment_date: {
-          $gte: selectedDayStart.toISOString(),
-          $lte: selectedDayEnd.toISOString()
-        }
-      });
-
-      const allServices = mockData.services || [];
-      const enrichedAppointments = allAppointmentsData.map(appointment => {
-        if (appointment.status === 'cancelled') {
-          console.log("[loadData] Enriquecendo cancelado:", { 
-            id: appointment.id, 
-            customerId: appointment.customer_id, 
-            foundCustomer: !!appointment.customer, 
-            reason: appointment.removal_reason
-          });
-        }
-        
-        const pet = mockData.pets.find(p => p.id === appointment.pet_id);
-        const customer = mockData.customers.find(c => c.id === appointment.customer_id);
-        const service = allServices.find(s => s.id === appointment.service_id);
+      // --- 3. Enrich Appointments --- 
+      const enrichedAppointments = appointmentsData.map(appointment => {
+        const pet = petMap.get(appointment.pet_id);
+        const customer = customerMap.get(appointment.customer_id);
+        const service = serviceMap.get(appointment.service_id);
         
         return {
           ...appointment,
-          pet: pet || { name: "Pet não encontrado" },
-          customer: customer || null,
-          service: service || { name: "Serviço não encontrado" } 
+          // Provide fallback objects to prevent errors in the UI
+          pet: pet || { id: appointment.pet_id, name: "Pet não encontrado" }, 
+          customer: customer || { id: appointment.customer_id, full_name: "Cliente não encontrado" },
+          service: service || { id: appointment.service_id, name: "Serviço não encontrado" } 
         };
       });
 
-      const active = enrichedAppointments.filter(a => a.status === 'scheduled' || a.status === 'confirmed');
+      // --- 4. Enrich Queue Services --- 
+      const enrichedQueueServices = queueServicesData.map(queueEntry => {
+        const pet = petMap.get(queueEntry.pet_id);
+        const customer = customerMap.get(queueEntry.customer_id);
+        const service = serviceMap.get(queueEntry.service_id);
+        const appointment = queueEntry.appointment_id ? appointmentsData.find(a => a.id === queueEntry.appointment_id) : null;
+        
+        return {
+          ...queueEntry,
+          pet: pet || { id: queueEntry.pet_id, name: "Pet não encontrado" },
+          customer: customer || { id: queueEntry.customer_id, full_name: "Cliente não encontrado" },
+          service: service || { id: queueEntry.service_id, name: "Serviço não encontrado" },
+          appointment: appointment
+        };
+      });
+      console.log('[loadData] Queue Services Enriched:', enrichedQueueServices);
+
+      // --- 5. Update State --- 
+      // Filtrar agendamentos aguardando
+      const awaiting = enrichedAppointments.filter(a => a.status === 'scheduled' || a.status === 'confirmed');
       const cancelled = enrichedAppointments.filter(a => a.status === 'cancelled');
       const completed = enrichedAppointments.filter(a => a.status === 'completed');
-      
-      setAllAppointments(active);
+
+      setAllAppointments(enrichedAppointments); // Mantém todos para referência, se necessário
+      setAwaitingAppointments(awaiting); // <--- USA O NOVO ESTADO
+      setQueueServices(enrichedQueueServices);
       setCancelledAppointments(cancelled);
       setCompletedAppointments(completed);
 
-      const enrichedServices = allQueueServicesData.map(service => ({
-        ...service,
-        pet: mockData.pets.find(p => p.id === service.pet_id),
-        customer: mockData.customers.find(c => c.id === service.customer_id)
-      }));
+      // Ajusta a lógica da aba ativa para considerar 'awaiting' primeiro
+      const activeAppointments = awaiting.length > 0;
+      const activeQueue = enrichedQueueServices.length > 0;
+      
+      // Mantém a aba 'awaiting' se houver itens, senão tenta 'queue', 'completed', etc.
+      if (currentTab === 'awaiting' && !activeAppointments && !activeQueue) {
+        // Se estava em 'awaiting' e não há mais itens aguardando nem na fila,
+        // muda para 'completed' se houver, ou mantém 'awaiting' (vazio)
+        setCurrentTab(completed.length > 0 ? 'completed' : 'awaiting'); 
+      } else if (currentTab === 'queue' && !activeQueue) {
+        // Se estava na fila e não há mais itens, tenta voltar para 'awaiting' se tiver,
+        // senão para 'completed' ou mantém 'awaiting'
+        setCurrentTab(activeAppointments ? 'awaiting' : (completed.length > 0 ? 'completed' : 'awaiting'));
+      } else if (!['awaiting', 'queue'].includes(currentTab) && (activeAppointments || activeQueue)){
+        // Se estava em outra aba (completed/canceled) e apareceram itens aguardando ou na fila,
+        // muda para 'awaiting' se houver, senão para 'queue'
+        setCurrentTab(activeAppointments ? 'awaiting' : 'queue');
+      }
 
-      setQueueServices(enrichedServices);
-      setIsViewingHistory(isViewingHistory);
+      console.log(`[loadData] Estados atualizados: Awaiting(${awaiting.length}), Queue(${enrichedQueueServices.length}), Cancelled(${cancelled.length}), Completed(${completed.length})`);
+
     } catch (error) {
-      console.error("Erro ao carregar dados:", error);
+      console.error('Erro ao carregar dados do calendário:', error);
       toast({
-        title: "Erro",
-        description: "Não foi possível carregar os agendamentos.",
+        title: "Erro de Carregamento",
+        description: `Não foi possível carregar os dados: ${error.message}`,
         variant: "destructive"
       });
+      setAllAppointments([]);
+      setQueueServices([]);
+      setCancelledAppointments([]);
+      setCompletedAppointments([]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const waitingCount = allAppointments.length;
+  // Atualiza as contagens para usar os estados corretos
+  const waitingCount = awaitingAppointments.length; // <--- USA O NOVO ESTADO
   const cancelledCount = cancelledAppointments.length;
   const completedCount = completedAppointments.length;
 
@@ -310,6 +343,11 @@ export default function CalendarPage() {
   
   const handleConfirmCalendarCancel = async (reason, newReason = null) => {
     if (!itemToCancel) return;
+    const tenantId = localStorage.getItem('current_tenant');
+    if (!tenantId) {
+        toast({ title: "Erro", description: "ID da clínica não encontrado.", variant: "destructive" });
+        return;
+    }
 
     let finalReason = reason;
     if (reason === '__other__' && newReason) {
@@ -318,7 +356,12 @@ export default function CalendarPage() {
         toast({ title: "Erro", description: "Especifique o motivo em 'Outros'.", variant: "destructive" });
         return;
       }
-      try { addRemovalReason(finalReason); } catch (error) { console.error("Erro salvando motivo:", error); }
+      try { 
+          await CancellationReason.create({ reason: finalReason, tenant_id: tenantId });
+          console.log(`[handleConfirmCalendarCancel] Novo motivo "${finalReason}" salvo no Firebase.`);
+      } catch (error) { 
+          console.error("Erro salvando novo motivo no Firebase:", error); 
+      }
     } else if (reason === '__other__') {
       toast({ title: "Erro", description: "Especifique o motivo em 'Outros'.", variant: "destructive" });
       return;
@@ -396,14 +439,14 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <Card className="lg:col-span-4">
+      <div className="flex flex-col lg:flex-row gap-6">
+        <Card className="lg:w-[300px] flex-shrink-0">
           <CardContent className="p-4">
             <CalendarComponent
               mode="single"
               selected={selectedDate}
               onSelect={handleDateSelect}
-              className="rounded-md border"
+              className="rounded-md border w-full"
               locale={ptBR}
             />
             
@@ -429,12 +472,12 @@ export default function CalendarPage() {
           </CardContent>
         </Card>
 
-        <div className="lg:col-span-8">
+        <div className="flex-1 min-w-0">
           <Tabs defaultValue="awaiting" value={currentTab} onValueChange={setCurrentTab}>
             <div className="flex justify-between items-center mb-4">
               <TabsList>
                 <TabsTrigger value="awaiting">Aguardando ({waitingCount})</TabsTrigger>
-                <TabsTrigger value="queue">Fila Atend.</TabsTrigger>
+                <TabsTrigger value="queue">Em Atendimento ({queueServices.length})</TabsTrigger>
                 <TabsTrigger value="completed">Concluídos ({completedCount})</TabsTrigger>
                 <TabsTrigger 
                   value="canceled"
@@ -449,7 +492,7 @@ export default function CalendarPage() {
             </div>
 
             <TabsContent value="awaiting" className="space-y-4">
-              {allAppointments.length === 0 ? (
+              {awaitingAppointments.length === 0 ? (
                  <div className="text-center py-8 text-gray-500">
                    {isToday(selectedDate)
                      ? "Nenhum agendamento aguardando para hoje."
@@ -458,15 +501,17 @@ export default function CalendarPage() {
                      : "Nenhum agendamento aguardando para este dia."}
                  </div>
                ) : (
-                 allAppointments.map((appointment) => (
-                   <AppointmentCard
-                     key={`app-awaiting-${appointment.id}`}
-                     appointment={appointment}
-                     onNavigate={navigate}
-                     onCancelClick={handleOpenCancelModal}
-                     onRemovalReasonClick={openRemovalReasonModal}
-                   />
-                 ))
+                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                   {awaitingAppointments.map((appointment) => (
+                     <AppointmentCard
+                       key={`app-awaiting-${appointment.id}`}
+                       appointment={appointment}
+                       onNavigate={navigate}
+                       onCancelClick={handleOpenCancelModal}
+                       onRemovalReasonClick={openRemovalReasonModal}
+                     />
+                   ))}
+                 </div>
                )}
             </TabsContent>
 
@@ -474,21 +519,22 @@ export default function CalendarPage() {
               {queueServices.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
                   {isToday(selectedDate)
-                    ? "Nenhum atendimento em andamento."
+                    ? "Nenhum atendimento em andamento no momento."
                     : isViewingHistory
-                    ? "Nenhum atendimento registrado para este dia."
-                    : "Nenhum atendimento para este dia."}
+                    ? "Nenhum atendimento em andamento registrado para este dia."
+                    : "Nenhum atendimento em andamento para este dia."}
                 </div>
               ) : (
-                queueServices.map((service) => (
-                  <QueueServiceCard
-                    key={`queue-${service.id}`}
-                    service={service}
-                    isQueueItem={true}
-                    onLoadData={() => loadData(selectedDate)}
-                    onNavigate={navigate}
-                  />
-                ))
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {queueServices.map((service) => (
+                    <QueueServiceCard
+                      key={`queue-${service.id}`}
+                      service={service}
+                      onLoadData={() => loadData(selectedDate)}
+                      showActions={false}
+                    />
+                  ))}
+                </div>
               )}
             </TabsContent>
 
@@ -526,15 +572,17 @@ export default function CalendarPage() {
                     : "Nenhum agendamento cancelado para este dia."}
                 </div>
               ) : (
-                cancelledAppointments.map((appointment) => (
-                  <AppointmentCard
-                    key={`app-canceled-${appointment.id}`}
-                    appointment={appointment}
-                    onNavigate={navigate}
-                    onCancelClick={() => {}}
-                    onRemovalReasonClick={openRemovalReasonModal}
-                  />
-                ))
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {cancelledAppointments.map((appointment) => (
+                    <AppointmentCard
+                      key={`app-canceled-${appointment.id}`}
+                      appointment={appointment}
+                      onNavigate={navigate}
+                      onCancelClick={() => {}}
+                      onRemovalReasonClick={openRemovalReasonModal}
+                    />
+                  ))}
+                </div>
               )}
             </TabsContent>
           </Tabs>
@@ -553,51 +601,62 @@ export default function CalendarPage() {
   );
 }
 
-function QueueServiceCard({ service, isQueueItem, onLoadData, onNavigate }) {
-  const formatServiceDate = (dateString) => {
-    try {
-      const date = new Date(dateString);
-      if (isNaN(date.getTime())) {
-        return "Data inválida";
-      }
-      return format(date, "HH:mm");
-    } catch {
-      return "Data inválida";
-    }
-  };
+function QueueServiceCard({ service, onLoadData, showActions = true }) {
+  const pet = service.pet;
+  const customer = service.customer;
+  const serviceInfo = service.service;
+  const [isUpdating, setIsUpdating] = useState(false);
 
-  const mockData = getMockData();
-  const pet = mockData.pets.find(p => p.id === service.pet_id);
-  const customer = mockData.customers.find(c => c.id === service.customer_id);
+  console.log('Dados recebidos no QueueServiceCard:', service);
 
-  console.log('Dados do pet:', pet);
-  console.log('Dados do serviço:', service);
-
-  const displayDate = isQueueItem ? service.appointment_date : service.date;
+  const displayDate = service.entry_time?.toDate() || (service.appointment_date ? parseISO(service.appointment_date) : null);
 
   const handleCancel = async () => {
+    if (!confirm(`Tem certeza que deseja remover ${pet?.name || 'este pet'} da fila?`)) return;
+    
+    setIsUpdating(true);
     try {
-      console.log("Cancelando direto do QueueServiceCard:", service.appointment_id);
-      if (!service.appointment_id) {
-        console.error("Erro: ID do agendamento não encontrado no serviço:", service);
-        toast({ title: "Erro", description: "ID do agendamento não encontrado.", variant: "destructive" });
-        return;
-      }
-      await Appointment.update(service.appointment_id, { status: "cancelled" });
-      toast({ title: "Sucesso", description: "Agendamento cancelado." });
+      await QueueService.update(service.id, { status: "cancelled" });
+      toast({ title: "Sucesso", description: "Atendimento removido da fila." });
       onLoadData();
     } catch (error) {
-      console.error("Erro ao cancelar agendamento:", error);
+      console.error("Erro ao remover da fila:", error);
       toast({
         title: "Erro",
-        description: "Não foi possível cancelar o agendamento.",
+        description: "Não foi possível remover o atendimento da fila.",
         variant: "destructive"
       });
+    } finally {
+       setIsUpdating(false);
     }
   };
 
-  const handleEdit = () => {
-    onNavigate(createPageUrl(`AppointmentForm?id=${service.appointment_id}`));
+  const handleStartService = async () => {
+     setIsUpdating(true);
+     try {
+        await QueueService.update(service.id, { status: 'in_progress' });
+        toast({ title: "Sucesso", description: "Atendimento iniciado." });
+        onLoadData();
+     } catch (error) {
+        console.error("Erro ao iniciar atendimento:", error);
+        toast({ title: "Erro", description: "Não foi possível iniciar o atendimento.", variant: "destructive" });
+     } finally {
+        setIsUpdating(false);
+     }
+  };
+  
+  const handleFinishService = async () => {
+     setIsUpdating(true);
+     try {
+        await QueueService.update(service.id, { status: 'finished' });
+        toast({ title: "Sucesso", description: "Atendimento finalizado." });
+        onLoadData();
+     } catch (error) {
+        console.error("Erro ao finalizar atendimento:", error);
+        toast({ title: "Erro", description: "Não foi possível finalizar o atendimento.", variant: "destructive" });
+     } finally {
+        setIsUpdating(false);
+     }
   };
 
   return (
@@ -609,33 +668,46 @@ function QueueServiceCard({ service, isQueueItem, onLoadData, onNavigate }) {
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <Badge variant="outline">
-                  {formatServiceDate(displayDate)}
+                  {displayDate ? format(displayDate, 'HH:mm') : "N/A"}
                 </Badge>
                 {getStatusBadge(service.status)}
               </div>
-              <h3 className="font-medium">{pet?.name || "Pet não encontrado"}</h3>
-              <p className="text-sm text-gray-500">{customer?.full_name || "Cliente não encontrado"}</p>
+              <h3 className="font-semibold">
+                    Pet: {pet?.name || "Não encontrado"}
+                </h3>
+                <p className="text-sm text-gray-500">
+                    Tutor: {customer?.full_name || "Não encontrado"}
+                </p>
+                 <p className="text-sm text-gray-500">
+                    Serviço: {serviceInfo?.name || "Não encontrado"}
+                </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={handleEdit}>
-                  <Edit className="h-4 w-4 mr-2" />
-                  Editar
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCancel} className="text-red-600">
-                  <X className="h-4 w-4 mr-2" />
-                  Cancelar
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+          {showActions && (
+            <div className="flex items-center gap-2">
+              {isUpdating ? (
+                 <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <>
+                  {service.status === 'waiting' && (
+                    <Button variant="outline" size="sm" onClick={handleStartService} title="Iniciar Atendimento">
+                      <Play className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {service.status === 'in_progress' && (
+                    <Button variant="outline" size="sm" onClick={handleFinishService} title="Finalizar Atendimento" className="text-green-600 border-green-600 hover:bg-green-50">
+                      <CheckSquare className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {(service.status === 'waiting' || service.status === 'in_progress') && (
+                    <Button variant="destructive" size="sm" onClick={handleCancel} title="Remover da Fila">
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -644,15 +716,18 @@ function QueueServiceCard({ service, isQueueItem, onLoadData, onNavigate }) {
 
 QueueServiceCard.propTypes = {
   service: PropTypes.shape({
-    id: PropTypes.string,
-    appointment_id: PropTypes.string,
+    id: PropTypes.string.isRequired,
+    appointment_date: PropTypes.string,
+    entry_time: PropTypes.oneOfType([PropTypes.object, PropTypes.string]),
     pet_id: PropTypes.string,
     customer_id: PropTypes.string,
+    service_id: PropTypes.string,
+    appointment_id: PropTypes.string,
     status: PropTypes.string,
-    appointment_date: PropTypes.string,
-    date: PropTypes.string
+    pet: PropTypes.shape({ name: PropTypes.string }), 
+    customer: PropTypes.shape({ full_name: PropTypes.string }),
+    service: PropTypes.shape({ name: PropTypes.string })
   }).isRequired,
-  isQueueItem: PropTypes.bool.isRequired,
   onLoadData: PropTypes.func.isRequired,
-  onNavigate: PropTypes.func.isRequired
+  showActions: PropTypes.bool
 };

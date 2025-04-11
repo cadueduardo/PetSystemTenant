@@ -30,35 +30,35 @@ export default function DetalhesPet() {
   
   // Carregar dados do pet e do dono
   const carregarDados = async () => {
-    if (!petId) {
-      navigate(createPageUrl(`Customers?store=${storeParam}`));
-      return;
-    }
-    
+      if (!petId) {
+        navigate(createPageUrl(`Customers?store=${storeParam}`));
+        return;
+      }
+      
     setCarregando(true);
-    try {
-      // Carregar dados do pet
+      try {
+        // Carregar dados do pet
       const dadosPet = await Pet.get(petId);
       if (!dadosPet) {
-        throw new Error("Pet não encontrado");
-      }
+          throw new Error("Pet não encontrado");
+        }
       setPet(dadosPet);
-      
-      // Carregar dados do dono
+        
+        // Carregar dados do dono
       if (dadosPet.owner_id) {
-        try {
+          try {
           const dadosDono = await Customer.get(dadosPet.owner_id);
           setDono(dadosDono);
-        } catch (error) {
-          console.error("Erro ao carregar dados do dono:", error);
-          toast({
-            title: "Aviso",
-            description: "Não foi possível carregar dados do dono.",
-            variant: "warning"
-          });
+          } catch (error) {
+            console.error("Erro ao carregar dados do dono:", error);
+            toast({
+              title: "Aviso",
+              description: "Não foi possível carregar dados do dono.",
+              variant: "warning"
+            });
+          }
         }
-      }
-      
+        
       // --- Buscar Histórico de Petshop (QueueService Concluídos) --- 
       try {
         const petshopQueueItems = await QueueService.filter({ pet_id: petId, status: 'completed' });
@@ -82,7 +82,7 @@ export default function DetalhesPet() {
           return { ...item, serviceName, durationMinutes: duration, servicePrice }; 
         }));
         setHistoricoPetshop(petshopHistory);
-      } catch (error) {
+        } catch (error) {
         console.error("Erro ao carregar histórico de Petshop:", error);
         setHistoricoPetshop([]);
       }
@@ -160,7 +160,7 @@ export default function DetalhesPet() {
         atendimentosCompletos.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
         
         setHistoricoLiveVet(atendimentosCompletos);
-      } catch (error) {
+        } catch (error) {
         console.error("Erro ao carregar histórico de Live Vet:", error);
         setHistoricoLiveVet([]);
       }
@@ -173,16 +173,16 @@ export default function DetalhesPet() {
         console.warn("[PetDetails] Módulo de Histórico de Compras não encontrado ou erro ao buscar:", purchaseError);
         // Lidar com o erro ou definir como vazio se o módulo não existir
         setHistoricoCompras([]);
-      }
-      
-    } catch (error) {
-      console.error("Erro ao carregar dados:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível carregar os dados do pet.",
-        variant: "destructive"
-      });
-    } finally {
+        }
+        
+      } catch (error) {
+        console.error("Erro ao carregar dados:", error);
+        toast({
+          title: "Erro",
+          description: "Não foi possível carregar os dados do pet.",
+          variant: "destructive"
+        });
+      } finally {
       setCarregando(false);
     }
   };
@@ -201,10 +201,10 @@ export default function DetalhesPet() {
 
   const handlePetUpdateSuccess = () => {
     setIsEditPetDialogOpen(false);
-    toast({
-      title: "Sucesso",
-      description: "Dados do pet atualizados com sucesso!"
-    });
+      toast({
+        title: "Sucesso",
+        description: "Dados do pet atualizados com sucesso!"
+      });
     carregarDados();
   };
 
@@ -371,7 +371,7 @@ export default function DetalhesPet() {
       </div>
     );
   }
-
+  
   if (!pet) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen">
@@ -379,34 +379,34 @@ export default function DetalhesPet() {
         <Button onClick={voltar}>
           <ChevronLeft className="mr-2 h-4 w-4" />
           Voltar
-        </Button>
+            </Button>
       </div>
     );
   }
-
+  
   return (
     <div className="container mx-auto py-6 space-y-6">
       <div className="flex items-center justify-between">
         <Button variant="ghost" onClick={voltar}>
           <ChevronLeft className="mr-2 h-4 w-4" />
           Voltar
-        </Button>
-      </div>
+              </Button>
+            </div>
 
       <div className="relative">
         <PetBasicInfo pet={pet} owner={dono} />
-        <Button 
-          variant="outline" 
+              <Button 
+                variant="outline" 
           size="sm" 
           onClick={editar} 
           className="absolute top-4 right-4"
           disabled={pet?.is_inactive || carregando}
         >
           <Pencil className="mr-2 h-4 w-4" />
-          Editar Pet
-        </Button>
-      </div>
-      
+                Editar Pet
+              </Button>
+          </div>
+          
       <div className="flex items-center space-x-2 mb-4">
         <Filter className="h-4 w-4 text-gray-500" />
         <span className="text-sm font-medium">Filtrar por:</span>
@@ -426,8 +426,8 @@ export default function DetalhesPet() {
             </SelectItem>
           </SelectContent>
         </Select>
-      </div>
-      
+          </div>
+          
       {renderConteudoFiltrado()}
 
       <Dialog open={isEditPetDialogOpen} onOpenChange={setIsEditPetDialogOpen}>
@@ -444,7 +444,7 @@ export default function DetalhesPet() {
               onSuccess={handlePetUpdateSuccess}
               customerId={dono?.id}
             />
-          </div>
+                      </div>
           <DialogFooter className="mt-4">
             <DialogClose asChild>
               <Button type="button" variant="outline">Cancelar</Button>

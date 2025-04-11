@@ -34,7 +34,8 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
     points: "",
     image_url: "",
     tenant_id: localStorage.getItem('current_tenant'),
-    module: "petshop"
+    module: "petshop",
+    is_active: true
   });
 
   useEffect(() => {
@@ -55,7 +56,8 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
         points: "",
         image_url: "",
         tenant_id: localStorage.getItem('current_tenant'),
-        module: "petshop"
+        module: "petshop",
+        is_active: true
       });
     }
   }, [service, open]);
@@ -121,9 +123,6 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
           description: "Serviço atualizado com sucesso!"
         });
       } else {
-        // Gera um ID único baseado no timestamp e um número aleatório
-        const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        serviceData.id = uniqueId;
         await Service.create(serviceData);
         toast({
           title: "Sucesso",

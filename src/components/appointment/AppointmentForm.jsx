@@ -1,8 +1,31 @@
-import React, { useState } from "react";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { format, isBefore, startOfMinute } from "date-fns";
+import { createPageUrl } from "@/utils";
+import { Appointment, QueueService, Pet, Service } from "@/api/entities";
+import useCustomerStore from "@/stores/customerStore";
 import { Button } from "@/components/ui/button";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -10,173 +33,566 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
-import { Loader2 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { toast } from "@/components/ui/use-toast";
+import { CalendarIcon, Loader2 } from "lucide-react";
+import { useForm } from "react-hook-form";
+import PropTypes from 'prop-types';
 
-export default function AppointmentForm({ onSubmit, onCancel, pet, initialData }) {
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formData, setFormData] = useState(initialData || {
-    date: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
-    end_date: "",
-    type: "",
-    status: "scheduled",
-    doctor: "",
-    reason: "",
-    notes: "",
-    is_telemedicine: false,
-    health_plan_coverage: false,
-    health_plan_authorization: ""
+export default function AppointmentForm({ appointment = null /*, onSuccess, onCancel */ }) {
+  const navigate = useNavigate();
+  const [isLoading, setIsLoading] = useState(false);
+  const [pets, setPets] = useState([]);
+  const [services, setServices] = useState([]);
+  const [addToQueue, setAddToQueue] = useState(true);
+  const [appointmentDuration, setAppointmentDuration] = useState(60);
+  const [isEditing, setIsEditing] = useState(!!appointment);
+
+  // Obter parâmetros da URL
+  const urlParams = new URLSearchParams(window.location.search);
+  const petIdParam = urlParams.get('pet_id');
+  const customerIdParam = urlParams.get('customer_id');
+  const storeParam = urlParams.get('store') || localStorage.getItem('current_tenant');
+
+  // Usando as stores Zustand
+  const { customers, fetchCustomers } = useCustomerStore();
+
+  const form = useForm({
+    defaultValues: {
+      pet_id: petIdParam || "",
+      customer_id: customerIdParam || "",
+      service_id: "",
+      date: new Date(),
+      time: "09:00",
+      notes: "",
+      status: "scheduled",
+      service_type: "clinica"
+    }
   });
 
-  const handleChange = (field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
+  useEffect(() => {
+    console.log('Valor inicial do service_type:', form.getValues("service_type"));
+    
+    loadData();
+    loadServices();
 
-    // Se a data inicial for alterada, atualiza a data final para 30 minutos depois
-    if (field === "date") {
-      const startDate = new Date(value);
-      const endDate = new Date(startDate.getTime() + 30 * 60000); // +30 minutos
-      setFormData(prev => ({
-        ...prev,
-        date: value,
-        end_date: format(endDate, "yyyy-MM-dd'T'HH:mm")
-      }));
+    // Se temos customer_id na URL, carregar os pets desse cliente
+    if (customerIdParam) {
+      handleCustomerChange(customerIdParam);
+    }
+
+    // Adicionar listener para mudanças no localStorage
+    const handleStorageChange = () => {
+      loadData();
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (appointment) {
+      console.log("[AppointmentForm] Prop 'appointment' recebida. Resetando form (sem pet/serviço):");
+      setIsEditing(true);
+      form.reset({
+        customer_id: appointment.customer_id || "",
+        date: appointment.date ? new Date(appointment.date) : new Date(),
+        time: appointment.date ? format(new Date(appointment.date), "HH:mm") : "09:00",
+        notes: appointment.notes || "",
+        status: appointment.status || "scheduled",
+        service_type: appointment.type || "clinica"
+      });
+      // Carregar listas relacionadas
+      if (appointment.customer_id) {
+        handleCustomerChange(appointment.customer_id);
+      }
+      if (appointment.type) { 
+        form.setValue('service_type', appointment.type);
+        loadServices();
+      }
+    }
+  }, [appointment, form]);
+  
+  useEffect(() => {
+    if (isEditing && appointment?.pet_id && pets.length > 0) {
+        if (pets.some(p => p.id === appointment.pet_id)) {
+            console.log(`[AppointmentForm Pet useEffect] Definindo pet_id para: ${appointment.pet_id}`);
+            form.setValue('pet_id', appointment.pet_id);
+        } else {
+             console.warn(`[AppointmentForm Pet useEffect] Pet ID ${appointment.pet_id} do agendamento não encontrado na lista de pets do cliente.`);
+        }
+    }
+  }, [isEditing, appointment, pets, form]);
+
+  useEffect(() => {
+    if (isEditing && appointment?.service_id && services.length > 0) {
+        if (services.some(s => s.id === appointment.service_id)) {
+            console.log(`[AppointmentForm Service useEffect] Definindo service_id para: ${appointment.service_id}`);
+            form.setValue('service_id', appointment.service_id);
+            const selectedService = services.find(s => s.id === appointment.service_id);
+            if (selectedService) {
+                setAppointmentDuration(selectedService.duration || 60);
+            }
+        } else {
+            console.warn(`[AppointmentForm Service useEffect] Service ID ${appointment.service_id} do agendamento não encontrado na lista de serviços.`);
+        }
+    }
+  }, [isEditing, appointment, services, form]);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const tenantId = localStorage.getItem('current_tenant');
+      console.log('Tenant ID:', tenantId);
+      
+      if (!tenantId) {
+        console.error('Tenant ID não encontrado');
+        toast({
+          title: "Erro",
+          description: "Não foi possível identificar a loja.",
+          variant: "destructive"
+        });
+        return;
+      }
+      
+      // Carregando dados usando as stores
+      await fetchCustomers({ tenant_id: tenantId });
+      
+    } catch (error) {
+      console.error("Erro ao carregar dados:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível carregar os dados necessários.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setIsSubmitting(true);
+  const handleCustomerChange = async (customerId) => {
     try {
-      await onSubmit(formData);
+      const petsData = await Pet.filter({ owner_id: customerId });
+      setPets(petsData);
+      form.setValue("customer_id", customerId);
+      form.setValue("pet_id", ""); // Limpa o pet selecionado
+    } catch (error) {
+      console.error("Erro ao carregar pets:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível carregar os pets do cliente.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleServiceTypeChange = (type) => {
+    console.log('Mudando tipo de serviço para:', type);
+    form.setValue("service_type", type);
+    form.setValue("service_id", ""); // Limpa o serviço selecionado
+    loadServices(); // Carrega os serviços após atualizar o estado
+  };
+
+  const loadServices = async () => {
+    try {
+      const tenantId = localStorage.getItem('current_tenant');
+      const serviceType = form.getValues("service_type");
+      console.log('Carregando serviços para:', { tenantId, serviceType });
+
+      if (!tenantId) {
+        toast({ title: "Erro", description: "Tenant não identificado.", variant: "destructive" });
+        return;
+      }
+
+      // Buscar serviços do Firestore
+      const servicesData = await Service.list({
+        tenant_id: tenantId,
+        module: serviceType, // Filtrar pelo tipo (clinica/petshop)
+        is_active: true // Buscar apenas serviços ativos
+      });
+
+      console.log('Serviços carregados do Firestore:', servicesData);
+      setServices(servicesData || []); // Garante que seja sempre um array
+
+    } catch (error) {
+      console.error("Erro ao carregar serviços:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível carregar os serviços.",
+        variant: "destructive"
+      });
+      setServices([]); // Limpa em caso de erro
+    }
+  };
+
+  const onSubmit = async (data) => {
+    const [hours, minutes] = data.time.split(":");
+    const appointmentDateTime = new Date(data.date);
+    appointmentDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+
+    const now = startOfMinute(new Date());
+
+    if (isBefore(appointmentDateTime, now)) {
+      toast({
+        title: "Data/Hora Inválida",
+        description: "Não é possível agendar em um horário passado.",
+        variant: "destructive"
+      });
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const serviceType = form.getValues("service_type");
+      console.log('[onSubmit] Criando/Atualizando agendamento com tipo:', serviceType);
+
+      const appointmentData = {
+        pet_id: data.pet_id,
+        customer_id: data.customer_id,
+        service_id: data.service_id,
+        date: appointmentDateTime.toISOString(),
+        end_date: new Date(appointmentDateTime.getTime() + appointmentDuration * 60000).toISOString(),
+        type: serviceType,
+        notes: data.notes,
+        status: data.status || (isEditing ? undefined : "scheduled"),
+        tenant_id: localStorage.getItem('current_tenant'),
+      };
+
+      if (isEditing && appointment?.id) {
+        console.log(`[onSubmit] Atualizando agendamento ID: ${appointment.id}`, appointmentData);
+        await Appointment.update(appointment.id, appointmentData);
+        toast({
+          title: "Sucesso",
+          description: "Agendamento atualizado com sucesso!"
+        });
+        console.log('[onSubmit] Agendamento editado. Redirecionando para Calendar/PetDetails.');
+        if (petIdParam) {
+          navigate(createPageUrl('PetDetails', { id: petIdParam }));
+        } else {
+          navigate(createPageUrl('Calendar'));
+        }
+      } else {
+        console.log('[onSubmit] Criando novo agendamento com tipo:', data.service_type);
+        const appointment = await Appointment.create(appointmentData);
+        let addedToQueue = false;
+        
+        console.log('[onSubmit] Verificando se adiciona à fila:', { addToQueue, service_type: data.service_type });
+        if (addToQueue && data.service_type === 'petshop') { 
+          console.log('[onSubmit] Adicionando à QueueService...');
+          const queueData = {
+            pet_id: data.pet_id,
+            customer_id: data.customer_id,
+            service_id: data.service_id,
+            appointment_id: appointment.id,
+            appointment_date: appointmentData.date,
+            status: "waiting",
+            queue_type: "petshop",
+            tenant_id: localStorage.getItem('current_tenant')
+          };
+          try {
+            await QueueService.create(queueData);
+            addedToQueue = true;
+            console.log('[onSubmit] Adicionado à QueueService com sucesso.');
+          } catch(queueError) {
+             console.error('[onSubmit] Erro ao adicionar à QueueService:', queueError);
+             toast({
+                title: "Erro na Fila",
+                description: "Agendamento criado, mas houve um erro ao adicionar à fila.",
+                variant: "destructive"
+             });
+          }
+        }
+        
+        toast({
+          title: "Sucesso",
+          description: "Agendamento criado com sucesso!"
+        });
+
+        // Lógica de redirecionamento após criar - SEMPRE para Calendar/PetDetails
+        console.log('[onSubmit] Decidindo redirecionamento (sempre Calendar/PetDetails):', { service_type: data.service_type, addedToQueue });
+        if (petIdParam) {
+          console.log('[onSubmit] Redirecionando para PetDetails (após criar).');
+          navigate(createPageUrl('PetDetails', { id: petIdParam }));
+        } else {
+          console.log('[onSubmit] Redirecionando para Calendar (após criar).');
+          navigate(createPageUrl('Calendar'));
+        }
+      }
+
     } catch (error) {
       console.error("Erro ao salvar agendamento:", error);
+      toast({
+        title: "Erro",
+        description: `Não foi possível salvar o agendamento: ${error.message || 'Verifique os campos obrigatórios'}`,
+        variant: "destructive"
+      });
     } finally {
-      setIsSubmitting(false);
+      setIsLoading(false);
     }
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="space-y-2">
-          <Label htmlFor="type">Tipo de Atendimento *</Label>
-          <Select
-            value={formData.type}
-            onValueChange={(value) => handleChange("type", value)}
-            required
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Selecione o tipo" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="consultation">Consulta</SelectItem>
-              <SelectItem value="exam">Exame</SelectItem>
-              <SelectItem value="vaccination">Vacinação</SelectItem>
-              <SelectItem value="surgery">Cirurgia</SelectItem>
-              <SelectItem value="return">Retorno</SelectItem>
-              <SelectItem value="grooming">Banho e Tosa</SelectItem>
-              <SelectItem value="telemedicine">Telemedicina</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+    <div className="p-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>{isEditing ? "Editar Agendamento" : "Novo Agendamento"}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <FormField
+                  control={form.control}
+                  name="customer_id"
+                  rules={{ required: "Selecione um cliente" }}
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Cliente</FormLabel>
+                      <Select
+                        onValueChange={handleCustomerChange}
+                        value={field.value}
+                        disabled={isEditing}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecione um cliente" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {customers.map((customer, index) => (
+                            <SelectItem key={index} value={customer.id}>
+                              {customer.full_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-        <div className="space-y-2">
-          <Label htmlFor="doctor">Veterinário/Profissional</Label>
-          <Input
-            id="doctor"
-            value={formData.doctor}
-            onChange={(e) => handleChange("doctor", e.target.value)}
-          />
-        </div>
-      </div>
+                <FormField
+                  control={form.control}
+                  name="pet_id"
+                  rules={{ required: "Selecione um pet" }}
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Pet</FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value}
+                        disabled={isEditing}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecione um pet" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {pets.map((pet, index) => (
+                            <SelectItem key={index} value={pet.id}>
+                              {pet.name} ({pet.species} - {pet.breed})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="space-y-2">
-          <Label htmlFor="date">Data e Hora Inicial *</Label>
-          <Input
-            id="date"
-            type="datetime-local"
-            value={formData.date}
-            onChange={(e) => handleChange("date", e.target.value)}
-            required
-          />
-        </div>
+                <FormField
+                  control={form.control}
+                  name="service_type"
+                  rules={{ required: "Selecione um tipo de serviço" }}
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Tipo de Agendamento</FormLabel>
+                      <Select
+                        onValueChange={handleServiceTypeChange}
+                        value={field.value}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecione um tipo" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="clinica">Clínica</SelectItem>
+                          <SelectItem value="petshop">Petshop</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-        <div className="space-y-2">
-          <Label htmlFor="end_date">Data e Hora Final *</Label>
-          <Input
-            id="end_date"
-            type="datetime-local"
-            value={formData.end_date}
-            onChange={(e) => handleChange("end_date", e.target.value)}
-            required
-          />
-        </div>
-      </div>
+                <FormField
+                  control={form.control}
+                  name="service_id"
+                  rules={{ required: "Selecione um serviço" }}
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Serviço</FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecione um serviço" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {services.map((service) => (
+                            <SelectItem 
+                              key={service.id}
+                              value={service.id}
+                            >
+                              {service.name} - {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(service.price)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-      <div className="space-y-2">
-        <Label htmlFor="reason">Motivo *</Label>
-        <Textarea
-          id="reason"
-          value={formData.reason}
-          onChange={(e) => handleChange("reason", e.target.value)}
-          placeholder="Descreva o motivo do agendamento..."
-          required
-        />
-      </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="date"
+                    rules={{ required: "Selecione uma data" }}
+                    render={({ field }) => (
+                      <FormItem className="flex flex-col">
+                        <FormLabel>Data</FormLabel>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <FormControl>
+                              <Button
+                                variant="outline"
+                                className={`w-full pl-3 text-left font-normal ${
+                                  !field.value && "text-muted-foreground"
+                                }`}
+                              >
+                                {field.value ? (
+                                  format(field.value, "dd/MM/yyyy")
+                                ) : (
+                                  <span>Selecione uma data</span>
+                                )}
+                                <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                              </Button>
+                            </FormControl>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0" align="start">
+                            <Calendar
+                              mode="single"
+                              selected={field.value}
+                              onSelect={field.onChange}
+                              disabled={(date) =>
+                                date < new Date(new Date().setHours(0, 0, 0, 0))
+                              }
+                              initialFocus
+                            />
+                          </PopoverContent>
+                        </Popover>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-      <div className="space-y-2">
-        <Label htmlFor="notes">Observações</Label>
-        <Textarea
-          id="notes"
-          value={formData.notes}
-          onChange={(e) => handleChange("notes", e.target.value)}
-          placeholder="Observações adicionais..."
-        />
-      </div>
+                  <FormField
+                    control={form.control}
+                    name="time"
+                    rules={{ required: "Selecione um horário" }}
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Horário</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="time"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              </div>
 
-      <div className="flex items-center gap-2">
-        <input
-          type="checkbox"
-          id="health_plan_coverage"
-          checked={formData.health_plan_coverage}
-          onChange={(e) => handleChange("health_plan_coverage", e.target.checked)}
-        />
-        <Label htmlFor="health_plan_coverage">
-          Atendimento coberto por plano de saúde
-        </Label>
-      </div>
+              <FormField
+                control={form.control}
+                name="notes"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Observações</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="Adicione observações sobre o agendamento..."
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-      {formData.health_plan_coverage && (
-        <div className="space-y-2">
-          <Label htmlFor="health_plan_authorization">Número da Autorização</Label>
-          <Input
-            id="health_plan_authorization"
-            value={formData.health_plan_authorization}
-            onChange={(e) => handleChange("health_plan_authorization", e.target.value)}
-          />
-        </div>
-      )}
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="add-to-queue"
+                  checked={addToQueue}
+                  onCheckedChange={setAddToQueue}
+                />
+                <label
+                  htmlFor="add-to-queue"
+                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                >
+                  Adicionar automaticamente à fila de atendimento
+                </label>
+              </div>
 
-      <div className="flex justify-end gap-4">
-        <Button type="button" variant="outline" onClick={onCancel}>
-          Cancelar
-        </Button>
-        <Button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Salvando...
-            </>
-          ) : (
-            'Salvar Agendamento'
-          )}
-        </Button>
-      </div>
-    </form>
+              <div className="flex justify-end gap-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    if (petIdParam) {
+                      navigate(createPageUrl(`PetDetails?id=${petIdParam}&store=${storeParam}`));
+                    } else {
+                      navigate(createPageUrl(`Calendar?store=${storeParam}`));
+                    }
+                  }}
+                >
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={isLoading}>
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Salvando...
+                    </>
+                  ) : (
+                    "Salvar Agendamento"
+                  )}
+                </Button>
+              </div>
+            </form>
+          </Form>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
+
+AppointmentForm.propTypes = {
+  appointment: PropTypes.object,
+  // onSuccess: PropTypes.func, // Keep commented if not used
+  // onCancel: PropTypes.func,  // Keep commented if not used
+};

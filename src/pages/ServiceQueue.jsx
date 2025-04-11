@@ -1,13 +1,14 @@
-import React, { useState, useEffect } from "react";
-import { format, isBefore, isAfter, addMinutes, differenceInMinutes, parseISO } from "date-fns";
+import { useState, useEffect } from "react";
+// import { useNavigate } from "react-router-dom"; // Remover
+import { format, /* isBefore, isAfter, addMinutes, */ differenceInMinutes, parseISO } from "date-fns"; // Remover não usados
 import { ptBR } from "date-fns/locale";
-import { QueueService, Pet, Customer, Service, TenantUser, Appointment } from "../api/entities";
+import { QueueService, Pet, Customer, Service, Appointment, /* CancellationReason */ } from "@/api/entities"; // Remover CancellationReason
+// import { useTenant } from "@/components/tenant/TenantContext"; // Remover
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
-  CardDescription,
 } from "../components/ui/card";
 import {
   Table,
@@ -19,11 +20,11 @@ import {
 } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
-import { Textarea } from "../components/ui/textarea";
-import { toast, useToast } from "../components/ui/use-toast";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "../components/ui/use-toast";
 import {
-  Calendar,
+  // Calendar, // Remover
   Search,
   Clock,
   Loader2,
@@ -31,16 +32,15 @@ import {
   PlayCircle,
   PauseCircle,
   XCircle,
-  Bell,
   RefreshCw,
-  Filter,
-  ChevronUp,
-  ChevronDown,
+  // Filter, // Remover
+  // ChevronUp, // Remover
+  // ChevronDown, // Remover
   Calendar as CalendarIcon,
   UserCircle,
   ClipboardList,
-  Dog,
-  Cat
+  // Dog, // Remover
+  // Cat // Remover
 } from "lucide-react";
 import {
   Select,
@@ -68,6 +68,18 @@ import ServiceDetailsPanel from "../components/queue/ServiceDetailsPanel";
 import PetAvatar from "@/components/pets/PetAvatar";
 import RemoveFromQueueModal from '../components/queue/RemoveFromQueueModal';
 import { addRemovalReason } from '@/api/mockData';
+// import { Checkbox } from "@/components/ui/checkbox"; // Remover
+import {
+  // Play, // Remover
+  // Pause, // Remover
+  // CheckCircle, // Remover
+  // Ban, // Remover
+  // MoreHorizontal, // Remover
+  // CalendarDays, // Remover
+  // Edit2, // Remover
+  // X, // Remover
+  // Info, // Remover
+} from "lucide-react"; // Remover bloco inteiro se vazio
 
 export default function ServiceQueue() {
   const [queueItems, setQueueItems] = useState([]);
@@ -96,14 +108,18 @@ export default function ServiceQueue() {
         endOfDay.setHours(23, 59, 59, 999);
         const currentTenant = localStorage.getItem('current_tenant');
 
-        // Busca os itens da QueueService
-        const queueItemsFromDB = await QueueService.filter({
+        // Busca os itens da QueueService usando .list()
+        const queueItemsFromDB = await QueueService.list({
+          // Filtro por data (ajustar se necessário para a implementação exata de .list)
+          /* 
           appointment_date: {
             $gte: startOfDay.toISOString(),
             $lte: endOfDay.toISOString()
           },
+          */
           tenant_id: currentTenant,
-          status: { $ne: 'cancelled' } // Excluir cancelados
+          // Pedir explicitamente os status relevantes para esta tela
+          status: ['waiting', 'scheduled', 'in_progress', 'paused', 'completed']
         });
         console.log('[ServiceQueue] Itens brutos da QueueService:', queueItemsFromDB);
 
@@ -148,7 +164,20 @@ export default function ServiceQueue() {
         // Aguarda todas as promises do map serem resolvidas
         const populatedAppointments = await Promise.all(populatedAppointmentsPromises);
 
-        setQueueItems(populatedAppointments);
+        // Filtrar para incluir apenas itens cujo serviço seja do módulo 'petshop'
+        const filteredPetshopAppointments = populatedAppointments.filter(item => {
+          // Verifica se o serviço foi carregado e se pertence ao módulo 'petshop'
+          // TODO: Confirmar se 'module' é o campo correto para identificar serviços de petshop
+          return item.service && item.service.module === 'petshop';
+        });
+
+        // Log para verificar as datas antes de setar o estado (usar lista filtrada)
+        filteredPetshopAppointments.forEach(appt => {
+            console.log(`[ServiceQueue Debug] ID: ${appt.id}, appointment_date: ${JSON.stringify(appt.appointment_date)}, typeof: ${typeof appt.appointment_date}`);
+        });
+
+        // Define o estado com a lista filtrada
+        setQueueItems(filteredPetshopAppointments);
 
       } catch (error) {
            console.error("Erro ao carregar fila:", error);
@@ -178,6 +207,7 @@ export default function ServiceQueue() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate, autoRefresh]);
 
+  /* // Remover função checkUpcomingServices não usada
   const checkUpcomingServices = () => {
     const now = new Date();
     const soon = addMinutes(now, 15);
@@ -217,6 +247,7 @@ export default function ServiceQueue() {
       });
     }
   };
+  */
 
   const handleStatusChange = async (itemId, newStatus, additionalData = {}) => {
     console.log(`[handleStatusChange] ID: ${itemId}, Novo Status: ${newStatus}`);
@@ -278,14 +309,16 @@ export default function ServiceQueue() {
           }
           break;
         case "paused":
-          const pauses = currentItem.pauses || [];
-          updateData.pauses = [
-            ...pauses,
-            {
-              start: now,
-              reason: additionalData.pauseReason || 'Pausado pelo usuário'
-            }
-          ];
+          {
+            const pauses = currentItem.pauses || [];
+            updateData.pauses = [
+              ...pauses,
+              {
+                start: now,
+                reason: additionalData.pauseReason || 'Pausado pelo usuário'
+              }
+            ];
+          }
           break;
       }
 
@@ -358,6 +391,10 @@ export default function ServiceQueue() {
         label: "Agendado",
         className: "bg-blue-100 text-blue-800"
       },
+      waiting: {
+        label: "Aguardando",
+        className: "bg-orange-100 text-orange-800"
+      },
       in_progress: {
         label: "Em Atendimento",
         className: "bg-yellow-100 text-yellow-800"
@@ -376,7 +413,16 @@ export default function ServiceQueue() {
       }
     };
 
-    const config = statusConfig[status];
+    const config = statusConfig[status] || { 
+      label: status ? String(status) : "Indefinido", 
+      className: "bg-gray-100 text-gray-800" 
+    }; // <-- Fallback para status desconhecido
+    
+    // Log para depurar o status recebido
+    if (!statusConfig[status]) {
+        console.warn(`[getStatusBadge] Status desconhecido recebido: '${status}', aplicando fallback.`);
+    }
+    
     return <Badge className={config.className}>{config.label}</Badge>;
   };
 
@@ -616,7 +662,10 @@ export default function ServiceQueue() {
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <Clock className="h-4 w-4 text-gray-500" />
-                                {format(new Date(item.appointment_date), "HH:mm")}
+                                {item.appointment_date && !isNaN(new Date(item.appointment_date).getTime()) 
+                                  ? format(new Date(item.appointment_date), "HH:mm")
+                                  : '--:--' // Fallback para datas inválidas
+                                }
                               </div>
                             </TableCell>
                             <TableCell>
@@ -677,12 +726,12 @@ export default function ServiceQueue() {
               <Card>
                 <CardHeader className="pb-2 bg-blue-50">
                   <CardTitle className="text-center text-blue-800">
-                    Agendados ({filteredItems.filter(i => i.status === "scheduled").length})
+                    Agendados ({sortedQueueItems.filter(i => i.status === "scheduled" || i.status === "waiting").length})
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-3 max-h-[600px] overflow-y-auto">
-                  {filteredItems
-                    .filter(item => item.status === "scheduled")
+                  {sortedQueueItems
+                    .filter(item => item.status === "scheduled" || item.status === "waiting")
                     .map(item => (
                       <Card key={item.id} className="mb-3 shadow-sm hover:shadow-md transition-shadow">
                         <CardContent className="p-3">
@@ -694,7 +743,9 @@ export default function ServiceQueue() {
                               <div className="flex justify-between items-start mb-2">
                                 <div className="font-medium">{item.pet?.name}</div>
                                 <Badge variant="outline" className="text-xs">
-                                  {format(new Date(item.appointment_date), "HH:mm")}
+                                  {item.appointment_date && !isNaN(new Date(item.appointment_date).getTime())
+                                    ? format(new Date(item.appointment_date), "HH:mm") 
+                                    : '--:--'}
                                 </Badge>
                               </div>
                               <div className="text-sm text-gray-600 mb-2">{item.service?.name}</div>
@@ -714,7 +765,7 @@ export default function ServiceQueue() {
                         </CardContent>
                       </Card>
                     ))}
-                  {filteredItems.filter(i => i.status === "scheduled").length === 0 && (
+                  {sortedQueueItems.filter(i => i.status === "scheduled" || i.status === "waiting").length === 0 && (
                     <div className="text-center py-8 text-gray-500">
                       Nenhum serviço agendado
                     </div>
@@ -725,11 +776,11 @@ export default function ServiceQueue() {
               <Card>
                 <CardHeader className="pb-2 bg-yellow-50">
                   <CardTitle className="text-center text-yellow-800">
-                    Em Andamento ({filteredItems.filter(i => i.status === "in_progress" || i.status === "paused").length})
+                    Em Andamento ({sortedQueueItems.filter(i => i.status === "in_progress" || i.status === "paused").length})
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-3 max-h-[600px] overflow-y-auto">
-                  {filteredItems
+                  {sortedQueueItems
                     .filter(item => item.status === "in_progress" || item.status === "paused")
                     .map(item => (
                       <Card key={item.id} className={`mb-3 shadow-sm hover:shadow-md transition-shadow ${item.status === "paused" ? "border-l-4 border-amber-500" : ""}`}>
@@ -787,7 +838,7 @@ export default function ServiceQueue() {
                         </CardContent>
                       </Card>
                     ))}
-                  {filteredItems.filter(i => i.status === "in_progress" || i.status === "paused").length === 0 && (
+                  {sortedQueueItems.filter(i => i.status === "in_progress" || i.status === "paused").length === 0 && (
                     <div className="text-center py-8 text-gray-500">
                       Nenhum serviço em andamento
                     </div>
@@ -798,12 +849,18 @@ export default function ServiceQueue() {
               <Card>
                 <CardHeader className="pb-2 bg-green-50">
                   <CardTitle className="text-center text-green-800">
-                    Concluídos ({filteredItems.filter(i => i.status === "completed").length})
+                    Concluídos ({sortedQueueItems.filter(i => i.status === "completed").length})
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-3 max-h-[600px] overflow-y-auto">
-                  {filteredItems
+                  {sortedQueueItems
                     .filter(item => item.status === "completed")
+                    .sort((a, b) => {
+                      const timeA = a.end_time ? new Date(a.end_time).getTime() : 0;
+                      const timeB = b.end_time ? new Date(b.end_time).getTime() : 0;
+                      // Ordena do mais recente (maior tempo) para o mais antigo (menor tempo)
+                      return timeB - timeA; 
+                    })
                     .map(item => (
                       <Card key={item.id} className="mb-3 shadow-sm opacity-90">
                         <CardContent className="p-3">
@@ -818,7 +875,7 @@ export default function ServiceQueue() {
                               </div>
                               <div className="text-sm text-gray-600 mb-2">{item.service?.name}</div>
                               <div className="text-xs text-gray-500 mb-1">{item.customer?.full_name}</div>
-                              {item.start_time && item.end_time && (
+                              {item.start_time && !isNaN(new Date(item.start_time).getTime()) && item.end_time && !isNaN(new Date(item.end_time).getTime()) && (
                                 <div className="text-xs text-gray-400">
                                   Duração: {format(new Date(item.start_time), "HH:mm")} - {format(new Date(item.end_time), "HH:mm")}
                                 </div>
@@ -828,7 +885,7 @@ export default function ServiceQueue() {
                         </CardContent>
                       </Card>
                     ))}
-                  {filteredItems.filter(i => i.status === "completed").length === 0 && (
+                  {sortedQueueItems.filter(i => i.status === "completed").length === 0 && (
                     <div className="text-center py-8 text-gray-500">
                       Nenhum serviço concluído
                     </div>

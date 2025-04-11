@@ -1,17 +1,27 @@
 import { useState, useEffect, useCallback } from 'react';
-import { MedicationTask, Pet, Customer, MedicalRecord, Medication } from '@/api/entities';
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, CheckCircle, Clock, X } from 'lucide-react';
+import MedicationAdministrationModal from '@/components/medication/MedicationAdministrationModal';
+
+// Adicionar importações dos serviços Firestore
+import { medicationTaskService } from '@/api/firebase/medicationTaskService';
+import { petService } from '@/api/firebase/petService';
+import { customerService } from '@/api/firebase/customerService';
+import { medicalRecordService } from '@/api/firebase/medicalRecordService';
 
 export default function MedicationQueue() {
-  const [tasks, setTasks] = useState([]);
+  const [groupedTasks, setGroupedTasks] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("pending");
   const { toast } = useToast();
+  
+  // Estados para controlar o modal
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedPetGroup, setSelectedPetGroup] = useState(null);
 
   const fetchTasks = useCallback(async () => {
     console.log("[MedicationQueue] Iniciando fetchTasks...");
@@ -25,75 +35,88 @@ export default function MedicationQueue() {
          return;
       }
       console.log(`[MedicationQueue] Buscando tarefas para tenant: ${tenantId}`);
-      const allTasks = await MedicationTask.filter({ tenant_id: tenantId });
+      const allTasks = await medicationTaskService.filter({ tenant_id: tenantId });
       console.log("[MedicationQueue] Tarefas recebidas:", allTasks);
       
       if (!allTasks || allTasks.length === 0) {
         console.log("[MedicationQueue] Nenhuma tarefa encontrada.");
-        setTasks([]);
+        setGroupedTasks({});
       } else {
           console.log("[MedicationQueue] Enriquecendo tarefas...");
           const enrichedTasks = await Promise.all(
             allTasks.map(async (task) => {
               let pet = null;
               let owner = null;
-              let medication = null;
               let petName = 'Dados Inválidos';
               let ownerName = 'Dados Inválidos';
-              let medicationName = 'Nome Indisponível';
-              let details = task.dosage && task.frequency ? `${task.dosage} (${task.frequency})` : task.details || '-';
+              let ownerId = null;
+              let medicationName = task.medication_name || 'Medicação S/ Nome';
+              let details = task.details || '-';
 
               try {
-                if (!task || !task.pet_id) {
-                  console.warn("[MedicationQueue] Tarefa inválida ou sem pet_id:", task);
+                const currentPetId = task.pet_id || task.petId;
+                if (!task || !currentPetId) {
+                  console.warn("[MedicationQueue] Tarefa inválida ou sem pet_id/petId:", task);
+                  petName = 'Pet ID Faltando';
+                  ownerName = 'Tutor Desconhecido';
                 } else {
-                    console.log(`[MedicationQueue] Buscando Pet ID: ${task.pet_id}`);
-                    pet = await Pet.get(task.pet_id);
+                    console.log(`[MedicationQueue] Buscando Pet ID: ${currentPetId}`);
+                    pet = await petService.get(currentPetId);
                     console.log(`[MedicationQueue] Pet encontrado:`, pet);
                     petName = pet?.name || 'Pet Desconhecido';
 
                     if (pet && pet.owner_id) {
                       console.log(`[MedicationQueue] Buscando Tutor ID: ${pet.owner_id}`);
-                      owner = await Customer.get(pet.owner_id);
+                      owner = await customerService.get(pet.owner_id);
                       console.log(`[MedicationQueue] Tutor encontrado:`, owner);
                       ownerName = owner?.full_name || 'Tutor Desconhecido';
+                      ownerId = owner?.id;
+                    } else if (pet) {
+                      console.warn(`[MedicationQueue] Pet ${currentPetId} encontrado, mas sem owner_id.`);
+                      ownerName = 'Tutor S/ ID';
                     } else {
-                      console.warn(`[MedicationQueue] Pet ou owner_id não encontrado para tarefa ${task.id}`);
-                    }
-
-                    if (task.medication_id) {
-                        try {
-                            console.log(`[MedicationQueue] Buscando Medication ID: ${task.medication_id}`);
-                            medication = await Medication.get(task.medication_id);
-                            console.log(`[MedicationQueue] Medicação encontrada:`, medication);
-                            medicationName = medication?.name || medicationName;
-                            if (medication?.description && details === '-') {
-                                details = medication.description;
-                            }
-                        } catch (medError) {
-                            console.error(`[MedicationQueue] Erro ao buscar medicação ${task.medication_id} para tarefa ${task.id}:`, medError);
-                        }
-                    } else {
-                         console.warn(`[MedicationQueue] medication_id não encontrado para tarefa ${task.id}`);
+                      console.warn(`[MedicationQueue] Pet com ID ${currentPetId} não encontrado para tarefa ${task.id}`);
+                      petName = 'Pet Não Encontrado';
+                      ownerName = 'Tutor Desconhecido';
                     }
                 }
               } catch (fetchError) {
                 console.error(`[MedicationQueue] Erro ao buscar dados associados para tarefa ${task.id}:`, fetchError);
-                petName = 'Erro (Pet)';
-                ownerName = 'Erro (Tutor)';
+                if (petName === 'Dados Inválidos') petName = 'Erro (Pet)';
+                if (ownerName === 'Dados Inválidos') ownerName = 'Erro (Tutor)';
               }
               
               return {
                   ...task,
                   petName,
                   ownerName,
+                  ownerId,
                   medicationName,
-                  details
+                  details,
+                  petPhotoUrl: pet?.photo_url
                 };
             })
           );
           console.log("[MedicationQueue] Tarefas enriquecidas:", enrichedTasks);
-          setTasks(enrichedTasks);
+          
+          // Agrupar tarefas por petId
+          const grouped = enrichedTasks.reduce((acc, task) => {
+            const petId = task.pet_id || task.petId || 'unknown';
+            if (!acc[petId]) {
+              acc[petId] = {
+                petName: task.petName,
+                ownerName: task.ownerName,
+                ownerId: task.ownerId,
+                petId: petId,
+                petPhotoUrl: task.petPhotoUrl,
+                tasks: []
+              };
+            }
+            acc[petId].tasks.push(task);
+            return acc;
+          }, {});
+          console.log("[MedicationQueue] Tarefas agrupadas por pet:", grouped);
+          setGroupedTasks(grouped); // Atualizar estado com dados agrupados
       }
     } catch (err) {
       console.error("[MedicationQueue] Erro GERAL no fetchTasks:", err);
@@ -116,14 +139,14 @@ export default function MedicationQueue() {
   const handleFinishAdministration = async (taskId) => {
     console.log(`[MedicationQueue] Tentando finalizar tarefa ${taskId}`);
     try {
-      const taskToComplete = tasks.find(t => t.id === taskId) || await MedicationTask.get(taskId);
+      const taskToComplete = groupedTasks[taskId]?.tasks.find(t => t.id === taskId) || await medicationTaskService.get(taskId);
       if (!taskToComplete) {
           throw new Error("Tarefa não encontrada para registrar no histórico.");
       }
       console.log("[MedicationQueue] Detalhes da tarefa para histórico:", taskToComplete);
 
-      await MedicationTask.update(taskId, { 
-          status: 'administered', 
+      await medicationTaskService.update(taskId, { 
+          status: 'administrada',
           end_time: new Date().toISOString()
       });
       toast({
@@ -133,7 +156,7 @@ export default function MedicationQueue() {
       });
       
       try {
-         await MedicalRecord.create({
+         await medicalRecordService.create({
              tenant_id: taskToComplete.tenant_id,
              pet_id: taskToComplete.pet_id,
              record_date: new Date().toISOString(),
@@ -162,7 +185,7 @@ export default function MedicationQueue() {
   const handleCancelTask = async (taskId) => {
     console.log(`[MedicationQueue] Tentando cancelar tarefa ${taskId}`);
     try {
-      await MedicationTask.update(taskId, { status: 'cancelled' }); 
+      await medicationTaskService.update(taskId, { status: 'cancelada' });
       toast({
         title: "Sucesso",
         description: "Medicação cancelada com sucesso.",
@@ -181,8 +204,8 @@ export default function MedicationQueue() {
   const handleStartAdministration = async (taskId) => {
     console.log(`[MedicationQueue] Tentando iniciar tarefa ${taskId}`);
     try {
-      await MedicationTask.update(taskId, { 
-          status: 'in_progress',
+      await medicationTaskService.update(taskId, { 
+          status: 'em_andamento',
           start_time: new Date().toISOString()
       });
       toast({
@@ -200,18 +223,52 @@ export default function MedicationQueue() {
     }
   };
 
-  const getFilteredTasks = (status) => {
-      if (status === 'pending') {
-          return tasks.filter(task => task.status === 'pending' || task.status === 'in_progress');
-      }
-      return tasks.filter(task => task.status === status);
+  // Função para abrir o modal com os dados do pet selecionado
+  const handleStartPetAdministration = (petGroup) => {
+    console.log("[MedicationQueue] Abrindo modal para:", petGroup);
+    setSelectedPetGroup(petGroup);
+    setIsModalOpen(true);
   };
 
-  const renderTaskTable = (tasks) => {
-    if (tasks.length === 0) {
+  // Função para ser chamada pelo modal após a conclusão da administração
+  const handleAdministrationComplete = () => {
+    console.log("[MedicationQueue] Administração concluída, atualizando lista...");
+    fetchTasks(); // Recarrega os dados
+  };
+
+  const getFilteredTasks = (status) => {
+      // Esta função agora precisa operar sobre os dados agrupados
+      console.log(`[MedicationQueue] getFilteredTasks chamada com status: ${status}`);
+      const lowerCaseStatus = status.toLowerCase();
+      
+      const filteredGroups = Object.entries(groupedTasks)
+        .map(([petId, group]) => {
+          let tasksInGroup = [];
+          if (lowerCaseStatus === 'pending') {
+              tasksInGroup = group.tasks.filter(task => 
+                  task.status?.toLowerCase() === 'pendente' || 
+                  task.status?.toLowerCase() === 'em_andamento'
+              );
+          } else if (lowerCaseStatus === 'administered') {
+              tasksInGroup = group.tasks.filter(task => task.status?.toLowerCase() === 'administrada');
+          } else if (lowerCaseStatus === 'cancelled') {
+              tasksInGroup = group.tasks.filter(task => task.status?.toLowerCase() === 'cancelada');
+          }
+          
+          // Retorna o grupo apenas se ele tiver tarefas que correspondem ao status
+          return tasksInGroup.length > 0 ? { ...group, tasks: tasksInGroup } : null;
+        })
+        .filter(group => group !== null); // Remove grupos vazios
+
+      console.log(`[MedicationQueue] Grupos filtrados para status '${status}':`, filteredGroups);
+      return filteredGroups;
+  };
+
+  const renderTaskTable = (groups) => {
+    if (groups.length === 0) {
       return (
         <div className="text-center text-muted-foreground py-8">
-          Nenhuma medicação {activeTab === "pending" ? "pendente" : activeTab === "administered" ? "administrada" : "cancelada"} no momento.
+          Nenhum pet com medicações {activeTab === "pending" ? "pendentes" : activeTab === "administered" ? "administradas" : "canceladas"} no momento.
         </div>
       );
     }
@@ -222,53 +279,29 @@ export default function MedicationQueue() {
           <TableRow>
             <TableHead>Pet</TableHead>
             <TableHead>Tutor</TableHead>
-            <TableHead>Medicação</TableHead>
-            <TableHead>Detalhes</TableHead>
+            <TableHead>Medicações Pendentes</TableHead>
             <TableHead className="text-right">Ações</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {tasks.map((task) => (
-            <TableRow key={task.id}>
-              <TableCell className="font-medium">{task.petName}</TableCell>
-              <TableCell>{task.ownerName}</TableCell>
-              <TableCell>{task.medicationName}</TableCell>
-              <TableCell className="text-sm text-muted-foreground">{task.details}</TableCell>
+          {groups.map((group) => (
+            <TableRow key={group.petId}>
+              <TableCell className="font-medium">{group.petName}</TableCell>
+              <TableCell>{group.ownerName}</TableCell>
+              <TableCell>{group.tasks.length}</TableCell> 
               <TableCell className="text-right">
-                <div className="flex justify-end gap-2">
-                  {task.status === 'pending' && (
-                      <Button
-                          size="sm"
-                          onClick={() => handleStartAdministration(task.id)}
-                          variant="secondary"
-                      >
-                          <Clock className="h-4 w-4 mr-2" />
-                          Iniciar
-                      </Button>
-                  )}
-                  {task.status === 'in_progress' && (
-                      <Button
-                          size="sm"
-                          onClick={() => handleFinishAdministration(task.id)}
-                          variant="outline"
-                          className="text-green-600 border-green-600 hover:bg-green-50"
-                      >
-                          <CheckCircle className="h-4 w-4 mr-2" />
-                          Finalizar
-                      </Button>
-                  )}
-                  {(task.status === 'pending' || task.status === 'in_progress') && (
-                      <Button
-                          size="sm"
-                          onClick={() => handleCancelTask(task.id)}
-                          variant="outline"
-                          className="text-destructive hover:bg-red-50"
-                      >
-                          <X className="h-4 w-4 mr-2" />
-                          Cancelar
-                      </Button>
-                  )}
-                </div>
+                {/* Renderiza o botão apenas na aba 'pending' */}
+                {activeTab === 'pending' && (
+                  <Button
+                    size="sm"
+                    onClick={() => handleStartPetAdministration(group)}
+                    variant="secondary"
+                  >
+                    <Clock className="h-4 w-4 mr-2" />
+                    Iniciar Administração
+                  </Button>
+                )}
+                {/* Se houver outras ações para outras abas, elas viriam aqui */}
               </TableCell>
             </TableRow>
           ))}
@@ -322,6 +355,16 @@ export default function MedicationQueue() {
           )}
         </CardContent>
       </Card>
+      
+      {/* Renderizar o Modal */}
+      <MedicationAdministrationModal 
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)} 
+        petGroup={selectedPetGroup}
+        // TODO: Passar uma função de callback para quando a administração for concluída
+        // onAdministrationComplete={handleAdministrationComplete}
+        onAdministrationComplete={handleAdministrationComplete} // Passar a função de callback
+      />
     </div>
   );
 }

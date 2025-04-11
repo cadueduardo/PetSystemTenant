@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,19 +17,43 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getRemovalReasons, addRemovalReason } from '@/api/mockData'; // Importa as funções do mockData
+import { CancellationReason } from '@/api/entities';
+import { toast } from "@/components/ui/use-toast";
+import PropTypes from 'prop-types';
 
 export default function RemoveFromQueueModal({ isOpen, onClose, onConfirm, item }) {
   const [reasons, setReasons] = useState([]);
+  const [isLoadingReasons, setIsLoadingReasons] = useState(false);
   const [selectedReason, setSelectedReason] = useState('');
   const [otherReason, setOtherReason] = useState('');
   const [showOtherInput, setShowOtherInput] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
-      // Carrega os motivos quando o modal abre
-      const loadedReasons = getRemovalReasons();
-      setReasons(loadedReasons);
+      // Carrega os motivos do Firebase quando o modal abre
+      const loadReasons = async () => {
+        setIsLoadingReasons(true);
+        try {
+          const tenantId = localStorage.getItem('current_tenant');
+          if (!tenantId) {
+             console.error("Tenant ID not found for loading reasons.");
+             toast({ title: "Erro", description: "ID da clínica não encontrado.", variant: "destructive" });
+             setReasons([]);
+             return;
+          }
+          const loadedReasons = await CancellationReason.list(tenantId);
+          // Ensure loadedReasons is an array before setting
+          setReasons(Array.isArray(loadedReasons) ? loadedReasons : []);
+        } catch (error) {
+           console.error("Error loading cancellation reasons:", error);
+           toast({ title: "Erro", description: "Não foi possível carregar os motivos.", variant: "destructive" });
+           setReasons([]); // Set empty on error
+        } finally {
+            setIsLoadingReasons(false);
+        }
+      };
+      loadReasons();
+      
       // Reseta os estados
       setSelectedReason('');
       setOtherReason('');
@@ -82,14 +106,14 @@ export default function RemoveFromQueueModal({ isOpen, onClose, onConfirm, item 
         <div className="py-4 space-y-4">
           <div className="space-y-2">
             <Label htmlFor="reason-select">Motivo da Remoção</Label>
-            <Select value={selectedReason} onValueChange={handleReasonChange}>
+            <Select value={selectedReason} onValueChange={handleReasonChange} disabled={isLoadingReasons}>
               <SelectTrigger id="reason-select">
-                <SelectValue placeholder="Selecione um motivo..." />
+                <SelectValue placeholder={isLoadingReasons ? "Carregando motivos..." : "Selecione um motivo..."} />
               </SelectTrigger>
               <SelectContent>
-                {reasons.map((reason, index) => (
-                  <SelectItem key={index} value={reason}>
-                    {reason}
+                {reasons.map((reasonDoc) => (
+                  <SelectItem key={reasonDoc.id} value={reasonDoc.reason}>
+                    {reasonDoc.reason}
                   </SelectItem>
                 ))}
                 <SelectItem value="__other__">Outros...</SelectItem>
@@ -124,4 +148,16 @@ export default function RemoveFromQueueModal({ isOpen, onClose, onConfirm, item 
       </DialogContent>
     </Dialog>
   );
-} 
+}
+
+RemoveFromQueueModal.propTypes = {
+    isOpen: PropTypes.bool.isRequired,
+    onClose: PropTypes.func.isRequired,
+    onConfirm: PropTypes.func.isRequired,
+    item: PropTypes.shape({
+        pet: PropTypes.shape({
+            name: PropTypes.string
+        })
+        // Add other expected properties of item if needed
+    })
+}; 

@@ -14,7 +14,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PlusCircle, Trash2, Loader2 } from 'lucide-react';
-import { Prescription } from '@/api/entities'; // Importa o mock que criamos
 import { useToast } from "@/components/ui/use-toast";
 import PropTypes from 'prop-types'; // <<< IMPORTAR
 
@@ -31,6 +30,7 @@ const usePrescriptionItems = (initialItems = [{ itemName: '', details: '', isCon
   };
 
   const updateItem = (index, field, value) => {
+    console.log(`[PrescriptionModal - usePrescriptionItems] updateItem(${index}, '${field}', '${value}')`); // Log para depuração
     const newItems = [...items];
     newItems[index] = { ...newItems[index], [field]: value };
     setItems(newItems);
@@ -49,6 +49,7 @@ export function PrescriptionModal({ isOpen, onClose, appointmentId, petId, onSav
   const [generalInstructions, setGeneralInstructions] = useState('');
   const { items, addItem, removeItem, updateItem, resetItems } = usePrescriptionItems();
   const [isSaving, setIsSaving] = useState(false);
+  const [requiresFollowUp, setRequiresFollowUp] = useState(false);
 
   const handleSave = async () => {
     if (!appointmentId || !petId) {
@@ -65,29 +66,37 @@ export function PrescriptionModal({ isOpen, onClose, appointmentId, petId, onSav
       appointmentId,
       petId,
       type: prescriptionType,
-      items: items.filter(item => item.itemName.trim()), // Envia apenas itens com nome
-      generalInstructions: generalInstructions.trim(),
+      items: items.filter(item => item.itemName.trim()),
+      observations: generalInstructions.trim(),
+      requiresFollowUp: requiresFollowUp,
       // vetInfo será adicionado pelo mock/backend
     };
 
-    try {
-      const savedPrescription = await Prescription.create(prescriptionData);
-      console.log("Prescrição salva:", savedPrescription);
-      toast({ title: "Sucesso", description: "Prescrição salva." });
-      resetForm();
-      if (onSaveSuccess) onSaveSuccess(savedPrescription); // Chama callback se fornecido
-      onClose(); // Fecha o modal
-    } catch (error) {
-      console.error("Erro ao salvar prescrição:", error);
-      toast({ title: "Erro ao Salvar", description: error.message || "Não foi possível salvar a prescrição.", variant: "destructive" });
-    } finally {
-      setIsSaving(false);
+    console.log("[PrescriptionModal] Dados para salvar (detalhado):", JSON.stringify(prescriptionData, null, 2));
+    if (onSaveSuccess) {
+        try {
+            setIsSaving(true);
+            await onSaveSuccess(prescriptionData); // Chama handleSavePrescription
+            resetForm();
+            onClose(); // Fecha o modal APÓS sucesso
+        } catch (error) {
+             // Erro já tratado em handleSavePrescription, mas podemos logar aqui também
+             console.error("[PrescriptionModal] Erro reportado por onSaveSuccess:", error);
+             // Toast de erro já deve ter sido mostrado pelo pai
+        } finally {
+            setIsSaving(false);
+        }
+    } else {
+        console.error("[PrescriptionModal] Função onSaveSuccess não fornecida!");
+        toast({ title: "Erro de Configuração", description: "Não foi possível comunicar o salvamento.", variant: "destructive" });
+        setIsSaving(false);
     }
   };
 
   const resetForm = () => {
     setPrescriptionType('Comum');
     setGeneralInstructions('');
+    setRequiresFollowUp(false);
     resetItems();
   }
 
@@ -201,16 +210,28 @@ export function PrescriptionModal({ isOpen, onClose, appointmentId, petId, onSav
             </div>
           </div>
 
-          {/* Instruções Gerais */}
+          {/* Observações (antes Instruções Gerais) */}
           <div className="col-span-4 mt-2">
-             <Label htmlFor="general-instructions">Instruções Gerais</Label>
+             <Label htmlFor="observations">Observações</Label>
              <Textarea
-                id="general-instructions"
+                id="observations"
                 value={generalInstructions}
                 onChange={(e) => setGeneralInstructions(e.target.value)}
-                placeholder="Observações adicionais, retornos, etc."
+                placeholder="Observações adicionais sobre a prescrição..."
                 className="mt-1"
              />
+          </div>
+          
+          {/* Requer Retorno */}
+          <div className="col-span-4 flex items-center space-x-2 mt-2">
+            <Checkbox 
+              id="requires-follow-up" 
+              checked={requiresFollowUp}
+              onCheckedChange={setRequiresFollowUp}
+            />
+            <Label htmlFor="requires-follow-up" className="cursor-pointer">
+              Requer Retorno?
+            </Label>
           </div>
 
         </div>

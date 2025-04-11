@@ -40,7 +40,7 @@ import EditCustomer from "./EditCustomer";
 
 import EditAppointment from "./EditAppointment";
 
-import AppointmentForm from "./AppointmentForm";
+import AppointmentForm from "@/components/appointment/AppointmentForm";
 
 import MedicalRecordForm from "./MedicalRecordForm";
 

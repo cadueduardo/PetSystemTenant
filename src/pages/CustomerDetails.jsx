@@ -1,13 +1,17 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Customer, Pet } from "@/api/entities";
+import { Customer, Pet, CancellationReason } from "@/api/entities";
 import { createPageUrl } from "@/utils";
 import { toast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter, DialogClose } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
-import { Dog, CalendarDays as Calendar, Plus, Edit, ArrowLeft, User, Mail, Phone, MapPin, Loader2 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dog, CalendarDays as Calendar, Plus, Edit, ArrowLeft, User, Mail, Phone, MapPin, Loader2, Settings, Trash2, AlertCircle, ToggleRight, UserX } from "lucide-react";
 import PetForm from "@/components/pets/PetForm";
 import CustomerForm from "@/components/customers/CustomerForm";
 import PetAvatar from "@/components/pets/PetAvatar";
@@ -22,10 +26,87 @@ export default function CustomerDetailsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [showNewPetDialog, setShowNewPetDialog] = useState(false);
   const [showEditCustomerDialog, setShowEditCustomerDialog] = useState(false);
+  const [showInactivateDialog, setShowInactivateDialog] = useState(false);
+  const [reasons, setReasons] = useState([]);
+  const [isLoadingReasons, setIsLoadingReasons] = useState(false);
+  const [selectedReason, setSelectedReason] = useState('');
+  const [otherReason, setOtherReason] = useState('');
+  const [showOtherInput, setShowOtherInput] = useState(false);
+  const [inactivationReasonName, setInactivationReasonName] = useState('Carregando motivo...');
 
   useEffect(() => {
     loadData();
   }, [id]);
+
+  useEffect(() => {
+    if (showInactivateDialog) {
+      const loadReasons = async () => {
+        setIsLoadingReasons(true);
+        try {
+          const tenantId = localStorage.getItem('current_tenant');
+          if (!tenantId) {
+             console.error("Tenant ID not found for loading reasons.");
+             toast({ title: "Erro", description: "ID da clínica não encontrado.", variant: "destructive" });
+             setReasons([]);
+             return;
+          }
+          console.log("[CustomerDetailsPage] Loading cancellation reasons for tenant:", tenantId);
+          const loadedReasons = await CancellationReason.list(tenantId);
+          console.log("[CustomerDetailsPage] Reasons loaded:", loadedReasons);
+          setReasons(Array.isArray(loadedReasons) ? loadedReasons : []);
+        } catch (error) {
+           console.error("Error loading cancellation reasons:", error);
+           toast({ title: "Erro", description: "Não foi possível carregar os motivos.", variant: "destructive" });
+           setReasons([]); 
+        } finally {
+            setIsLoadingReasons(false);
+        }
+      };
+      loadReasons();
+      
+      setSelectedReason('');
+      setOtherReason('');
+      setShowOtherInput(false);
+    }
+  }, [showInactivateDialog]);
+
+  useEffect(() => {
+    const fetchInactivationReason = async () => {
+      if (customer?.status === 'inactive' && customer.inactivation_reason_id) {
+        console.log("[CustomerDetailsPage] Fetching inactivation reason name for ID:", customer.inactivation_reason_id);
+        setInactivationReasonName('Carregando motivo...');
+        try {
+          const reasonDoc = await CancellationReason.get(customer.inactivation_reason_id);
+          if (reasonDoc && reasonDoc.reason) {
+             console.log("[CustomerDetailsPage] Reason name found:", reasonDoc.reason);
+             setInactivationReasonName(reasonDoc.reason);
+          } else {
+             console.warn("Reason document or reason field not found for ID:", customer.inactivation_reason_id);
+             setInactivationReasonName('Motivo não encontrado');
+          }
+        } catch (error) {
+          console.error("Error fetching inactivation reason name:", error);
+          setInactivationReasonName('Erro ao buscar motivo');
+        }
+      } else {
+        setInactivationReasonName('');
+      }
+    };
+
+    fetchInactivationReason();
+
+  }, [customer]);
+
+  const handleReasonChange = (value) => {
+    console.log("[CustomerDetailsPage] Reason selected:", value);
+    setSelectedReason(value);
+    if (value === '__other__') {
+      setShowOtherInput(true);
+    } else {
+      setShowOtherInput(false);
+      setOtherReason(''); 
+    }
+  };
 
   const loadData = async () => {
     console.log('[CustomerDetailsPage] loadData iniciado com id:', id);
@@ -104,7 +185,85 @@ export default function CustomerDetailsPage() {
     navigate(`/tenant/pet/${petId}?store=${storeParam}`);
   };
 
-  if (isLoading) {
+  const handleInactivate = async () => {
+    if (!selectedReason || (selectedReason === '__other__' && !otherReason.trim())) {
+       toast({ title: "Erro", description: "Selecione ou digite um motivo válido.", variant: "destructive" });
+       return;
+    }
+    
+    let finalReasonId = selectedReason;
+    const reasonValue = otherReason.trim();
+    const tenantId = localStorage.getItem('current_tenant');
+
+    if (!tenantId) {
+       toast({ title: "Erro", description: "Tenant não identificado.", variant: "destructive" });
+       return;
+    }
+
+    setIsLoading(true); 
+    try {
+      if (finalReasonId === '__other__') {
+         console.log("[CustomerDetailsPage] Creating new 'other' reason:", reasonValue);
+         const newReason = await CancellationReason.create({
+           reason: reasonValue,
+           tenant_id: tenantId
+         });
+         finalReasonId = newReason.id;
+         console.log("[CustomerDetailsPage] New reason created with ID:", finalReasonId);
+      }
+
+      console.log(`[CustomerDetailsPage] Inactivating customer ${id} with reason ID: ${finalReasonId}`);
+      await Customer.inactivate(id, finalReasonId);
+
+      toast({
+        title: "Sucesso",
+        description: "Cliente inativado com sucesso!",
+      });
+      setShowInactivateDialog(false);
+      loadData(); 
+
+    } catch (error) {
+      console.error("Erro ao inativar cliente:", error);
+      toast({
+        title: "Erro",
+        description: `Não foi possível inativar o cliente: ${error.message}`,
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoading(false); 
+    }
+  };
+
+  // <<< Função auxiliar para formatar Timestamp do Firebase >>>
+  const formatDateSafe = (timestamp) => {
+    // Tenta usar o timestamp diretamente se for válido
+    if (timestamp && typeof timestamp.toDate === 'function') { 
+      try {
+        // <<< Adiciona HH:mm para mostrar horário >>>
+        return format(timestamp.toDate(), 'dd/MM/yyyy HH:mm'); 
+      } catch (e) {
+        console.error("Erro ao formatar data (Timestamp inválido?):", timestamp, e);
+        return "Data inválida";
+      }
+    } 
+    // Fallback se o timestamp não for um objeto Timestamp válido
+    // Isso pode acontecer se for string ou número, ou se o campo não existir
+    console.warn("[formatDateSafe] Recebido valor não-Timestamp ou nulo:", timestamp);
+    // Tentativa de converter se for uma string/número que possa ser data (menos ideal)
+    try {
+       const date = new Date(timestamp); 
+       if (!isNaN(date.getTime())) { 
+            return format(date, 'dd/MM/yyyy HH:mm');
+       }
+    } catch (e) {
+        // Ignora o erro se a conversão falhar, prossegue para o retorno padrão
+        console.log("Ignorando erro ao tentar converter data não-timestamp:", e); 
+    }
+    
+    return "Data não informada"; // Retorno padrão
+  };
+
+  if (isLoading && !customer) {
     return (
       <div className="flex justify-center items-center h-96">
         <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
@@ -115,6 +274,8 @@ export default function CustomerDetailsPage() {
   if (!customer) {
     return null;
   }
+
+  const isInactive = customer?.status === 'inactive';
 
   return (
     <div className="p-6">
@@ -129,15 +290,81 @@ export default function CustomerDetailsPage() {
             Voltar
           </Button>
           <div>
-            <h1 className="text-2xl font-bold">{customer.full_name}</h1>
-            <p className="text-gray-500">Cliente desde {new Date(customer.created_date).toLocaleDateString()}</p>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              {customer.full_name}
+              {isInactive && <Badge variant="destructive">Inativo</Badge>}
+            </h1>
+            <p className="text-sm text-gray-500">
+             Cliente desde {formatDateSafe(customer.created_at || customer.created_date)}
+             {/* Mostra data de reativação se ativo e tiver o campo */}
+             {customer.status !== 'inactive' && customer.last_reactivation_at &&
+               ` | Reativado em: ${formatDateSafe(customer.last_reactivation_at)}`
+             } {/* <--- Esta chave pode estar causando o problema */}
+          </p>
           </div>
         </div>
-        <Button onClick={() => setShowEditCustomerDialog(true)}>
-          <Edit className="h-4 w-4 mr-2" />
-          Editar Cliente
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" disabled={isLoading}>
+              <Settings className="h-4 w-4 mr-2" />
+              Ações
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {isInactive ? (
+              <DropdownMenuItem 
+                onClick={() => setShowEditCustomerDialog(true)}
+                disabled={isLoading}
+              >
+                <ToggleRight className="mr-2 h-4 w-4" />
+                <span>Reativar / Editar</span>
+              </DropdownMenuItem>
+            ) : (
+              <>
+                <DropdownMenuItem 
+                  onClick={() => setShowEditCustomerDialog(true)} 
+                  disabled={isLoading} 
+                >
+                  <Edit className="mr-2 h-4 w-4" />
+                  <span>Editar Dados</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem 
+                  onClick={() => setShowInactivateDialog(true)}
+                  disabled={isLoading}
+                  className="text-red-600 focus:text-red-700 focus:bg-red-50"
+                >
+                  <UserX className="mr-2 h-4 w-4" />
+                  <span>Inativar Cliente</span>
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
+
+      {/* Card de Histórico de Inativação - Mostra sempre que houver data */}
+      {customer.inactivation_date && (
+        <Card className={`mb-6 ${isInactive ? 'border-red-200 bg-red-50' : 'border-gray-200 bg-gray-50'}`}> {/* Muda estilo se ativo */}
+          <CardHeader>
+             {/* Mantém título vermelho se inativo, senão um título neutro */}
+            <CardTitle className={`${isInactive ? 'text-red-700' : 'text-gray-700'} flex items-center gap-2`}>
+              {isInactive ? <AlertCircle className="h-5 w-5"/> : <Calendar className="h-5 w-5"/> } 
+              Histórico de Status
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 text-sm">
+             <p><strong>Última Inativação:</strong> {formatDateSafe(customer.inactivation_date)}</p>
+             {/* Só mostra o motivo se ele existir (pode não ter sido buscado ainda se reativado recentemente) */}
+             {inactivationReasonName && 
+                <p><strong>Motivo:</strong> {inactivationReasonName}</p> 
+             }
+             {/* Mostra reativação se aplicável */}
+             {customer.last_reactivation_at &&
+                <p><strong>Última Reativação:</strong> {formatDateSafe(customer.last_reactivation_at)}</p>
+             }
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
         <Card>
@@ -325,6 +552,64 @@ export default function CustomerDetailsPage() {
               <Button type="button" variant="outline">Cancelar</Button>
             </DialogClose>
             <Button type="submit" form="customer-form">Salvar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showInactivateDialog} onOpenChange={setShowInactivateDialog}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="text-red-600">Inativar Cliente</DialogTitle>
+            <DialogDescription>
+              Tem certeza que deseja inativar o cliente <strong>{customer?.full_name}</strong>? 
+              Esta ação não pode ser desfeita facilmente. Selecione o motivo abaixo.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4 space-y-4">
+             <div className="space-y-2">
+               <Label htmlFor="reason-select">Motivo da Inativação*</Label>
+               <Select value={selectedReason} onValueChange={handleReasonChange} disabled={isLoadingReasons}>
+                 <SelectTrigger id="reason-select">
+                   <SelectValue placeholder={isLoadingReasons ? "Carregando motivos..." : "Selecione um motivo..."} />
+                 </SelectTrigger>
+                 <SelectContent>
+                   {reasons.map((reasonDoc) => (
+                     <SelectItem key={reasonDoc.id} value={reasonDoc.id}> 
+                       {reasonDoc.reason} 
+                     </SelectItem>
+                   ))}
+                   <SelectItem value="__other__">Outros...</SelectItem>
+                 </SelectContent>
+               </Select>
+             </div>
+
+             {showOtherInput && (
+               <div className="space-y-2">
+                 <Label htmlFor="other-reason">Especificar Motivo*</Label>
+                 <Input 
+                   id="other-reason"
+                   value={otherReason}
+                   onChange={(e) => setOtherReason(e.target.value)}
+                   placeholder="Digite o novo motivo..."
+                   disabled={isLoading}
+                 />
+               </div>
+             )}
+           </div>
+
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" disabled={isLoading}>Cancelar</Button>
+            </DialogClose>
+            <Button 
+              variant="destructive" 
+              onClick={handleInactivate} 
+              disabled={isLoading || isLoadingReasons || !selectedReason || (selectedReason === '__other__' && !otherReason.trim())}
+            >
+               {isLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />} 
+               Confirmar Inativação
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

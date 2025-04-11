@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/use-toast";
 import { Loader2 } from "lucide-react";
+import { serverTimestamp } from "firebase/firestore";
 
 export default function CustomerForm({ customer, onSuccess }) {
   // console.log('[CustomerForm] Renderizando...', { customerProp: customer });
@@ -78,18 +79,33 @@ export default function CustomerForm({ customer, onSuccess }) {
     
     try {
       const currentTenant = localStorage.getItem('current_tenant') || "default";
-      const customerData = {
+      let customerData = {
         ...formData,
         tenant_id: currentTenant
       };
 
+      let wasReactivated = false;
+
       if (customer) {
+        if (customer.status === 'inactive') {
+          console.log("[CustomerForm] Reativando cliente. Removendo campos de inativação e adicionando data de reativação.");
+          customerData.status = 'active';
+          delete customerData.inactivation_date;
+          delete customerData.inactivation_reason_id;
+          customerData.last_reactivation_at = serverTimestamp();
+          wasReactivated = true;
+        }
+        
+        console.log("[CustomerForm] Chamando Customer.update com:", customerData);
         await Customer.update(customer.id, customerData);
         toast({
           title: "Sucesso",
-          description: "Cliente atualizado com sucesso!"
+          description: `Cliente ${wasReactivated ? 'reativado' : 'atualizado'} com sucesso!`
         });
       } else {
+        customerData.status = 'active';
+        customerData.created_at = serverTimestamp();
+        console.log("[CustomerForm] Chamando Customer.create com:", customerData);
         await Customer.create(customerData);
         toast({
           title: "Sucesso",
@@ -97,7 +113,7 @@ export default function CustomerForm({ customer, onSuccess }) {
         });
       }
       
-      onSuccess();
+      onSuccess(customerData);
     } catch (error) {
       console.error("Erro ao salvar cliente:", error);
       toast({
@@ -292,6 +308,19 @@ export default function CustomerForm({ customer, onSuccess }) {
 CustomerForm.propTypes = {
   customer: PropTypes.shape({
     id: PropTypes.string,
+    status: PropTypes.string,
+    full_name: PropTypes.string,
+    cpf: PropTypes.string,
+    phone: PropTypes.string,
+    email: PropTypes.string,
+    address: PropTypes.string,
+    address_number: PropTypes.string,
+    address_complement: PropTypes.string,
+    neighborhood: PropTypes.string,
+    city: PropTypes.string,
+    state: PropTypes.string,
+    cep: PropTypes.string,
+    tenant_id: PropTypes.string
   }),
   onSuccess: PropTypes.func.isRequired,
 };

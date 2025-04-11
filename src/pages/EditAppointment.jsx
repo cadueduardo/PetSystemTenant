@@ -1,74 +1,109 @@
-import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Tenant } from "@/api/entities";
-import { User } from "@/api/entities";
 import { Appointment } from "@/api/entities";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Loader2 } from "lucide-react";
-import AppointmentForm from "../components/appointment/AppointmentForm";
+import AppointmentForm from "@/components/appointment/AppointmentForm";
+import { toast } from "@/components/ui/use-toast";
 
 export default function EditAppointmentPage() {
   const navigate = useNavigate();
+  const { id } = useParams();
   const [isLoading, setIsLoading] = useState(true);
-  const [currentTenant, setCurrentTenant] = useState(null);
-  const [appointmentId, setAppointmentId] = useState(null);
   const [appointment, setAppointment] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    checkAuth();
-    
-    // Obter ID do agendamento da URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const id = urlParams.get("id");
-    if (id) {
-      setAppointmentId(id);
-      loadAppointment(id);
-    } else {
-      setError("ID do agendamento não fornecido");
+    // Get appointment ID from route params (obtained via useParams hook above)
+    if (!id) {
+      setError("ID do agendamento não fornecido na rota.");
       setIsLoading(false);
+      return; // Stop if no ID
     }
-  }, []);
+    
+    // Chain the async operations: check auth/tenant first, then load appointment
+    const initialize = async () => {
+      try {
+        const tenant = await checkAuthAndGetTenant(); // Check auth and get tenant
+        if (tenant) {
+          await loadAppointment(id, tenant); // Load appointment using the tenant
+        }
+      } catch (err) {
+        // Errors from checkAuthAndGetTenant or loadAppointment will be caught here
+        // setError is already set within those functions if needed
+        console.error("Initialization error:", err);
+      } finally {
+         setIsLoading(false); // Ensure loading stops even if there's an error early on
+      }
+    };
 
-  const checkAuth = async () => {
+    initialize();
+
+  }, [id, navigate]); // Add id as dependency
+
+  // Modified function to return the tenant or handle errors/redirects
+  const checkAuthAndGetTenant = async () => {
     try {
-      const userData = await User.me();
-      const tenants = await Tenant.list();
-      const activeTenant = tenants.find(t => t.status === "active");
+      // You might need User.me() depending on your auth setup, but let's assume it's handled
+      // const userData = await User.me(); 
+      const tenants = await Tenant.list(); // Still uses Mock
+      const activeTenant = tenants.find(t => t.status === "active"); 
       
       if (activeTenant) {
-        setCurrentTenant(activeTenant);
+        return activeTenant; // Return the tenant object
       } else {
-        toast({
-          title: "Erro",
-          description: "Nenhuma clínica ativa encontrada.",
-          variant: "destructive"
-        });
-        navigate(createPageUrl("Dashboard"));
+        setError("Nenhuma clínica ativa encontrada.");
+        // Optionally display a toast message as well
+        toast({ title: "Erro", description: "Nenhuma clínica ativa encontrada.", variant: "destructive" });
+        // navigate(createPageUrl("Dashboard")); 
+        return null; // Indicate tenant not found
       }
     } catch (error) {
-      console.error("Erro ao verificar autenticação:", error);
-      navigate(createPageUrl("Landing"));
+      console.error("Erro ao verificar autenticação/tenant:", error);
+      setError("Erro ao verificar autenticação/tenant.");
+      // Optionally display a toast message as well
+      toast({ title: "Erro", description: "Erro ao verificar autenticação/tenant.", variant: "destructive" });
+      // navigate(createPageUrl("Landing")); // Optionally navigate away
+      return null; // Indicate error
     }
   };
 
-  const loadAppointment = async (id) => {
+  // Modified function to accept tenant object
+  const loadAppointment = async (id, tenant) => {
+    if (!tenant) { 
+        //setError("Tenant inválido para carregar agendamento."); // Already handled by checkAuth
+        return; 
+    }
     try {
-      const appointmentData = await Appointment.get(id);
-      if (!appointmentData || appointmentData.tenant_id !== currentTenant?.id) {
-        setError("Agendamento não encontrado");
+      console.log(`[EditAppointmentPage] Loading appointment ${id} for tenant ${tenant.id}`);
+      const appointmentData = await Appointment.get(id); // Uses appointmentService.get
+      
+      // Verify if appointment exists and belongs to the correct tenant
+      if (!appointmentData) {
+        console.error(`[EditAppointmentPage] Appointment ${id} not found via Appointment.get`);
+        setError("Agendamento não encontrado.");
+        toast({ title: "Erro", description: "Agendamento não encontrado.", variant: "destructive" });
         return;
       }
+       if (appointmentData.tenant_id !== tenant.id) {
+        console.error(`[EditAppointmentPage] Appointment ${id} tenant (${appointmentData.tenant_id}) does not match current tenant (${tenant.id})`);
+        setError("Este agendamento não pertence à clínica ativa.");
+        toast({ title: "Erro", description: "Este agendamento não pertence à clínica ativa.", variant: "destructive" });
+        return;
+      }
+      
+      console.log("[EditAppointmentPage] Appointment data loaded successfully:", appointmentData);
       setAppointment(appointmentData);
     } catch (error) {
-      console.error("Erro ao carregar agendamento:", error);
-      setError("Não foi possível carregar os dados do agendamento");
-    } finally {
-      setIsLoading(false);
-    }
+      console.error(`[EditAppointmentPage] Erro ao carregar agendamento ${id}:`, error);
+      setError("Não foi possível carregar os dados do agendamento.");
+      toast({ title: "Erro", description: "Não foi possível carregar os dados do agendamento.", variant: "destructive" });
+    } 
+    // setIsLoading(false) is now handled in the initialize function's finally block
   };
 
   const handleSuccess = () => {
@@ -126,7 +161,6 @@ export default function EditAppointmentPage() {
             appointment={appointment}
             onSuccess={handleSuccess}
             onCancel={handleCancel}
-            tenantId={currentTenant?.id}
           />
         </CardContent>
       </Card>

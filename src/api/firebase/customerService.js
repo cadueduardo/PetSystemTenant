@@ -1,5 +1,5 @@
 import { db } from '@/lib/firebaseConfig'; // Importa a instância do Firestore
-import { doc, getDoc, collection, query, where, getDocs, addDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, getDocs, addDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 
 /**
  * Busca um cliente específico no Firestore pelo ID.
@@ -85,18 +85,26 @@ async function filter(filters = {}) {
 async function create(customerData) {
   console.log('[Firestore] Criando Customer com:', customerData);
   try {
-    // Garante que tenant_id está presente (essencial para regras futuras)
+    // Garante que tenant_id está presente
     if (!customerData.tenant_id) {
       console.error("[Firestore] Erro: Tentativa de criar Customer sem tenant_id", customerData);
       throw new Error('O tenant_id é obrigatório para criar um cliente.');
     }
+    
+    // <<< Adiciona o timestamp de criação >>>
+    const dataToSave = {
+        ...customerData,
+        created_at: serverTimestamp(), // Adiciona timestamp do servidor
+        status: customerData.status || 'active' // Garante status inicial ativo
+    };
 
     const customersCollectionRef = collection(db, "customers");
-    const docRef = await addDoc(customersCollectionRef, customerData); // Adiciona o documento
+    // <<< Salva os dados com o timestamp >>>
+    const docRef = await addDoc(customersCollectionRef, dataToSave); 
     
     console.log("[Firestore] Customer criado com ID:", docRef.id);
-    // Retorna os dados originais junto com o ID gerado
-    return { id: docRef.id, ...customerData };
+    // Retorna os dados salvos (incluindo o status 'active' e potentially created_at se resolvido)
+    return { id: docRef.id, ...dataToSave };
 
   } catch (error) {
     console.error("[Firestore] Erro ao criar Customer:", error);
@@ -143,11 +151,51 @@ async function update(id, customerData) {
   }
 }
 
+/**
+ * Inativa um cliente existente no Firestore.
+ * @param {string} id - O ID do cliente a ser inativado.
+ * @param {string} reasonId - O ID do motivo da inativação (da coleção cancellationReasons).
+ * @returns {Promise<void>} - Retorna nada em caso de sucesso.
+ */
+async function inactivate(id, reasonId) {
+  console.log(`[Firestore] Inativando Customer ID: ${id} com motivo ID: ${reasonId}`);
+  if (!id || !reasonId) {
+    console.error("[Firestore] Erro: ID do cliente e ID do motivo são obrigatórios para inativar.");
+    throw new Error('ID do cliente e motivo são obrigatórios para inativar.');
+  }
+
+  try {
+    const docRef = doc(db, "customers", id);
+    const updateData = {
+      status: 'inactive',
+      inactivation_date: serverTimestamp(), // <<< Usa timestamp do servidor
+      inactivation_reason_id: reasonId
+    };
+    
+    await updateDoc(docRef, updateData);
+    
+    console.log(`[Firestore] Customer ID: ${id} inativado com sucesso.`);
+
+  } catch (error) {
+    console.error(`[Firestore] Erro ao inativar Customer ID: ${id}:`, error);
+    if (error.code === 'permission-denied') {
+        console.error("ERRO FIREBASE: Permissão negada ao inativar Customer no Firestore! Verifique as regras de segurança.");
+        throw new Error('Permissão negada ao inativar cliente. Verifique as regras.');
+    }
+    if (error.code === 'not-found') {
+         console.error(`ERRO FIREBASE: Cliente com ID ${id} não encontrado para inativação.`);
+         throw new Error('Cliente não encontrado para inativação.');
+    }
+    throw new Error('Erro ao inativar cliente no banco de dados.');
+  }
+}
+
 // Exporta a função (ou um objeto com todas as funções CRUD)
 export const customerService = {
   get,
   filter,
   create,
   update,
+  inactivate,
   // Adicionaremos delete aqui depois
 }; 

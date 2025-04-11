@@ -1,5 +1,5 @@
 import { db } from '@/lib/firebaseConfig';
-import { collection, query, where, getDocs, addDoc, doc, getDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, addDoc, doc, getDoc, updateDoc } from "firebase/firestore";
 
 /**
  * Busca pets no Firestore, filtrando por tenant_id e/ou owner_id.
@@ -116,10 +116,56 @@ async function get(id) {
   }
 }
 
+/**
+ * Atualiza um pet existente no Firestore.
+ * @param {string} id - O ID do pet a ser atualizado.
+ * @param {object} dataToUpdate - Objeto com os campos a serem atualizados.
+ * @returns {Promise<void>}
+ */
+async function update(id, dataToUpdate) {
+  console.log(`[Firestore] Atualizando Pet ID: ${id} com dados:`, dataToUpdate);
+  try {
+    const petDocRef = doc(db, "pets", id);
+
+    // Validação básica: verificar se o ID foi fornecido
+    if (!id) {
+      console.error("[Firestore] Erro: Tentativa de atualizar Pet sem ID.");
+      throw new Error("ID do pet é obrigatório para atualização.");
+    }
+
+    // Remover o campo 'id' dos dados a serem atualizados, se presente
+    // eslint-disable-next-line no-unused-vars
+    const { id: _, ...updateData } = dataToUpdate;
+
+    // Adicionar timestamp de atualização, se desejado
+    // updateData.updated_at = new Date(); // Ou serverTimestamp() do Firebase
+
+    await updateDoc(petDocRef, updateData);
+    console.log(`[Firestore] Pet ID: ${id} atualizado com sucesso.`);
+
+  } catch (error) {
+    console.error(`[Firestore] Erro ao atualizar Pet ID: ${id}:`, error);
+    // Lembre-se das regras de segurança do Firestore para escrita!
+    if (error.code === 'permission-denied') {
+        console.error("*************************************************************************");
+        console.error("ERRO FIREBASE: Permissão negada ao atualizar Pet no Firestore!");
+        console.error("Verifique as Regras de Segurança do Firestore. A regra atual para /pets/{petId} permite escrita/atualização? (Ex: allow update: if true; ou if request.auth != null;)");
+        console.error("*************************************************************************");
+        throw new Error('Permissão negada ao atualizar pet no banco de dados. Verifique as regras.');
+    } else if (error.code === 'not-found') {
+         console.warn(`[Firestore] Tentativa de atualizar Pet ID: ${id} que não foi encontrado.`);
+         // Você pode optar por lançar um erro aqui ou apenas logar, dependendo da sua lógica
+         throw new Error('Pet não encontrado para atualização.');
+    }
+    throw new Error('Erro ao atualizar pet no banco de dados.');
+  }
+}
+
 // Exporta as funções
 export const petService = {
   get,
   filter,
   create,
-  // Adicionaremos update, delete aqui depois
+  update,
+  // Adicionaremos delete aqui depois
 }; 

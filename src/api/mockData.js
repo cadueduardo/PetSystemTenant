@@ -1535,7 +1535,9 @@ export const MedicationTaskMock = {
     const newTask = {
       id: generateUniqueId('task'),
       ...finalData,
-      status: finalData.status || 'pending',
+      status: finalData.status || 'pendente',
+      observations: finalData.observations || null,
+      requires_follow_up: finalData.requires_follow_up || false,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
