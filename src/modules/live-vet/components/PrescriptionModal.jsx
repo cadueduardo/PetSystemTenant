@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,47 +9,292 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { PlusCircle, Trash2, Loader2 } from 'lucide-react';
+import { PlusCircle, Trash2, Loader2, Check, ChevronsUpDown } from 'lucide-react';
 import { useToast } from "@/components/ui/use-toast";
-import PropTypes from 'prop-types'; // <<< IMPORTAR
+import PropTypes from 'prop-types';
+import { formatCurrency } from '@/utils/formatCurrency';
+import { list as listTemplates } from '@/api/mock/prescriptionTemplateService';
+import { Product } from '@/api/entities';
+import { cn } from "@/lib/utils";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 
-// Hook para gerenciar itens dinâmicos (simplificado, sem react-hook-form por agora)
-const usePrescriptionItems = (initialItems = [{ itemName: '', details: '', isControlled: false, usage: 'externo' }]) => {
+// --- ItemSearchComboBox Component ---
+// Add initialName prop
+function ItemSearchComboBox({ value, onSelect, placeholder = "Buscar produto/serviço...", initialName = "" }) {
+  const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  // Use initialName if provided and no value (ID) exists initially
+  const [selectedItemName, setSelectedItemName] = useState(value ? "" : initialName);
+
+  const debounceSearch = useCallback(
+    debounce(async (query) => {
+      if (!query || query.length < 2) {
+        setSearchResults([]); setIsLoading(false); return;
+      }
+      setIsLoading(true);
+      try {
+        const results = await Product.filter({ name: query }); 
+        setSearchResults(results || []);
+      } catch (error) {
+        console.error("Error searching products:", error);
+        setSearchResults([]);
+      } finally {
+        setIsLoading(false);
+      }
+    }, 300),
+    []
+  );
+
+  useEffect(() => {
+    // If value (ID) exists, fetch the name
+    if (value) {
+        Product.get(value).then(product => {
+            if (product) {
+                 setSelectedItemName(product.name);
+            } else {
+                 // If ID is invalid or product not found, maybe fallback to initialName or clear?
+                 setSelectedItemName(initialName || ""); 
+            }
+        });
+    } else {
+        // If no value (ID), rely on initialName passed via props
+        setSelectedItemName(initialName || "");
+    }
+    // Depend on initialName as well, in case the item row itself changes
+  }, [value, initialName]);
+
+  const handleSearchChange = (query) => {
+    setSearchQuery(query);
+    setIsLoading(true);
+    debounceSearch(query);
+  };
+
+  const handleSelect = (product) => {
+    onSelect(product);
+    setSelectedItemName(product.name);
+    setOpen(false);
+    setSearchQuery("");
+    setSearchResults([]);
+  };
+
+  function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+      const later = () => { clearTimeout(timeout); func(...args); };
+      clearTimeout(timeout);
+      timeout = setTimeout(later, wait);
+    };
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+            <Button variant="outline" role="combobox" aria-expanded={open} className="w-full justify-between h-9 font-normal">
+                 {/* Display selectedItemName which now considers initialName */}
+                {selectedItemName || placeholder} 
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+            </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[--radix-popover-content-available-height] p-0">
+            <Command shouldFilter={false}>
+                <CommandInput placeholder={placeholder} value={searchQuery} onValueChange={handleSearchChange} />
+                <CommandList>
+                    <CommandEmpty>{isLoading ? "Buscando..." : (searchQuery.length < 2 ? "Digite ao menos 2 caracteres" : "Nenhum produto encontrado.")}</CommandEmpty>
+                    <CommandGroup>
+                        {searchResults.map((product) => (
+                            <CommandItem key={product.id} value={product.id} onSelect={() => handleSelect(product)}>
+                                <Check className={cn("mr-2 h-4 w-4", value === product.id ? "opacity-100" : "opacity-0")} />
+                                {product.name}
+                            </CommandItem>
+                        ))}
+                    </CommandGroup>
+                </CommandList>
+            </Command>
+        </PopoverContent>
+    </Popover>
+  );
+}
+ItemSearchComboBox.propTypes = {
+    value: PropTypes.string,
+    onSelect: PropTypes.func.isRequired,
+    placeholder: PropTypes.string,
+    initialName: PropTypes.string, // Add prop type for initialName
+};
+// --- End ItemSearchComboBox ---
+
+// Default item structure now includes ID and valorAdministracao
+const defaultItem = { id: null, itemName: '', details: '', isControlled: false, usage: 'externo', valorAdministracao: null };
+
+// Hook usePrescriptionItems (already includes setItemsState)
+const usePrescriptionItems = (initialItems = [defaultItem]) => {
   const [items, setItems] = useState(initialItems);
 
   const addItem = () => {
-    setItems([...items, { itemName: '', details: '', isControlled: false, usage: 'externo' }]);
+    setItems([...items, { ...defaultItem }]);
   };
-
   const removeItem = (index) => {
     setItems(items.filter((_, i) => i !== index));
   };
-
   const updateItem = (index, field, value) => {
-    console.log(`[PrescriptionModal - usePrescriptionItems] updateItem(${index}, '${field}', '${value}')`); // Log para depuração
     const newItems = [...items];
     newItems[index] = { ...newItems[index], [field]: value };
     setItems(newItems);
   };
-
+  const setItemsState = (newItems) => {
+    const validItems = Array.isArray(newItems) ? newItems : [];
+    setItems(validItems.length > 0 ? validItems : [defaultItem]);
+  };
   const resetItems = () => {
-    setItems([{ itemName: '', details: '', isControlled: false, usage: 'externo' }]);
+    setItems([defaultItem]);
   }
-
-  return { items, addItem, removeItem, updateItem, resetItems };
+  return { items, addItem, removeItem, updateItem, resetItems, setItemsState }; 
 };
 
 export function PrescriptionModal({ isOpen, onClose, appointmentId, petId, onSaveSuccess }) {
   const { toast } = useToast();
   const [prescriptionType, setPrescriptionType] = useState('Comum');
   const [generalInstructions, setGeneralInstructions] = useState('');
-  const { items, addItem, removeItem, updateItem, resetItems } = usePrescriptionItems();
+  const { items, addItem, removeItem, updateItem, resetItems, setItemsState } = usePrescriptionItems();
   const [isSaving, setIsSaving] = useState(false);
   const [requiresFollowUp, setRequiresFollowUp] = useState(false);
+
+  // State for template loading
+  const [templates, setTemplates] = useState([]);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState(''); // Store selected template ID
+
+  // Load templates when the modal opens
+  useEffect(() => {
+    const loadTemplates = async () => {
+      if (isOpen) {
+        setIsLoadingTemplates(true);
+        setSelectedTemplateId(''); // Reset selection when modal opens
+        try {
+          const fetchedTemplates = await listTemplates();
+          setTemplates(fetchedTemplates);
+        } catch (error) {
+          console.error("[PrescriptionModal] Error loading templates:", error);
+          toast({ title: "Erro", description: "Falha ao carregar modelos de prescrição.", variant: "destructive" });
+          setTemplates([]); // Clear templates on error
+        } finally {
+          setIsLoadingTemplates(false);
+        }
+      }
+    };
+    loadTemplates();
+  }, [isOpen, toast]);
+
+  // Handle template selection - UPDATED LOGIC
+  const handleTemplateSelect = async (templateId) => {
+    setSelectedTemplateId(templateId);
+    const selectedTemplate = templates.find(t => t.id === templateId);
+
+    if (selectedTemplate) {
+      console.log("[PrescriptionModal] Applying template:", selectedTemplate);
+      setPrescriptionType(selectedTemplate.type || 'Comum');
+      setGeneralInstructions(selectedTemplate.observations || '');
+
+      // Process template items to fetch admin prices if needed
+      setIsLoadingTemplates(true); // Show loading indicator while processing
+      try {
+        const processedItems = await Promise.all((selectedTemplate.items || []).map(async (templateItem) => {
+            // Use the value from the template as the initial/fallback value
+            let finalValorAdmin = templateItem.valorAdministracao !== undefined ? templateItem.valorAdministracao : null;
+            const productIdToFetch = templateItem.id || templateItem.productId; // Check both possible fields for compatibility
+
+            // If a product ID exists in the template item, try fetching the current product data
+            if (productIdToFetch) { 
+                try {
+                    console.log(`[PrescriptionModal] Template item '${templateItem.itemName}' has linked product ID: ${productIdToFetch}. Fetching product...`);
+                    const product = await Product.get(productIdToFetch);
+                    if (product) {
+                         console.log(`[PrescriptionModal] Product ${productIdToFetch} fetched:`, product);
+                        if (product.allowInternalUse) {
+                            // Calculate admin price based on CURRENT product data, potentially overwriting template value
+                            const currentAdminPriceNum = parseFloat(product.administrationPrice);
+                            const currentPriceNum = parseFloat(product.price);
+                            const calculatedAdminPrice = currentAdminPriceNum > 0 
+                                                ? currentAdminPriceNum 
+                                                : (currentPriceNum > 0 ? currentPriceNum : null);
+                            console.log(`[PrescriptionModal] Calculated admin price from fetched product: ${calculatedAdminPrice}`);
+                            finalValorAdmin = calculatedAdminPrice; // Overwrite with fetched value if applicable
+                        } else {
+                             console.log(`[PrescriptionModal] Fetched product ${productIdToFetch} does not allow internal use. Keeping template admin price: ${finalValorAdmin}`);
+                        }
+                    } else {
+                         console.warn(`[PrescriptionModal] Product ${productIdToFetch} not found. Keeping template admin price: ${finalValorAdmin}`);
+                    }
+                } catch (productError) {
+                    console.error(`[PrescriptionModal] Error fetching product ${productIdToFetch} for template item:`, productError);
+                    // Keep template admin price if product fetch fails
+                     console.log(`[PrescriptionModal] Fetch failed. Keeping template admin price: ${finalValorAdmin}`);
+                }
+            } else {
+                console.log(`[PrescriptionModal] Template item '${templateItem.itemName}' has no linked product ID. Using template admin price: ${finalValorAdmin}`);
+            }
+            
+            // Return the item structure expected by usePrescriptionItems state
+            return {
+                 id: productIdToFetch, // Use the ID found (either .id or .productId)
+                 itemName: templateItem.itemName || '', 
+                 details: templateItem.details || '', 
+                 isControlled: templateItem.isControlled || false, 
+                 usage: templateItem.usage || 'externo', 
+                 valorAdministracao: typeof finalValorAdmin === 'string' ? parseFloat(finalValorAdmin) : finalValorAdmin // Ensure it's a number or null
+            };
+        }));
+        
+        // Use setItemsState with the processed items
+        setItemsState(processedItems);
+        toast({ title: "Modelo Carregado", description: `Itens do modelo "${selectedTemplate.name}" foram aplicados.` });
+
+      } catch (processingError) {
+          console.error("[PrescriptionModal] Error processing template items:", processingError);
+          toast({ title: "Erro ao Carregar Modelo", description: "Não foi possível processar os itens do modelo.", variant: "destructive" });
+          // Maybe reset items to default empty state on error?
+          resetItems(); 
+      } finally {
+          setIsLoadingTemplates(false);
+      }
+
+    } else {
+       console.warn(`[PrescriptionModal] Template with ID ${templateId} not found.`);
+       // Reset form if template selection is cleared or invalid
+       resetItems();
+       setPrescriptionType('Comum');
+       setGeneralInstructions('');
+    }
+  };
+
+  // --- Item Handling Update for Product Search ---
+  const handleItemSelect = (index, product) => {
+    if (!product) return;
+    let adminPrice = null;
+    if (product.allowInternalUse) {
+      adminPrice = product.administrationPrice > 0 ? product.administrationPrice : (product.price > 0 ? product.price : null);
+    }
+    updateItem(index, 'id', product.id);
+    updateItem(index, 'itemName', product.name);
+    updateItem(index, 'valorAdministracao', adminPrice);
+  };
+  // --- End Item Handling Update ---
 
   const handleSave = async () => {
     if (!appointmentId || !petId) {
@@ -108,14 +353,14 @@ export function PrescriptionModal({ isOpen, onClose, appointmentId, petId, onSav
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-      <DialogContent className="sm:max-w-[625px]">
+      <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Nova Prescrição</DialogTitle>
           <DialogDescription>
             Preencha os detalhes da prescrição. Clique em salvar quando terminar.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto pr-2">
+        <div className="grid gap-4 py-4 max-h-[70vh] overflow-y-auto pr-2">
           {/* Tipo de Prescrição */}
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="prescription-type" className="text-right">
@@ -134,25 +379,53 @@ export function PrescriptionModal({ isOpen, onClose, appointmentId, petId, onSav
             </Select>
           </div>
 
-          {/* Itens Prescritos */}
+          {/* Added Template Loader Section */}
+          <div className="grid grid-cols-4 items-center gap-4 pt-2 pb-4 border-b">
+            <Label htmlFor="template-loader" className="text-right text-sm font-medium">
+                Carregar Modelo
+            </Label>
+            <Select 
+              value={selectedTemplateId} 
+              onValueChange={handleTemplateSelect}
+              disabled={isLoadingTemplates} // Disable during template item processing too
+            >
+                <SelectTrigger className="col-span-3">
+                    <SelectValue placeholder={isLoadingTemplates ? "Carregando/Processando..." : "Selecione um modelo para carregar..."} />
+                </SelectTrigger>
+                <SelectContent>
+                    {isLoadingTemplates ? (
+                        <div className="flex items-center justify-center p-2"><Loader2 className="h-4 w-4 animate-spin" /></div>
+                    ) : templates.length > 0 ? (
+                        templates.map((template) => (
+                            <SelectItem key={template.id} value={template.id}>
+                                {template.name} ({template.items?.length || 0} itens)
+                            </SelectItem>
+                        ))
+                    ) : (
+                        <div className="px-4 py-2 text-sm text-muted-foreground">Nenhum modelo salvo encontrado.</div>
+                    )}
+                </SelectContent>
+            </Select>
+          </div>
+
+          {/* Itens Prescritos - Updated */}
           <div className="col-span-4">
             <Label className="text-sm font-medium">Itens Prescritos</Label>
             <div className="mt-2 space-y-3">
               {items.map((item, index) => (
                 <div key={index} className="grid grid-cols-12 gap-2 items-start border p-3 rounded relative">
-                  {/* Col 1-5: Nome */}
-                  <div className="col-span-5">
-                    <Label htmlFor={`item-name-${index}`} className="text-xs">Medicamento/Produto/Instrução</Label>
-                    <Input
-                      id={`item-name-${index}`}
-                      value={item.itemName}
-                      onChange={(e) => updateItem(index, 'itemName', e.target.value)}
-                      placeholder="Ex: Amoxicilina 50mg"
-                      className="mt-1"
+                  {/* Col 1-5: Use ComboBox - Pass initialName */} 
+                  <div className="col-span-12 sm:col-span-5">
+                    <Label htmlFor={`item-name-${index}`} className="text-xs">Medicamento/Produto/Instrução*</Label>
+                     <ItemSearchComboBox 
+                        value={item.id} 
+                        initialName={item.itemName} // <<< Pass itemName here
+                        onSelect={(product) => handleItemSelect(index, product)} 
+                        placeholder="Buscar item..."
                     />
                   </div>
                   {/* Col 6-9: Detalhes */}
-                  <div className="col-span-4">
+                  <div className="col-span-12 sm:col-span-4">
                     <Label htmlFor={`item-details-${index}`} className="text-xs">Detalhes/Posologia</Label>
                     <Textarea
                       id={`item-details-${index}`}
@@ -164,7 +437,7 @@ export function PrescriptionModal({ isOpen, onClose, appointmentId, petId, onSav
                     />
                   </div>
                    {/* Col 10: Controlado */}
-                  <div className="col-span-1 flex flex-col items-center pt-5">
+                  <div className="col-span-4 sm:col-span-1 flex flex-col items-center pt-5">
                      <Checkbox
                        id={`item-controlled-${index}`}
                        checked={item.isControlled}
@@ -173,8 +446,8 @@ export function PrescriptionModal({ isOpen, onClose, appointmentId, petId, onSav
                      />
                      <Label htmlFor={`item-controlled-${index}`} className="text-xs text-center mt-1">Ctrl?</Label>
                   </div>
-                  {/* <<< Col 11: Uso (Interno/Externo) >>> */}
-                  <div className="col-span-2 flex flex-col pt-5">
+                  {/* Col 11-12: Uso */}
+                  <div className="col-span-8 sm:col-span-2 flex flex-col pt-5">
                      <Label htmlFor={`item-usage-${index}`} className="text-xs mb-1 text-center">Uso</Label>
                      <Select
                          value={item.usage}
@@ -189,8 +462,14 @@ export function PrescriptionModal({ isOpen, onClose, appointmentId, petId, onSav
                              <SelectItem value="interno">Interno</SelectItem>
                          </SelectContent>
                      </Select>
+                     {/* Display Admin Value */}
+                     {item.usage === 'interno' && item.valorAdministracao > 0 && (
+                         <div className="text-xs text-center mt-1 text-blue-600 font-medium">
+                            Admin: {formatCurrency(item.valorAdministracao)}
+                         </div>
+                     )}
                   </div>
-                  {/* Col 12: Remover */}
+                  {/* Col 13: Remover */}
                   {items.length > 1 && (
                      <Button
                        variant="ghost"

@@ -5,6 +5,7 @@ const routeMappings: Record<string, string> = {
     PetDetails: '/tenant/pet/:id',
     CustomerDetails: '/tenant/cliente/:id',
     LiveVetConsulta: '/tenant/live-vet/consulta/:appointmentId',
+    Calendar: '/tenant/calendario',
     // Adicione outros mapeamentos conforme necessário
     // Exemplo: MedicalRecordForm: '/tenant/prontuario/novo'
 };

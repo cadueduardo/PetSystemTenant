@@ -50,6 +50,7 @@ import {
   AlertDescription,
   AlertTitle,
 } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export default function ProductsPage() {
   const navigate = useNavigate();
@@ -79,7 +80,9 @@ export default function ProductsPage() {
     description: "",
     image_url: "",
     low_stock_threshold: "5",
-    tenant_id: ""
+    tenant_id: "",
+    allowInternalUse: false,
+    administrationPrice: ""
   });
 
   useEffect(() => {
@@ -138,6 +141,13 @@ export default function ProductsPage() {
     }));
   };
 
+  const handleCheckboxChange = (field, checked) => {
+    setFormData(prev => ({
+      ...prev,
+      [field]: checked
+    }));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -170,7 +180,9 @@ export default function ProductsPage() {
       description: product.description || "",
       image_url: product.image_url || "",
       low_stock_threshold: String(product.low_stock_threshold || 5),
-      tenant_id: product.tenant_id
+      tenant_id: product.tenant_id,
+      allowInternalUse: product.allowInternalUse || false,
+      administrationPrice: String(product.administrationPrice || "")
     });
     
     if (product.image_url) {
@@ -371,7 +383,9 @@ export default function ProductsPage() {
             description: "",
             image_url: "",
             low_stock_threshold: "5",
-            tenant_id: currentTenant?.id || ""
+            tenant_id: currentTenant?.id || "",
+            allowInternalUse: false,
+            administrationPrice: ""
           });
           setImagePreview(null);
           setShowForm(true);
@@ -401,7 +415,7 @@ export default function ProductsPage() {
       {showForm && (
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle>{editingProduct ? "Editar Produto" : "Novo Produto"}</CardTitle>
+            <CardTitle>{editingProduct ? "Editar Produto/Serviço" : "Novo Produto/Serviço"}</CardTitle>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-6">
@@ -536,6 +550,41 @@ export default function ProductsPage() {
                         step="1"
                         placeholder="5"
                       />
+                    </div>
+
+                    <div className="md:col-span-2 border-t pt-4 space-y-4">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox 
+                          id="allowInternalUse"
+                          checked={formData.allowInternalUse}
+                          onCheckedChange={(checked) => handleCheckboxChange('allowInternalUse', checked)}
+                        />
+                        <Label htmlFor="allowInternalUse" className="cursor-pointer">
+                          Permitir Uso Interno / Administração na Clínica?
+                        </Label>
+                      </div>
+
+                      {formData.allowInternalUse && (
+                        <div className="space-y-2 pl-6">
+                          <Label htmlFor="administrationPrice">Valor Cobrado na Administração Interna</Label>
+                           <div className="relative">
+                            <span className="absolute left-3 top-2.5 text-gray-500">R$</span>
+                            <Input
+                              id="administrationPrice"
+                              value={formData.administrationPrice}
+                              onChange={(e) => handleChange("administrationPrice", e.target.value)}
+                              placeholder="Opcional (usa Preço Venda se vazio)"
+                              className="pl-9"
+                              type="number"
+                              step="0.01"
+                              min="0"
+                            />
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Defina o valor a ser cobrado quando este item é usado em um procedimento/consulta. Se vazio, usará o Preço de Venda.
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     <div className="space-y-2 md:col-span-2">
@@ -697,7 +746,9 @@ export default function ProductsPage() {
                       description: "",
                       image_url: "",
                       low_stock_threshold: "5",
-                      tenant_id: currentTenant?.id || ""
+                      tenant_id: currentTenant?.id || "",
+                      allowInternalUse: false,
+                      administrationPrice: ""
                     });
                     setShowForm(true);
                   }}

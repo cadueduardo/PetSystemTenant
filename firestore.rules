@@ -3,75 +3,153 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // === Função Auxiliar Principal ===
-    // Verifica se o usuário está logado e se o tenant_id do token corresponde ao do documento
+    // === Funções Auxiliares ===
     function isTenantMember(tenantId) {
       return request.auth != null && request.auth.token.tenant_id == tenantId;
     }
-
-    // === Coleções Específicas do Tenant ===
-
-    match /pets/{petId} {
-      allow read, write: if isTenantMember(resource.data.tenant_id);
+    
+    function isAuthenticatedTenant() {
+      return request.auth != null && request.auth.token.tenant_id != null;
+    }
+    
+    // Função para verificar se é um super admin (sem tenant_id)
+    function isSuperAdmin() {
+      return request.auth != null && !('tenant_id' in request.auth.token);
+      // Alternativa: return request.auth != null && request.auth.token.role == 'superAdmin';
     }
 
-    match /customers/{customerId} {
-      allow read, write: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /appointments/{appointmentId} {
-      allow read, write: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /services/{serviceId} {
-      // Assumindo que serviços são por tenant. Se forem globais, ajustar a regra.
-      allow read, write: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /consultations/{consultationId} {
-       // Nota: O ID do documento pode ser o mesmo que appointmentId
-       // A regra ainda depende do tenant_id DENTRO do documento.
-      allow read, write: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /medicalRecords/{recordId} {
-      allow read, write: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /medicationTasks/{taskId} {
-      allow read, write: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /queue/{queueId} {
-      allow read, write: if isTenantMember(resource.data.tenant_id);
-    }
-
-    // === Coleções de Administração/Globais ===
+    // === Coleções Globais/Compartilhadas ===
 
     match /tenants/{tenantId} {
-      // Função para verificar se é o super admin (ex: sem tenant_id ou com role específica)
-      function isSuperAdmin() {
-        return request.auth != null && !('tenant_id' in request.auth.token);
-        // Alternativa: return request.auth != null && request.auth.token.role == 'superAdmin';
-      }
-      // Super admin pode ler e escrever tudo
-      allow read, write: if isSuperAdmin();
-      
-      // Opcional: Permitir que o admin do tenant leia seu próprio documento de tenant?
-      // allow get: if isSuperAdmin() || (request.auth != null && request.auth.uid == resource.data.ownerAdminUid);
+      allow read, write, delete: if isSuperAdmin();
     }
 
     match /cancellationReasons/{reasonId} {
-      // Permitir leitura para qualquer usuário autenticado (de qualquer tenant ou super admin)
-      allow read: if request.auth != null;
-      // Permitir escrita apenas para super admin (ou admins de tenant, se eles puderem criar motivos?)
-      function isSuperAdmin() {
-          return request.auth != null && !('tenant_id' in request.auth.token);
-      }
-      allow write: if isSuperAdmin();
+      allow read: if request.auth != null; // Qualquer autenticado pode ler
+      allow write: if isSuperAdmin(); // Apenas Super Admin pode criar/editar/deletar
     }
 
-    // Adicione regras para outras coleções conforme necessário...
+    // --- NOVAS REGRAS: Coleções Compartilhadas de Prescrição ---
+    match /sharedPrescriptionTypes/{typeId} {
+      allow read: if request.auth != null; // Qualquer autenticado pode ler
+      // Escrita bloqueada por regra (gerenciamento manual/script)
+      allow write: if false;
+    }
+
+    match /sharedPrescriptionItems/{itemId} {
+      allow read: if request.auth != null; // Qualquer autenticado pode ler
+      // Escrita bloqueada por regra (gerenciamento manual/script)
+      allow write: if false;
+    }
+    // --- FIM: Coleções Compartilhadas de Prescrição ---
+
+    // === Coleções Específicas do Tenant ===
+
+    match /customers/{customerId} {
+      allow list: if isAuthenticatedTenant();
+      allow get, read: if isTenantMember(resource.data.tenant_id);
+      allow create: if isTenantMember(request.resource.data.tenant_id);
+      allow update: if isTenantMember(resource.data.tenant_id)
+                     && request.resource.data.tenant_id == resource.data.tenant_id;
+      allow delete: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /pets/{petId} {
+       allow list: if isAuthenticatedTenant();
+       allow get, read: if isTenantMember(resource.data.tenant_id);
+       allow create: if isTenantMember(request.resource.data.tenant_id)
+                      && exists(/databases/$(database)/documents/customers/$(request.resource.data.owner_id))
+                      && get(/databases/$(database)/documents/customers/$(request.resource.data.owner_id)).data.tenant_id == request.resource.data.tenant_id;
+       allow update: if isTenantMember(resource.data.tenant_id)
+                      && request.resource.data.tenant_id == resource.data.tenant_id 
+                      && request.resource.data.owner_id == resource.data.owner_id;
+       allow delete: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /appointments/{appointmentId} {
+       allow list: if isAuthenticatedTenant();
+       allow get, read: if isTenantMember(resource.data.tenant_id);
+       allow create: if isTenantMember(request.resource.data.tenant_id)
+                      // <<< Adicionar validações de customer/pet/service se necessário >>>
+                      ; 
+       allow update: if isTenantMember(resource.data.tenant_id)
+                      && request.resource.data.tenant_id == resource.data.tenant_id
+                      // <<< Impedir mudança de IDs chave? >>>
+                      ; 
+       allow delete: if isTenantMember(resource.data.tenant_id);
+    }
+    
+     match /services/{serviceId} {
+         allow list: if isAuthenticatedTenant();
+         allow get, read: if isTenantMember(resource.data.tenant_id);
+         allow create: if isTenantMember(request.resource.data.tenant_id);
+         allow update: if isTenantMember(resource.data.tenant_id)
+                       && request.resource.data.tenant_id == resource.data.tenant_id;
+         allow delete: if isTenantMember(resource.data.tenant_id);
+      }
+      
+    match /queueEntries/{entryId} { 
+       allow list: if isAuthenticatedTenant();
+       allow get, read: if isTenantMember(resource.data.tenant_id);
+       allow create: if isTenantMember(request.resource.data.tenant_id);
+       allow update: if isTenantMember(resource.data.tenant_id) 
+                     && request.resource.data.tenant_id == resource.data.tenant_id; // Tenant não pode mudar
+       allow delete: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /consultations/{consultationId} {
+       allow list: if isAuthenticatedTenant();
+       allow get, read: if isTenantMember(resource.data.tenant_id); 
+       allow create: if isTenantMember(request.resource.data.tenant_id);
+       allow update, delete: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /medicalRecords/{recordId} {
+      allow list: if isAuthenticatedTenant();
+      allow get, read: if isTenantMember(resource.data.tenant_id);
+      allow create: if isTenantMember(request.resource.data.tenant_id);
+      allow update, delete: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /medicationTasks/{taskId} {
+       allow list: if isAuthenticatedTenant(); 
+       allow get, read: if isTenantMember(resource.data.tenant_id);
+       allow create: if isTenantMember(request.resource.data.tenant_id);
+       allow update: if isTenantMember(resource.data.tenant_id)
+                      && request.resource.data.tenant_id == resource.data.tenant_id;
+       allow delete: if isTenantMember(resource.data.tenant_id);
+    }
+    
+    // Coleção 'queue' - REMOVIDA? Usar queueEntries
+    // match /queue/{queueId} { ... }
+    
+    // --- NOVAS REGRAS: Coleções de Prescrição por Tenant ---
+    match /prescriptionTypes/{typeId} {
+      allow list: if isAuthenticatedTenant();
+      allow get, read: if isTenantMember(resource.data.tenant_id);
+      allow create: if isTenantMember(request.resource.data.tenant_id);
+      allow update: if isTenantMember(resource.data.tenant_id)
+                      && request.resource.data.tenant_id == resource.data.tenant_id; // Tenant não pode mudar
+      allow delete: if isTenantMember(resource.data.tenant_id);
+    }
+
+    match /prescriptionItems/{itemId} {
+      allow list: if isAuthenticatedTenant();
+      allow get, read: if isTenantMember(resource.data.tenant_id);
+      allow create: if isTenantMember(request.resource.data.tenant_id)
+                      // Valida se o tipo referenciado existe NA COLEÇÃO DO TENANT e pertence ao mesmo tenant
+                      && exists(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId))
+                      && get(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId)).data.tenant_id == request.resource.data.tenant_id;
+      allow update: if isTenantMember(resource.data.tenant_id)
+                      && request.resource.data.tenant_id == resource.data.tenant_id // Tenant não pode mudar
+                      // Impede a mudança do tipo (ou valida o novo tipo se permitir mudança)
+                      && request.resource.data.prescriptionTypeId == resource.data.prescriptionTypeId;
+                      // Alternativa (permitindo mudar tipo, mas validando): 
+                      // && exists(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId))
+                      // && get(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId)).data.tenant_id == resource.data.tenant_id;
+      allow delete: if isTenantMember(resource.data.tenant_id);
+    }
+    // --- FIM: Coleções de Prescrição por Tenant ---
 
   }
 } 

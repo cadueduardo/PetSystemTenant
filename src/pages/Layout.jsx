@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -18,7 +17,8 @@ import {
   Sun,
   Clock,
   Stethoscope,
-  Pill
+  Pill,
+  ClipboardList
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTenant } from "@/components/tenant/TenantContext";
@@ -186,6 +186,18 @@ export default function Layout() {
               <span>Serviços</span>
             </Link>
 
+            <Link
+              to="/tenant/prescription-manager"
+              onClick={(e) => handleNavigation(e, "/tenant/prescription-manager")}
+              className={classNames(
+                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                isActive("/tenant/prescription-manager") ? "bg-accent font-medium" : ""
+              )}
+            >
+              <ClipboardList className="h-5 w-5" />
+              <span>Modelos Prescrição</span>
+            </Link>
+
             {/* <<< COMENTANDO/REMOVENDO O LINK DE TRANSPORTE >>>
               <Link
               to="/tenant/transporte"
@@ -255,17 +267,17 @@ export default function Layout() {
       </div>
 
       <div className="flex flex-1 flex-col">
-        <header className="sticky top-0 z-10 flex h-16 items-center gap-4 border-b bg-background px-6">
+        <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b bg-background px-6 lg:justify-end">
           <Button
             variant="ghost"
             size="icon"
-            className="lg:hidden"
             onClick={() => setSidebarOpen(true)}
+            className="lg:hidden"
           >
             <Menu className="h-6 w-6" />
           </Button>
         </header>
-        <main className="flex-1 p-4">
+        <main className="flex-1 p-6">
           <Outlet />
         </main>
       </div>

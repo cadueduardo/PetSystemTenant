@@ -68,6 +68,7 @@ import ServiceDetailsPanel from "../components/queue/ServiceDetailsPanel";
 import PetAvatar from "@/components/pets/PetAvatar";
 import RemoveFromQueueModal from '../components/queue/RemoveFromQueueModal';
 import { addRemovalReason } from '@/api/mockData';
+import { addPendingItems } from "@/api/mock/chargeableItemService";
 // import { Checkbox } from "@/components/ui/checkbox"; // Remover
 import {
   // Play, // Remover
@@ -304,6 +305,30 @@ export default function ServiceQueue() {
                console.error("[handleStatusChange] Erro ao atualizar Appointment:", apptError);
                toast({ title: "Aviso", description: "Status da fila atualizado, mas houve erro ao finalizar o agendamento principal.", variant: "warning" });
             }
+
+            // <<< INÍCIO: Enviar para Cobrança >>>
+            if (currentItem.appointment_id && currentItem.service) {
+               const serviceItemToCharge = {
+                 id: currentItem.service.id,
+                 name: currentItem.service.name,
+                 price: currentItem.service.price || 0, // Garante que preço existe
+                 quantity: 1,
+                 type: 'service',
+               };
+               console.log(`[handleStatusChange] Enviando serviço ${serviceItemToCharge.name} para cobrança (Appointment ID: ${currentItem.appointment_id})`);
+               try {
+                 await addPendingItems(currentItem.appointment_id, [serviceItemToCharge]);
+                 console.log(`[handleStatusChange] Serviço enviado para cobrança com sucesso.`);
+                 // Não precisa de toast aqui, o toast de "Serviço concluído" já informa o usuário
+               } catch (billingError) {
+                 console.error("[handleStatusChange] Erro ao enviar para cobrança:", billingError);
+                 toast({ title: "Erro de Cobrança", description: "Serviço finalizado, mas houve erro ao enviar para a lista de cobrança.", variant: "destructive" });
+               }
+            } else {
+               console.warn("[handleStatusChange] Não foi possível enviar para cobrança: ID do agendamento ou detalhes do serviço ausentes.", currentItem);
+            }
+            // <<< FIM: Enviar para Cobrança >>>
+
           } else {
              console.warn("[handleStatusChange] appointment_id não encontrado no item da fila para concluir agendamento.");
           }

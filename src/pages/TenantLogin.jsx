@@ -50,8 +50,8 @@ export default function TenantLogin() {
 
       toast({ title: "Login bem-sucedido" });
       
-      // Redirecionar para o dashboard principal da loja (ex: raiz)
-      navigate('/dashboard');
+      // Redirect to the main tenant dashboard
+      navigate('/tenant/dashboard');
 
     } catch (error) {
       console.error("Erro no login do tenant:", error);

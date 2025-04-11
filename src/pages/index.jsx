@@ -87,6 +87,7 @@ import ConsultaReportPage from "../modules/live-vet/pages/ConsultaReportPage";
 import MedicationQueue from "./MedicationQueue";
 import { TenantProvider } from "@/components/tenant/TenantContext";
 import ProtectedRoute from './ProtectedRoute';
+import PrescriptionManager from './PrescriptionManager';
 
 /* Comentado PAGES pois não será mais usado 
 const PAGES = {
@@ -216,86 +217,52 @@ function PagesContent() {
                 <Route index element={<AdminDashboard />} />
             </Route>
 
-            {/* Rotas com Layout padrão (tenant) */}
-            <Route element={<ProtectedRoute />}>
-                <Route path="/tenant" element={<Layout />}>
-                    <Route index element={<Dashboard />} />
-                    <Route path="dashboard" element={<Dashboard />} />
-                    <Route path="clientes" element={<Customers />} />
-                    <Route path="cliente/:id" element={<CustomerDetails />} />
-                    <Route path="cliente/editar/:id" element={<EditCustomer />} />
-                    <Route path="calendario" element={<Calendar />} />
-                    <Route path="pet/:id" element={<PetDetails />} />
-                    <Route path="orc-estatisticas" element={<OCRStatistics />} />
-                    <Route path="suporte" element={<Support />} />
-                    <Route path="configuracoes" element={<Settings />} />
-                    <Route path="produtos" element={<Products />} />
-                    <Route path="financeiro" element={<Financial />} />
-                    <Route path="internacao" element={<Hospitalization />} />
-                    <Route path="servicos" element={<Services />} />
-                    <Route path="vendas" element={<Sales />} />
-                    <Route path="vendas/historico" element={<SalesHistory />} />
-                    <Route path="agendamento/editar/:id" element={<EditAppointment />} />
-                    <Route path="agendamento/novo" element={<AppointmentForm />} />
-                    <Route path="prontuario/novo" element={<MedicalRecordForm />} />
-                    <Route path="contratar" element={<Contratar />} />
-                    <Route path="loja/configurar" element={<StoreSetup />} />
-                    <Route path="loja/dashboard" element={<StoreDashboard />} />
-                    <Route path="tenant/configuracoes" element={<TenantSettings />} />
-                    <Route path="planos-saude" element={<HealthPlans />} />
-                    <Route path="vacinas" element={<Vaccines />} />
-                    <Route path="medicamentos" element={<Medications />} />
-                    <Route path="alergias" element={<Allergies />} />
-                    <Route path="consultas" element={<Appointments />} />
-                    <Route path="equipe" element={<Staff />} />
-                    <Route path="fila-atendimento" element={<ServiceQueue />} />
-                    <Route path="medicacao" element={<MedicationQueue />} />
-                    <Route path="live-vet" element={<LiveVetDashboard />} />
-                    <Route path="live-vet/consulta/:appointmentId" element={<LiveVetConsulta />} />
-                    <Route path="live-vet/consulta/:appointmentId/relatorio" element={<ConsultaReportPage />} />
-                </Route>
-
-                {/* Aliases para rotas sem o prefixo /tenant/ */}
-                <Route path="/Dashboard" element={<Layout />}>
-                    <Route index element={<Dashboard />} />
-                </Route>
-                <Route path="/Customers" element={<Layout />}>
-                    <Route index element={<Customers />} />
-                </Route>
-                <Route path="/Calendar" element={<Layout />}>
-                    <Route index element={<Calendar />} />
-                </Route>
-                <Route path="/Products" element={<Layout />}>
-                    <Route index element={<Products />} />
-                </Route>
-                <Route path="/Sales" element={<Layout />}>
-                    <Route index element={<Sales />} />
-                </Route>
-                <Route path="/Services" element={<Layout />}>
-                    <Route index element={<Services />} />
-                </Route>
-                <Route path="/Financial" element={<Layout />}>
-                    <Route index element={<Financial />} />
-                </Route>
-                <Route path="/Settings" element={<Layout />}>
-                    <Route index element={<Settings />} />
-                </Route>
-                <Route path="/ServiceQueue" element={<Layout />}>
-                    <Route index element={<ServiceQueue />} />
-                </Route>
-                <Route path="/MedicationQueue" element={<Layout />}>
-                    <Route index element={<MedicationQueue />} />
-                </Route>
-                <Route path="/LiveVetDashboard" element={<Layout />}>
-                    <Route index element={<LiveVetDashboard />} />
-                </Route>
-                <Route path="/LiveVetConsulta/:appointmentId" element={<Layout />}>
-                    <Route index element={<LiveVetConsulta />} />
-                </Route>
-                <Route path="/LiveVetConsulta/:appointmentId/relatorio" element={<Layout />}>
-                    <Route index element={<ConsultaReportPage />} />
-                </Route>
+            {/* Rotas com Layout padrão (tenant) - CORRECTED STRUCTURE V2 */}
+            <Route path="/tenant" element={<ProtectedRoute />}>
+              <Route element={<Layout />}>
+                <Route index element={<Dashboard />} />
+                <Route path="dashboard" element={<Dashboard />} />
+                <Route path="clientes" element={<Customers />} />
+                <Route path="cliente/:id" element={<CustomerDetails />} />
+                <Route path="cliente/editar/:id" element={<EditCustomer />} />
+                <Route path="calendario" element={<Calendar />} />
+                <Route path="pet/:id" element={<PetDetails />} />
+                <Route path="orc-estatisticas" element={<OCRStatistics />} />
+                <Route path="suporte" element={<Support />} />
+                <Route path="configuracoes" element={<Settings />} />
+                <Route path="produtos" element={<Products />} />
+                <Route path="financeiro" element={<Financial />} />
+                <Route path="internacao" element={<Hospitalization />} />
+                <Route path="servicos" element={<Services />} />
+                <Route path="vendas" element={<Sales />} />
+                <Route path="vendas/historico" element={<SalesHistory />} />
+                <Route path="agendamento/editar/:id" element={<EditAppointment />} />
+                <Route path="agendamento/novo" element={<AppointmentForm />} />
+                <Route path="prontuario/novo" element={<MedicalRecordForm />} />
+                <Route path="contratar" element={<Contratar />} />
+                <Route path="loja/configurar" element={<StoreSetup />} />
+                <Route path="loja/dashboard" element={<StoreDashboard />} />
+                <Route path="tenant/configuracoes" element={<TenantSettings />} />
+                <Route path="planos-saude" element={<HealthPlans />} />
+                <Route path="vacinas" element={<Vaccines />} />
+                <Route path="medicamentos" element={<Medications />} />
+                <Route path="alergias" element={<Allergies />} />
+                <Route path="consultas" element={<Appointments />} />
+                <Route path="equipe" element={<Staff />} />
+                <Route path="fila-atendimento" element={<ServiceQueue />} />
+                <Route path="live-vet" element={<LiveVetDashboard />} />
+                <Route path="live-vet/consulta/:appointmentId" element={<LiveVetConsulta />} />
+                <Route path="live-vet/relatorio/:appointmentId" element={<ConsultaReportPage />} />
+                <Route path="medicacao" element={<MedicationQueue />} />
+                <Route path="prescription-manager" element={<PrescriptionManager />} />
+              </Route>
             </Route>
+            
+            {/* Removed the problematic alias routes and the old duplicate tenant structure */}
+
+            {/* Catch-all ou Not Found Route (Optional) */}
+            {/* <Route path="*" element={<NotFound />} /> */}
+
         </Routes>
       </TenantProvider>
     );

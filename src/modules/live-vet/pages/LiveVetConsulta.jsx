@@ -18,6 +18,7 @@ import { format, parseISO, differenceInMinutes } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { medicationTaskService } from '@/api/firebase/medicationTaskService';
 import { queueService } from '@/api/firebase/queueService';
+import { addPendingItems } from '@/api/mock/chargeableItemService';
 
 // URLs do NOVO serviço de áudio mock
 const AUDIO_SERVICE_BASE_URL = 'http://localhost:8001';
@@ -900,6 +901,76 @@ export default function LiveVetConsulta() {
     }
   }, [isPrinting]);
 
+  // <<< FUNÇÃO PARA ENVIAR ITENS PARA COBRANÇA >>>
+  const handleSendToBilling = async () => {
+    if (!appointment || !service) {
+      toast({ title: "Erro", description: "Dados do agendamento ou serviço não carregados.", variant: "destructive" });
+      return;
+    }
+    setIsSaving(true); // Reutilizar o estado de saving para indicar processamento
+    console.log('[handleSendToBilling] Iniciando...');
+
+    try {
+      const itemsToCharge = [];
+
+      // 1. Adicionar Serviço Principal
+      if (service.price !== undefined && service.price !== null) {
+         console.log('[handleSendToBilling] Adicionando serviço principal:', service);
+         itemsToCharge.push({
+            id: service.id,       // ID do serviço
+            name: service.name,   // Nome do serviço
+            price: parseFloat(service.price) || 0, // Preço do serviço (garantir número)
+            quantity: 1,
+            type: 'service' // Indica que é um serviço
+         });
+      } else {
+         console.warn('[handleSendToBilling] Serviço principal não tem preço definido.');
+      }
+
+      // 2. Adicionar Itens de Prescrição (Uso Interno com Valor)
+      console.log('[handleSendToBilling] Verificando itens da prescrição:', currentPrescriptionItems);
+      currentPrescriptionItems.forEach((item, index) => {
+        if (item.usage === 'interno' && item.valorAdministracao > 0) {
+          console.log(`[handleSendToBilling] Adicionando item interno ${index}:`, item);
+          itemsToCharge.push({
+            id: item.id || `prescription-item-${index}`, // ID do produto (se selecionado) ou ID genérico
+            name: item.itemName,                          // Nome do item/produto
+            price: parseFloat(item.valorAdministracao) || 0, // Preço de administração (garantir número)
+            quantity: 1,
+            type: item.id ? 'product' : 'prescription_item' // Tipo (produto linkado ou apenas item da prescrição)
+          });
+        }
+      });
+
+      if (itemsToCharge.length === 0) {
+          toast({ title: "Nenhum Item a Cobrar", description: "Nenhum serviço ou item de uso interno com valor foi encontrado para este atendimento.", variant: "warning" });
+          setIsSaving(false);
+          return;
+      }
+
+      console.log('[handleSendToBilling] Itens a serem enviados para cobrança:', itemsToCharge);
+
+      // 3. Salvar no localStorage usando o serviço mock
+      // <<< Log Adicional para Debug >>>
+      console.log('[handleSendToBilling] Final items being saved to localStorage:', JSON.stringify(itemsToCharge, null, 2));
+      const success = await addPendingItems(appointmentId, itemsToCharge);
+
+      if (!success) {
+        throw new Error("Falha ao salvar itens pendentes no localStorage.");
+      }
+
+      console.log(`[handleSendToBilling] Itens salvos para cobrança para appointment ${appointmentId}.`);
+      toast({ title: "Enviado para Cobrança", description: "Os itens do atendimento foram enviados para o caixa." });
+
+    } catch (error) {
+      console.error("[handleSendToBilling] Erro:", error);
+      toast({ title: "Erro ao Enviar para Cobrança", description: error.message, variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+  // <<< FIM DA FUNÇÃO >>>
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -961,6 +1032,10 @@ export default function LiveVetConsulta() {
                       <Printer className="mr-2 h-4 w-4" /> Imprimir Prescrição
                    </Button>
                  )}
+                <Button onClick={handleSendToBilling} variant="destructive" className="bg-green-600 hover:bg-green-700" disabled={isSaving || isLoading || !appointment || !service}>
+                   {/* TODO: Add icon like DollarSign or ShoppingCart */} 
+                   {isSaving ? 'Enviando...' : 'Finalizar e Cobrar'}
+                 </Button>
             </div>
         </div>
 

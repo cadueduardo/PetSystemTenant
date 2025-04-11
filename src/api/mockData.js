@@ -117,25 +117,83 @@ const initialData = {
   products: [
     {
       id: 'prod1',
-      name: 'Ração Premium',
+      name: 'Ração Premium Cães Adultos 15kg',
       category: 'food',
-      description: 'Ração premium para cães adultos',
-      price: 89.90,
-      cost_price: 65.00,
+      description: 'Ração super premium para cães adultos de porte médio/grande',
+      price: 189.90,
+      cost_price: 110.00,
       stock_quantity: 50,
       low_stock_threshold: 10,
-      tenant_id: 'default'
+      tenant_id: 'default',
+      sku: 'RPCA15KG',
+      barcode: '7890000111222',
+      image_url: 'https://images.unsplash.com/photo-1587300003388-59208cc962cb?ixlib=rb-4.0.3&auto=format&fit=crop&w=300',
+      allowInternalUse: false,
+      administrationPrice: null
     },
     {
       id: 'prod2',
-      name: 'Shampoo Pet',
+      name: 'Shampoo Neutro Pet 500ml',
       category: 'hygiene',
-      description: 'Shampoo para cães e gatos',
+      description: 'Shampoo neutro para cães e gatos de todas as idades',
       price: 29.90,
       cost_price: 15.00,
       stock_quantity: 30,
       low_stock_threshold: 5,
-      tenant_id: 'default'
+      tenant_id: 'default',
+      sku: 'SHPN500ML',
+      barcode: '7890000111333',
+      image_url: 'https://images.unsplash.com/photo-1599481114694-14336d29890c?ixlib=rb-4.0.3&auto=format&fit=crop&w=300',
+      allowInternalUse: false,
+      administrationPrice: null
+    },
+    {
+      id: 'prod-vac-v10',
+      name: 'Vacina Polivalente V10 (Dose)',
+      category: 'medicine',
+      description: 'Dose da vacina V10 importada para cães',
+      price: 0,
+      cost_price: 45.00,
+      stock_quantity: 100,
+      low_stock_threshold: 10,
+      tenant_id: 'clinica-veterinaria-teste',
+      sku: 'VACV10DOSE',
+      barcode: '7890000222111',
+      image_url: '',
+      allowInternalUse: true,
+      administrationPrice: 95.00
+    },
+    {
+      id: 'prod-dipirona-inj',
+      name: 'Dipirona Injetável 500mg/ml (Aplicação)',
+      category: 'medicine',
+      description: 'Aplicação de analgésico e antitérmico injetável',
+      price: 0,
+      cost_price: 4.00,
+      stock_quantity: 80,
+      low_stock_threshold: 20,
+      tenant_id: 'clinica-veterinaria-teste',
+      sku: 'APPDIPI500',
+      barcode: '',
+      image_url: '',
+      allowInternalUse: true,
+      administrationPrice: 25.00
+    },
+    {
+      id: 'proc-curativo',
+      name: 'Realização de Curativo Simples',
+      category: 'other',
+      description: 'Limpeza e aplicação de curativo em ferida pequena',
+      price: 40.00,
+      cost_price: 5.00,
+      stock_quantity: 999,
+      low_stock_threshold: 0,
+      tenant_id: 'clinica-veterinaria-teste',
+      sku: 'PROCCURSIMP',
+      barcode: '',
+      image_url: '',
+      allowInternalUse: true,
+      administrationPrice: 40.00
     }
   ],
   tenants: [
@@ -1280,63 +1338,94 @@ export const AppointmentMock = {
 
 // Mock da entidade Product
 export const ProductMock = {
-  list: async () => {
+  async list() {
+    console.log("[ProductMock] Listing all products...");
     const data = getMockData();
     return data.products || [];
   },
-
-  get: async (id) => {
+  async filter({ tenant_id, category, name }) {
+    console.log(`[ProductMock] Filtering products for tenant ${tenant_id}, category ${category}, name ${name}...`);
     const data = getMockData();
-    const product = (data.products || []).find(p => p.id === id);
-    if (!product) throw new Error('Produto não encontrado');
-    return product;
-  },
-
-  filter: async (filters = {}) => {
-    const data = getMockData();
-    let filteredProducts = [...(data.products || [])];
-
-    if (filters.tenant_id) {
-      filteredProducts = filteredProducts.filter(p => p.tenant_id === filters.tenant_id);
+    let filtered = data.products || [];
+    if (tenant_id) {
+      // Include default products + tenant specific products
+      filtered = filtered.filter(p => p.tenant_id === tenant_id || p.tenant_id === 'default');
     }
-
-    return filteredProducts;
+    if (category) {
+      filtered = filtered.filter(p => p.category === category);
+    }
+    if (name) {
+      const searchTerm = name.toLowerCase();
+      filtered = filtered.filter(p => 
+        p.name.toLowerCase().includes(searchTerm) || 
+        (p.sku && p.sku.toLowerCase().includes(searchTerm)) ||
+        (p.barcode && p.barcode.includes(searchTerm)) // Barcode might not need lowercasing
+      );
+    }
+    console.log(`[ProductMock] Found ${filtered.length} products after filtering.`);
+    return filtered;
   },
-
-  create: async (productData) => {
+  async get(id) {
+    console.log(`[ProductMock] Getting product with ID: ${id}`);
+    const data = getMockData();
+    return data.products.find(p => p.id === id) || null;
+  },
+  async create(productData) {
+    console.log("[ProductMock] Creating product:", productData);
     const data = getMockData();
     const newProduct = {
-      id: generateUniqueId(),
       ...productData,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      id: `prod-${generateUniqueId()}`,
+      // Ensure default values if not provided, especially for new fields
+      allowInternalUse: productData.allowInternalUse ?? false,
+      administrationPrice: productData.administrationPrice ?? null,
+      stock_quantity: parseInt(productData.stock_quantity || 0, 10),
+      low_stock_threshold: parseInt(productData.low_stock_threshold || 5, 10),
+      price: parseFloat(productData.price || 0),
+      cost_price: parseFloat(productData.cost_price || 0),
     };
-    data.products = data.products || [];
     data.products.push(newProduct);
     setMockData(data);
     return newProduct;
   },
-
-  update: async (id, productData) => {
+  async update(id, updateData) {
+    console.log(`[ProductMock] Updating product ${id} with:`, updateData);
     const data = getMockData();
-    const index = (data.products || []).findIndex(p => p.id === id);
-    if (index === -1) throw new Error('Produto não encontrado');
-    
-    data.products[index] = {
-      ...data.products[index],
-      ...productData,
-      updated_at: new Date().toISOString()
-    };
-    setMockData(data);
-    return data.products[index];
+    const index = data.products.findIndex(p => p.id === id);
+    if (index !== -1) {
+      // Merge existing data with updateData
+      data.products[index] = {
+        ...data.products[index],
+        ...updateData,
+        // Ensure numeric types are correctly formatted after potential string input
+        allowInternalUse: updateData.allowInternalUse ?? data.products[index].allowInternalUse,
+        administrationPrice: updateData.administrationPrice ?? data.products[index].administrationPrice,
+        stock_quantity: parseInt(updateData.stock_quantity ?? data.products[index].stock_quantity, 10),
+        low_stock_threshold: parseInt(updateData.low_stock_threshold ?? data.products[index].low_stock_threshold, 10),
+        price: parseFloat(updateData.price ?? data.products[index].price),
+        cost_price: parseFloat(updateData.cost_price ?? data.products[index].cost_price),
+      };
+      setMockData(data);
+      return data.products[index];
+    } else {
+      console.error(`[ProductMock] Product with ID ${id} not found for update.`);
+      throw new Error("Produto não encontrado para atualização");
+    }
   },
-
-  delete: async (id) => {
+  async delete(id) {
+    console.log(`[ProductMock] Deleting product with ID: ${id}`);
     const data = getMockData();
-    data.products = (data.products || []).filter(p => p.id !== id);
-    setMockData(data);
+    const initialLength = data.products.length;
+    data.products = data.products.filter(p => p.id !== id);
+    if (data.products.length < initialLength) {
+      setMockData(data);
+      return true;
+    } else {
+      console.warn(`[ProductMock] Product with ID ${id} not found for deletion.`);
+      return false;
+    }
   }
-}; 
+};
 
 // --- Novas Funções para Motivos de Remoção ---
 
