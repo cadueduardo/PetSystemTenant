@@ -1,17 +1,17 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { getAuth, onAuthStateChanged, getIdTokenResult, signInWithCustomToken, signOut } from "firebase/auth";
 import {
   Building,
   PlusCircle,
-  Trash2,
-  Edit,
   Search,
   Loader2,
   CheckCircle,
   XCircle,
   CalendarCheck,
-  MoreVertical
+  MoreVertical,
+  KeyRound,
+  ShieldAlert
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -63,6 +63,15 @@ import {
     AlertDialogTitle 
 } from "@/components/ui/alert-dialog";
 import { adminTenantService } from "@/api/firebase/adminTenantService";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertTriangle } from "lucide-react";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { getApp } from "firebase/app";
+
+// Re-instanciar Firebase Functions e httpsCallable
+const app = getApp();
+const functions = getFunctions(app, 'us-central1'); // MUDAR REGIÃO
+const generateSupportTokenCallable = httpsCallable(functions, 'generateSupportToken');
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
@@ -75,40 +84,67 @@ export default function AdminDashboard() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [tenantToDelete, setTenantToDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [error, setError] = useState(null);
+  const [isEnteringSupportMode, setIsEnteringSupportMode] = useState(null);
   
   useEffect(() => {
-    const checkAuthAndFetchTenants = async () => {
-      const isAuthenticated = localStorage.getItem('admin_authenticated') === 'true';
-      if (!isAuthenticated) {
-        console.log("[AdminDashboard] Admin not authenticated. Redirecting to login.");
-        navigate(createPageUrl("AdminLogin"));
-        return;
-      }
+    const auth = getAuth();
 
-      setIsLoading(true);
-      try {
-        console.log("[AdminDashboard] Fetching tenants from adminTenantService...");
-        const fetchedTenants = await adminTenantService.listAll();
-        setTenants(fetchedTenants);
-        console.log("[AdminDashboard] Tenants fetched successfully:", fetchedTenants);
-      } catch (error) {
-        console.error("[AdminDashboard] Error fetching tenants:", error);
-        toast({ title: "Erro ao buscar Tenants", description: error.message, variant: "destructive" });
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    // Listener for authentication state changes
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        // User is signed in.
+        console.log(`[AdminDashboard Auth Listener] User is authenticated: ${user.uid}`);
+        setIsLoading(true);
+        setError(null);
+        try {
+          console.log("[AdminDashboard Auth Listener] Forcing token refresh...");
+          // Forçar refresh e obter resultado completo do token
+          const idTokenResult = await getIdTokenResult(user, true); 
+          console.log("[AdminDashboard Auth Listener] Token refreshed. Checking claims...");
 
-    checkAuthAndFetchTenants();
+          // ---> VERIFICAÇÃO EXPLÍCITA DE SUPER ADMIN <--- 
+          if (idTokenResult.claims.tenant_id) {
+             console.error(`[AdminDashboard Auth Listener] Permission Denied: User ${user.uid} has tenant_id claim, but is trying to access Admin Dashboard.`, idTokenResult.claims);
+             setError("Acesso negado. Esta conta parece ser de um administrador de loja, não um Super Administrador.");
+             // Opcional: Deslogar o usuário ou redirecionar
+             // await signOut(auth);
+             // navigate("/adminlogin"); 
+             setIsLoading(false);
+             return; // Impede a busca de tenants
+          }
+          console.log(`[AdminDashboard Auth Listener] User ${user.uid} confirmed as Super Admin (no tenant_id claim). Fetching tenants...`);
+          // ---> FIM DA VERIFICAÇÃO <--- 
+
+          const fetchedTenants = await adminTenantService.listAll();
+          console.log("[AdminDashboard Auth Listener] Tenants fetched successfully:", fetchedTenants);
+          setTenants(fetchedTenants);
+        } catch (err) {
+          console.error("[AdminDashboard Auth Listener] Error fetching tenants:", err);
+          setError(err.message || "Falha ao carregar tenants.");
+        } finally {
+          setIsLoading(false);
+        }
+      } else {
+        // User is signed out.
+        console.log("[AdminDashboard Auth Listener] User is not authenticated. Redirecting to login.");
+        setTenants([]); // Clear tenants state
+        setIsLoading(false); // Set loading false when redirecting
+        navigate("/adminlogin"); // Redirect to admin login page
+      }
+    });
+
+    // Cleanup function to unsubscribe when the component unmounts
+    return () => unsubscribe();
+
   }, [navigate]);
   
   const handleAccessTenant = (tenant) => {
     if (tenant && tenant.access_url) {
-      localStorage.setItem('current_tenant', tenant.access_url);
-      localStorage.setItem('tenant_name', tenant.company_name);
-      localStorage.setItem('tenant_modules', JSON.stringify(tenant.selected_modules || []));
-      
-      window.open(`/Dashboard?store=${tenant.access_url}`, '_blank');
+      // ... localStorage calls ...
+      const tenantDashboardUrl = `/tenant/dashboard?store=${tenant.access_url}`; // <-- VERIFIQUE ESTA LINHA
+      console.log(`[AdminDashboard] Opening tenant dashboard: ${tenantDashboardUrl}`);
+      window.open(tenantDashboardUrl, '_blank');
     }
   };
   
@@ -127,21 +163,23 @@ export default function AdminDashboard() {
     
     setIsDeleting(true);
     try {
-      console.warn(`[AdminDashboard] SIMULATING delete for tenant ID: ${tenantToDelete.id}. Implement actual Firestore deletion.`);
+      console.log(`[AdminDashboard] Deleting tenant ID: ${tenantToDelete.id}`);
       
-      await new Promise(resolve => setTimeout(resolve, 800)); 
+      // Call the actual delete service function
+      await adminTenantService.delete(tenantToDelete.id);
 
+      // Update the local state AFTER successful deletion
       const updatedTenants = tenants.filter(t => t.id !== tenantToDelete.id);
       setTenants(updatedTenants);
       
       toast({
-        title: "Tenant Excluído (Simulado)",
-        description: `${tenantToDelete.company_name || tenantToDelete.name} foi removido da lista.`,
+        title: "Tenant Excluído",
+        description: `${tenantToDelete.company_name || tenantToDelete.name} foi removido com sucesso.`,
       });
       
     } catch (error) {
-       console.error("[AdminDashboard] Error during tenant deletion (simulation):", error);
-       toast({ title: "Erro ao Excluir", description: "Não foi possível excluir o tenant.", variant: "destructive" });
+       console.error("[AdminDashboard] Error during tenant deletion:", error);
+       toast({ title: "Erro ao Excluir", description: error.message || "Não foi possível excluir o tenant.", variant: "destructive" });
     } finally {
       setIsDeleting(false);
       setIsDeleteDialogOpen(false); 
@@ -215,8 +253,69 @@ export default function AdminDashboard() {
     }
   };
   
+  const handleSupportAccess = async (tenant) => {
+    if (!tenant || !tenant.id) {
+      console.error("Informações inválidas do tenant para acesso de suporte.");
+      toast({ title: "Erro", description: "ID do Tenant inválido.", variant: "destructive" });
+      return;
+    }
+    
+    setIsEnteringSupportMode(tenant.id);
+    setError(null);
+    
+    try {
+      console.log(`[handleSupportAccess] Chamando generateSupportToken (onCall) para tenant ID: ${tenant.id}`);
+      
+      const result = await generateSupportTokenCallable({ targetTenantId: tenant.id });
+      const resultData = result.data;
+
+      if (resultData?.success && resultData.customToken) {
+        console.log("[handleSupportAccess] Token customizado recebido. Fazendo signOut...");
+        const auth = getAuth();
+        await signOut(auth);
+        console.log("[handleSupportAccess] SignIn com token customizado...");
+        await signInWithCustomToken(auth, resultData.customToken);
+        console.log("[handleSupportAccess] Login com token customizado bem-sucedido! Redirecionando...");
+        navigate("/tenant/dashboard"); 
+      } else {
+         const errorMessage = resultData?.message || "Falha ao obter token customizado (resposta inesperada da função).";
+         console.error("[handleSupportAccess] Falha na chamada da função onCall:", errorMessage, resultData);
+         throw new Error(errorMessage);
+      }
+
+    } catch (error) {
+      console.error("[handleSupportAccess] Erro ao entrar em modo suporte (onCall):", error);
+      const message = error.message || "Ocorreu um erro desconhecido.";
+      setError(`Falha ao iniciar modo suporte para ${tenant.name || tenant.company_name}: ${message}`);
+      toast({ title: "Erro", description: `Falha ao iniciar modo suporte: ${message}`, variant: "destructive" });
+    } finally {
+      setIsEnteringSupportMode(null); 
+    }
+  };
+  
   return (
-    <div className="p-6">
+    <div className="container mx-auto py-8">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl font-bold">Admin Dashboard - Tenants</h1>
+         {/* <Button onClick={() => {}}>Adicionar Novo Tenant</Button> */}
+      </div>
+
+      {/* Exibir Erro */}
+      {error && (
+        <Alert variant="destructive" className="mb-4">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Erro</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Indicador de Carregamento */}
+      {isLoading && (
+        <div className="flex justify-center items-center py-20">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <Card>
           <CardContent className="p-6">
@@ -352,88 +451,122 @@ export default function AdminDashboard() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredTenants.map((tenant) => (
-                      <TableRow key={tenant.id}>
-                        <TableCell>
-                          <div>
-                            <p className="font-medium">{tenant.name || tenant.company_name}</p>
-                            <p className="text-sm text-gray-500">{tenant.email}</p>
-                          </div>
-                        </TableCell>
-                        <TableCell>{getBusinessTypeDisplay(tenant.business_type)}</TableCell>
-                        <TableCell>
-                          <a 
-                            href={`http://${tenant.access_url}.petgestor.com.br`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline text-sm"
-                          >
-                            {tenant.access_url}.petgestor.com.br
-                          </a>
-                        </TableCell>
-                        <TableCell>{getStatusBadge(tenant.status)}</TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            {tenant.selected_modules?.map((module) => {
-                              let label = "", bgColor = "";
-                              
-                              switch(module) {
-                                case "clinic_management":
-                                  label = "Clínica";
-                                  bgColor = "bg-indigo-100 text-indigo-800";
-                                  break;
-                                case "petshop":
-                                  label = "Petshop";
-                                  bgColor = "bg-green-100 text-green-800";
-                                  break;
-                                case "financial":
-                                  label = "Financeiro";
-                                  bgColor = "bg-purple-100 text-purple-800";
-                                  break;
-                                case "transport":
-                                  label = "Transporte";
-                                  bgColor = "bg-amber-100 text-amber-800";
-                                  break;
-                                default:
-                                  label = module;
-                                  bgColor = "bg-gray-100 text-gray-800";
-                              }
-                              
-                              return <Badge key={module} className={bgColor}>{label}</Badge>;
-                            })}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" className="h-8 w-8 p-0">
-                                <span className="sr-only">Abrir menu</span>
-                                <MoreVertical className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuLabel>Ações</DropdownMenuLabel>
-                              <DropdownMenuItem onClick={() => handleAccessTenant(tenant)}>
-                                <Building className="mr-2 h-4 w-4" />
-                                Acessar Tenant
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleEditTenant(tenant)}>
-                                <Edit className="mr-2 h-4 w-4" />
-                                Editar
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem 
-                                className="text-red-600 focus:text-red-600"
-                                onClick={() => promptDeleteTenant(tenant)}
+                    {filteredTenants.map((tenant) => {
+                      const isSupportAccessActive = tenant.supportAccessGranted === true && 
+                                                    (!tenant.supportAccessExpiresAt || tenant.supportAccessExpiresAt.toMillis() > Date.now());
+                      
+                      const isLoadingSupport = isEnteringSupportMode === tenant.id;
+
+                      return (
+                        <TableRow key={tenant.id}>
+                          <TableCell>
+                            <div>
+                              <p className="font-medium">{tenant.name || tenant.company_name}</p>
+                              <p className="text-sm text-gray-500">{tenant.email}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell>{getBusinessTypeDisplay(tenant.business_type)}</TableCell>
+                          <TableCell>
+                            <a 
+                              href={`http://${tenant.access_url}.petgestor.com.br`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:underline text-sm"
+                            >
+                              {tenant.access_url}.petgestor.com.br
+                            </a>
+                          </TableCell>
+                          <TableCell>{getStatusBadge(tenant.status)}</TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-1">
+                              {tenant.selected_modules?.map((module) => {
+                                let label = "", bgColor = "";
+                                
+                                switch(module) {
+                                  case "clinic_management":
+                                    label = "Clínica";
+                                    bgColor = "bg-indigo-100 text-indigo-800";
+                                    break;
+                                  case "petshop":
+                                    label = "Petshop";
+                                    bgColor = "bg-green-100 text-green-800";
+                                    break;
+                                  case "financial":
+                                    label = "Financeiro";
+                                    bgColor = "bg-purple-100 text-purple-800";
+                                    break;
+                                  case "transport":
+                                    label = "Transporte";
+                                    bgColor = "bg-amber-100 text-amber-800";
+                                    break;
+                                  default:
+                                    label = module;
+                                    bgColor = "bg-gray-100 text-gray-800";
+                                }
+                                
+                                return <Badge key={module} className={bgColor}>{label}</Badge>;
+                              })}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end space-x-1">
+                              {isSupportAccessActive && !isLoadingSupport && (
+                                <ShieldAlert 
+                                  className="h-5 w-5 text-orange-500 flex-shrink-0"
+                                  title={`Acesso de suporte concedido até ${new Date(tenant.supportAccessExpiresAt.seconds * 1000).toLocaleString('pt-BR')}`}
+                                />
+                              )}
+
+                              <Button 
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleSupportAccess(tenant)}
+                                title="Acessar conta como suporte"
+                                className="h-8 px-2 flex-shrink-0"
+                                disabled={isLoadingSupport}
                               >
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                Excluir
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                                {isLoadingSupport ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <>
+                                    <KeyRound className="h-4 w-4 mr-1" />
+                                    Acessar
+                                  </>
+                                )}
+                              </Button>
+
+                              {!isLoadingSupport && (
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" className="h-8 w-8 p-0 flex-shrink-0">
+                                      <span className="sr-only">Abrir menu</span>
+                                      <MoreVertical className="h-4 w-4" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuLabel>Ações</DropdownMenuLabel>
+                                    <DropdownMenuItem onClick={() => handleAccessTenant(tenant)} disabled={isLoadingSupport}>
+                                      Abrir Painel
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => handleEditTenant(tenant)} disabled={isLoadingSupport}>
+                                      Editar
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem 
+                                      className="text-red-600 focus:text-red-700 focus:bg-red-50"
+                                      onClick={() => promptDeleteTenant(tenant)}
+                                      disabled={isLoadingSupport}
+                                    >
+                                      Excluir Tenant
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>

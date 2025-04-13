@@ -3,8 +3,8 @@ import {
   collection,
   getDocs,
   query,
-  // orderBy // Removed as it's not currently used
-  // Import other functions like getDoc, updateDoc, deleteDoc as needed
+  doc,
+  deleteDoc
 } from "firebase/firestore";
 
 const tenantsCollection = collection(db, "tenants");
@@ -41,6 +41,31 @@ export const adminTenantService = {
            throw new Error('Permissão negada para listar tenants. Verifique as regras do Firestore para administradores.');
       }
       throw error; // Re-throw other errors
+    }
+  },
+
+  /**
+   * Deletes a tenant document from Firestore.
+   * Should only be callable by authorized Super Admins.
+   * @param {string} tenantId - The ID of the tenant to delete.
+   * @returns {Promise<void>}
+   */
+  delete: async (tenantId) => {
+    if (!tenantId) {
+      throw new Error("Tenant ID is required for deletion.");
+    }
+    console.log(`[adminTenantService.delete] Attempting to delete tenant ID: ${tenantId}`);
+    try {
+      const tenantDocRef = doc(db, "tenants", tenantId);
+      await deleteDoc(tenantDocRef);
+      console.log(`[adminTenantService.delete] Tenant ${tenantId} deleted successfully.`);
+    } catch (error) {
+      console.error(`[adminTenantService.delete] Error deleting tenant ${tenantId}:`, error);
+      if (error.code === 'permission-denied') {
+           console.error("PERMISSION DENIED: Check Firestore rules for admin deleting from the tenants collection.");
+           throw new Error('Permissão negada para excluir tenant. Verifique as regras do Firestore para administradores.');
+      }
+      throw new Error(`Failed to delete tenant: ${error.message}`);
     }
   },
 

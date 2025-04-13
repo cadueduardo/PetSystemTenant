@@ -12,16 +12,29 @@ service cloud.firestore {
       return request.auth != null && request.auth.token.tenant_id != null;
     }
     
-    // Função para verificar se é um super admin (sem tenant_id)
     function isSuperAdmin() {
       return request.auth != null && !('tenant_id' in request.auth.token);
-      // Alternativa: return request.auth != null && request.auth.token.role == 'superAdmin';
+    }
+    
+    // Helper para checar campos permitidos na atualização pelo Tenant Admin
+    function isTenantUpdatingSupportAccessOnly() {
+      // Define os campos que o Tenant Admin PODE modificar
+      let allowedUpdateFields = ['supportAccessGranted', 'supportAccessExpiresAt', 'supportAccessLastUpdated'];
+      // Garante que NENHUM campo FORA da lista permitida está sendo escrito.
+      return request.resource.data.keys().diff(allowedUpdateFields).size() == 0;
     }
 
     // === Coleções Globais/Compartilhadas ===
 
     match /tenants/{tenantId} {
+      // Super Admin: Acesso total
       allow read, write, delete: if isSuperAdmin();
+      
+      // Tenant Admin: Ler próprio doc
+      allow get: if isTenantMember(tenantId);
+      
+      // Tenant Admin: Atualizar apenas campos de suporte (RESTAURADA)
+      allow update: if isTenantMember(tenantId) && isTenantUpdatingSupportAccessOnly();
     }
 
     match /cancellationReasons/{reasonId} {
@@ -150,6 +163,37 @@ service cloud.firestore {
       allow delete: if isTenantMember(resource.data.tenant_id);
     }
     // --- FIM: Coleções de Prescrição por Tenant ---
+
+    // === NOVAS REGRAS: Suporte ===
+    match /supportTickets/{ticketId} {
+      // Leitura/Listagem: Membro do tenant pode ler/listar tickets do seu tenant
+      allow read, list: if isTenantMember(resource.data.tenant_id); 
+      
+      // Criação: Membro do tenant pode criar tickets para seu tenant
+      allow create: if isTenantMember(request.resource.data.tenant_id)
+                      // Opcional: garantir campos essenciais
+                      && request.resource.data.tenant_id == request.auth.token.tenant_id
+                      && request.resource.data.createdByUid == request.auth.uid; 
+                      
+      // Atualização: Criador OU Super Admin podem atualizar (ajuste se necessário)
+      allow update: if (isTenantMember(resource.data.tenant_id) && request.auth.uid == resource.data.createdByUid) 
+                      || isSuperAdmin(); 
+                      // Impedir mudança de tenant_id
+                      // && request.resource.data.tenant_id == resource.data.tenant_id;
+                      
+      // Exclusão: Apenas Super Admin (ajuste se necessário)
+      allow delete: if isSuperAdmin(); 
+    }
+  
+    match /knowledgeArticles/{articleId} {
+      // Leitura/Listagem: Membro do tenant pode ler/listar artigos do seu tenant
+      allow read, list: if isTenantMember(resource.data.tenant_id); 
+      // Se fossem artigos globais, usar: allow read: if request.auth != null;
+
+      // Escrita: Apenas Super Admin
+      allow write, delete: if isSuperAdmin();
+    }
+    // === FIM: Suporte ===
 
   }
 } 

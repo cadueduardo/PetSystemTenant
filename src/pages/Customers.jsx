@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Customer, Pet, CancellationReason } from "@/api/entities";
 import { useNavigate } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { useTenant } from "@/components/tenant/TenantContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -47,6 +47,7 @@ import {
 
 export default function CustomersPage() {
   const navigate = useNavigate();
+  const { currentTenant, isLoading: isTenantLoading } = useTenant();
   const [customers, setCustomers] = useState([]);
   const [pets, setPets] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -65,17 +66,60 @@ export default function CustomersPage() {
   const [showPetConfirmationAlert, setShowPetConfirmationAlert] = useState(false);
   const [reactivatedCustomerData, setReactivatedCustomerData] = useState(null);
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  const loadData = useCallback(async () => {
+    const tenantId = currentTenant?.id;
+    if (!tenantId) {
+      console.log("[CustomersPage loadData] No tenant ID available yet.");
+      setIsLoading(false);
+      setCustomers([]);
+      setPets([]);
+      return;
+    }
+
+    console.log(`[CustomersPage loadData] Loading data for tenant ID: ${tenantId}`);
+    setIsLoading(true);
+    try {
+      const [customersData, petsData] = await Promise.all([
+        Customer.list({ tenant_id: tenantId }),
+        Pet.list({ tenant_id: tenantId })
+      ]);
+      
+      console.log('[CustomersPage loadData] Pets carregados:', petsData);
+      customersData.sort((a, b) => a.full_name.localeCompare(b.full_name));
+      setCustomers(customersData);
+      setPets(petsData);
+    } catch (error) {
+      console.error(`[CustomersPage loadData] Erro ao carregar dados para tenant ${tenantId}:`, error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível carregar os dados dos clientes e pets.",
+        variant: "destructive"
+      });
+      setCustomers([]); 
+      setPets([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentTenant?.id]);
 
   useEffect(() => {
-    if (showInactivateModal) {
+    if (currentTenant?.id) {
+      loadData();
+    } else if (!isTenantLoading) {
+        console.log("[CustomersPage useEffect] Tenant context loaded, but no current tenant found.");
+        setIsLoading(false);
+        setCustomers([]);
+        setPets([]);
+    }
+    
+  }, [currentTenant?.id, isTenantLoading, loadData]);
+
+  useEffect(() => {
+    if (showInactivateModal && currentTenant?.id) {
       const loadReasons = async () => {
         setIsLoadingInactivateReasons(true);
         try {
-          const tenantId = localStorage.getItem('current_tenant');
-          if (!tenantId) throw new Error("Tenant ID não encontrado");
+          const tenantId = currentTenant.id;
           console.log("[CustomersPage] Loading inactivation reasons for tenant:", tenantId);
           const loadedReasons = await CancellationReason.list(tenantId);
           setInactivateReasons(Array.isArray(loadedReasons) ? loadedReasons : []);
@@ -92,36 +136,10 @@ export default function CustomersPage() {
       setOtherInactivateReason('');
       setShowOtherInactivateInput(false);
     }
-  }, [showInactivateModal]);
-
-  const loadData = async () => {
-    setIsLoading(true);
-    try {
-      const [customersData, petsData] = await Promise.all([
-        Customer.list(),
-        Pet.list()
-      ]);
-      
-      console.log('[CustomersPage loadData] Pets carregados:', petsData);
-
-      customersData.sort((a, b) => a.full_name.localeCompare(b.full_name));
-
-      setCustomers(customersData);
-      setPets(petsData);
-    } catch (error) {
-      console.error("Erro ao carregar dados:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível carregar os dados.",
-        variant: "destructive"
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  }, [showInactivateModal, currentTenant?.id]);
 
   const navigateToCustomerDetails = (customerId) => {
-      navigate(createPageUrl('CustomerDetails', { id: customerId }));
+      navigate(`/tenant/cliente/${customerId}`);
   };
 
   const handleViewDetails = (customerId) => {
@@ -175,7 +193,7 @@ export default function CustomersPage() {
      
      let finalReasonId = selectedInactivateReason;
      const reasonValue = otherInactivateReason.trim();
-     const tenantId = localStorage.getItem('current_tenant');
+     const tenantId = currentTenant?.id;
      const customerIdToInactivate = inactivatingCustomer.id;
 
      if (!tenantId) {
@@ -226,12 +244,20 @@ export default function CustomersPage() {
     return matchesSearch && matchesStatus;
   });
 
-  if (isLoading) {
+  if (isLoading || isTenantLoading) {
     return (
       <div className="flex justify-center items-center h-full p-8">
         <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
       </div>
     );
+  }
+
+  if (!currentTenant) {
+      return (
+        <div className="flex justify-center items-center h-full p-8">
+          <p className="text-red-600">Tenant não selecionado ou inválido.</p>
+        </div>
+      );
   }
 
   return (

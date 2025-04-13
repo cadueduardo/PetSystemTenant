@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Tenant } from '@/api/entities';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
+import { getFirestore, collection, query, where, getDocs, limit } from 'firebase/firestore'; // Import firestore functions
 
 // Criar contexto do tenant
 const TenantContext = createContext(null);
@@ -11,40 +11,50 @@ export function TenantProvider({ children }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const location = useLocation();
-  const navigate = useNavigate();
+  const db = getFirestore(); // Get Firestore instance
 
   useEffect(() => {
-    // Carregar tenant da URL ou do tenant ativo
     const loadTenant = async () => {
       try {
         setIsLoading(true);
         setError(null);
+        setCurrentTenant(null); // Reset tenant on load
 
-        // Verificar parâmetro de loja na URL
         const urlParams = new URLSearchParams(window.location.search);
         const storeParam = urlParams.get('store');
+        let foundTenantData = null;
+        let foundTenantId = null;
+
+        const tenantsCol = collection(db, 'tenants');
 
         if (storeParam) {
-          // Buscar tenant pelo slug da URL
-          const tenantsByUrl = await Tenant.filter({ access_url: storeParam, status: "active" });
-          
-          if (tenantsByUrl.length > 0) {
-            setCurrentTenant(tenantsByUrl[0]);
-            console.log(`TenantContext - Tenant carregado da URL: ${storeParam}`, tenantsByUrl[0]);
+          console.log(`TenantContext: Searching tenant by access_url: ${storeParam}`);
+          const q = query(tenantsCol, where("access_url", "==", storeParam), where("status", "==", "active"), limit(1));
+          const querySnapshot = await getDocs(q);
+          if (!querySnapshot.empty) {
+            const docSnap = querySnapshot.docs[0];
+            foundTenantId = docSnap.id;
+            foundTenantData = docSnap.data();
+            console.log(`TenantContext - Tenant loaded from URL: ${storeParam}`, { id: foundTenantId, ...foundTenantData });
           } else {
-            setError(`Tenant não encontrado: ${storeParam}`);
+            console.error(`TenantContext: Active tenant not found for access_url: ${storeParam}`);
+            setError(`Tenant não encontrado ou inativo: ${storeParam}`);
           }
         } else {
-          // Buscar qualquer tenant ativo para o usuário
-          const tenantsData = await Tenant.filter({ status: "active" });
-          
-          if (tenantsData.length > 0) {
-            setCurrentTenant(tenantsData[0]);
-            console.log('TenantContext - Tenant ativo carregado:', tenantsData[0]);
-          }
+          // Se não houver storeParam, NÃO tentamos buscar um tenant ativo genérico
+          // O tenant deve ser definido pelo login ou pelo acesso via Super Admin
+          // Se precisar carregar o tenant do usuário logado aqui, precisaria importar getAuth, onAuthStateChanged, getIdTokenResult
+          console.log("TenantContext: No store parameter in URL. Tenant will be set by login/claims.");
+          // Poderíamos tentar pegar o tenantId dos claims se o usuário JÁ ESTIVER logado?
+          // Isso complica o fluxo, melhor deixar o ProtectedRoute/Login cuidarem disso.
         }
+
+        if (foundTenantId && foundTenantData) {
+            setCurrentTenant({ id: foundTenantId, ...foundTenantData });
+        }
+
       } catch (err) {
-        console.error('Erro ao carregar tenant:', err);
+        console.error('TenantContext: Error loading tenant:', err);
         setError('Não foi possível carregar os dados do tenant.');
       } finally {
         setIsLoading(false);
@@ -52,58 +62,28 @@ export function TenantProvider({ children }) {
     };
 
     loadTenant();
-  }, [location.search]);
+    // Re-executar se o search param (ex: ?store=...) mudar
+  }, [location.search, db]); 
 
-  // Função para alterar tenant atual (para administradores que gerenciam múltiplos tenants)
-  const switchTenant = async (tenantId) => {
-    try {
-      setIsLoading(true);
-      const tenant = await Tenant.filter({ id: tenantId, status: "active" });
-      
-      if (tenant.length > 0) {
-        setCurrentTenant(tenant[0]);
-        
-        // Atualizar URL para refletir o tenant atual
-        if (tenant[0].access_url) {
-          const url = new URL(window.location.href);
-          url.searchParams.set('store', tenant[0].access_url);
-          window.history.pushState({}, '', url);
-        }
-        
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error('Erro ao trocar tenant:', error);
-      return false;
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // Envolver setTenantFromAuth com useCallback
+  const setTenantFromAuth = useCallback((tenantDataWithId) => {
+    console.log("TenantContext: Setting tenant from Auth/Claims", tenantDataWithId);
+    setCurrentTenant(tenantDataWithId);
+    setIsLoading(false); // Marca como carregado
+    setError(null);
+  }, []); // Array de dependências vazio, pois não depende de nada externo a esta função
 
-  // Função para navegar mantendo o parâmetro store
-  const navigateWithStore = (path) => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const storeParam = urlParams.get('store');
-    
-    if (storeParam) {
-      const newPath = path.includes('?') 
-        ? `${path}&store=${storeParam}`
-        : `${path}?store=${storeParam}`;
-      navigate(newPath);
-    } else {
-      navigate(path);
-    }
-  };
+  // O valor do contexto agora inclui a função memoizada
+  const contextValue = useMemo(() => ({ 
+    currentTenant, 
+    tenantId: currentTenant?.id, // Adiciona tenantId diretamente para conveniência
+    isLoading, 
+    error,
+    setTenantFromAuth // Exporta a função para setar o tenant
+  }), [currentTenant, isLoading, error, setTenantFromAuth]); // Dependências do useMemo
 
   return (
-    <TenantContext.Provider value={{ 
-      currentTenant, 
-      isLoading, 
-      error,
-      switchTenant,
-      navigateWithStore
-    }}>
+    <TenantContext.Provider value={contextValue}>
       {children}
     </TenantContext.Provider>
   );

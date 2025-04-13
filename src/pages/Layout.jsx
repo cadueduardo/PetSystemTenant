@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { getAuth, signOut } from "firebase/auth"; // Import auth functions
 import {
   LayoutDashboard,
   Users,
@@ -18,13 +19,12 @@ import {
   Clock,
   Stethoscope,
   Pill,
-  ClipboardList
+  ClipboardList,
+  LifeBuoy,
+  LogOut, // Import Logout icon
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useTenant } from "@/components/tenant/TenantContext";
-// import TransportServices from './TransportServices'; // Removido não usado
-// import TransportSettings from './TransportSettings';
-// import AdminDashboard from './AdminDashboard'; // Removido não usado
+// import { useTenant } from "@/components/tenant/TenantContext"; // Removido useTenant
 
 const classNames = (...classes) => {
   return classes.filter(Boolean).join(' ');
@@ -34,16 +34,58 @@ export default function Layout() {
   const { theme, setTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
-  const { navigateWithStore } = useTenant();
+  const navigate = useNavigate(); // Obter a função navigate
+  // const { navigateWithStore } = useTenant(); // Removida desestruturação
 
   const isActive = (href) => {
+    // Adicionada verificação para path exato do dashboard
+    if (href === "/tenant/dashboard") {
+       return location.pathname === href;
+    }
+    // Adicionada verificação para path exato da agenda/calendário
+     if (href === "/tenant/agenda" || href === "/tenant/calendario") {
+       return location.pathname === "/tenant/agenda" || location.pathname === "/tenant/calendario";
+    }
     return location.pathname.startsWith(href);
   };
 
   const handleNavigation = (e, path) => {
     e.preventDefault();
-    navigateWithStore(path);
+    // navigateWithStore(path); // Removido navigateWithStore
+    navigate(path); // Usar navigate
+    if (sidebarOpen) { // Fecha a sidebar mobile se estiver aberta
+        setSidebarOpen(false);
+    }
   };
+
+  // --- Logout Handler ---
+  const handleLogout = async () => {
+    const auth = getAuth();
+    try {
+      await signOut(auth);
+      console.log("User signed out successfully.");
+      navigate("/login"); // Redirect to login page after sign out
+    } catch (error) {
+      console.error("Error signing out: ", error);
+      // Handle sign-out errors here (e.g., show a notification)
+    }
+  };
+  // --- End Logout Handler ---
+
+  // Adicionado link de Suporte (se estava faltando na versão restaurada)
+  const supportLink = (
+      <Link
+        to="/tenant/suporte"
+        onClick={(e) => handleNavigation(e, "/tenant/suporte")}
+        className={classNames(
+          `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+          isActive("/tenant/suporte") ? "bg-accent font-medium" : ""
+        )}
+      >
+        <LifeBuoy className="h-5 w-5" />
+        <span>Suporte</span>
+      </Link>
+  );
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -62,9 +104,10 @@ export default function Layout() {
       >
         <div className="flex h-16 items-center justify-between px-6 border-b">
           <div className="flex items-center">
-            <span className="font-bold text-lg">
-              PetClinic
-            </span>
+             {/* Usando Link para o logo também */}
+             <Link to="/tenant/dashboard" onClick={(e) => handleNavigation(e, "/tenant/dashboard")} className="font-bold text-lg">
+                PetClinic
+             </Link>
           </div>
           <Button
             variant="ghost"
@@ -93,7 +136,7 @@ export default function Layout() {
             <Link
               to="/tenant/clientes"
               onClick={(e) => handleNavigation(e, "/tenant/clientes")}
-        className={classNames(
+              className={classNames(
                 `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
                 isActive("/tenant/clientes") ? "bg-accent font-medium" : ""
               )}
@@ -102,12 +145,13 @@ export default function Layout() {
               <span>Clientes</span>
             </Link>
             
+             {/* Usar /tenant/agenda consistentemente */}
             <Link
-              to="/tenant/calendario"
-              onClick={(e) => handleNavigation(e, "/tenant/calendario")}
+              to="/tenant/agenda" 
+              onClick={(e) => handleNavigation(e, "/tenant/agenda")}
               className={classNames(
                 `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
-                isActive("/tenant/calendario") ? "bg-accent font-medium" : ""
+                isActive("/tenant/agenda") ? "bg-accent font-medium" : "" 
               )}
             >
               <Calendar className="h-5 w-5" />
@@ -198,19 +242,7 @@ export default function Layout() {
               <span>Modelos Prescrição</span>
             </Link>
 
-            {/* <<< COMENTANDO/REMOVENDO O LINK DE TRANSPORTE >>>
-              <Link
-              to="/tenant/transporte"
-              onClick={(e) => handleNavigation(e, "/tenant/transporte")}
-              className={classNames(
-                `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
-                isActive("/tenant/transporte") ? "bg-accent font-medium" : ""
-              )}
-            >
-              <Truck className="h-5 w-5" />
-              <span>Transporte</span>
-              </Link>
-            */}
+            {/* Link de Transporte Comentado */}
 
             <Link
               to="/tenant/financeiro"
@@ -235,10 +267,23 @@ export default function Layout() {
               <SettingsIcon className="h-5 w-5" />
               <span>Configurações</span>
             </Link>
+            {/* Adicionando o Link de Suporte aqui */}
+            {supportLink} 
+
+            {/* --- Logout Button --- */}
+            <button
+                onClick={handleLogout}
+                className="mt-auto flex items-center gap-3 rounded-md px-3 py-2 text-red-500 hover:bg-destructive/10" // Added margin-top auto to push it down potentially, added specific styling
+             >
+               <LogOut className="h-5 w-5" />
+               <span>Sair</span>
+             </button>
+             {/* --- End Logout Button --- */}
+
           </nav>
         </div>
 
-          <div className="border-t p-4">
+        <div className="border-t p-4">
             <div className="flex items-center gap-3">
               <Avatar>
               <AvatarFallback className="bg-primary/10 text-primary">
@@ -248,22 +293,32 @@ export default function Layout() {
               <div className="overflow-hidden">
               <p className="truncate font-medium">Usuário</p>
               <p className="truncate text-sm text-muted-foreground">
+                usuario@email.com {/* TODO: Obter email real */}
               </p>
+              </div>
             </div>
+            
+            <Link 
+              to="/tenant/suporte" 
+              onClick={(e) => handleNavigation(e, "/tenant/suporte")}
+              className="block text-center text-xs text-muted-foreground hover:text-primary hover:underline mt-4 mb-2"
+            >
+              Está com problemas? Acesse nosso suporte
+            </Link>
+
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="mt-4 w-full" 
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            >
+              {theme === 'dark' ? (
+                <Sun className="h-5 w-5" />
+              ) : (
+                <Moon className="h-5 w-5" />
+              )}
+            </Button>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="mt-4 w-full"
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          >
-            {theme === 'dark' ? (
-              <Sun className="h-5 w-5" />
-            ) : (
-              <Moon className="h-5 w-5" />
-            )}
-          </Button>
-        </div>
       </div>
 
       <div className="flex flex-1 flex-col">
@@ -276,6 +331,7 @@ export default function Layout() {
           >
             <Menu className="h-6 w-6" />
           </Button>
+          {/* Aqui pode ir outros itens do header, como busca ou menu do usuário */}
         </header>
         <main className="flex-1 p-6">
           <Outlet />

@@ -2,10 +2,14 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { useState, useEffect } from 'react';
 import { Loader2 } from 'lucide-react'; // Para indicador de loading
+import { useTenant } from '@/components/tenant/TenantContext'; // Importar useTenant
+import { doc, getDoc } from 'firebase/firestore'; // Importar funções do Firestore
+import { db } from '@/lib/firebaseConfig'; // Importar instância do DB
 
 const auth = getAuth();
 
 const ProtectedRoute = () => {
+  const { setTenantFromAuth } = useTenant(); // Obter função do contexto
   const [isAuthenticated, setIsAuthenticated] = useState(null); // null = loading, false = not auth, true = auth
   const [tenantId, setTenantId] = useState(null);
 
@@ -19,20 +23,40 @@ const ProtectedRoute = () => {
           console.log('[ProtectedRoute] Claims tenant_id:', currentTenantId);
           
           if (currentTenantId) {
-            setTenantId(currentTenantId);
-            localStorage.setItem('current_tenant', currentTenantId); // Garante que está no localStorage
-            setIsAuthenticated(true);
-            console.log('[ProtectedRoute] Authenticated as Tenant Admin.');
+            // Buscar dados completos do Tenant no Firestore
+            console.log(`[ProtectedRoute] Fetching tenant document for ID: ${currentTenantId}`);
+            const tenantRef = doc(db, 'tenants', currentTenantId);
+            const tenantSnap = await getDoc(tenantRef);
+
+            if (tenantSnap.exists()) {
+              const tenantData = { id: tenantSnap.id, ...tenantSnap.data() };
+              console.log('[ProtectedRoute] Tenant document found:', tenantData);
+              setTenantFromAuth(tenantData); // Popular o contexto com os dados do tenant
+              setTenantId(currentTenantId); // Manter ID localmente também
+              localStorage.setItem('current_tenant', currentTenantId); // Garante que está no localStorage
+              setIsAuthenticated(true);
+              console.log('[ProtectedRoute] Authenticated as Tenant Admin and context populated.');
+            } else {
+               // Tenant não encontrado no Firestore, mesmo com claim!
+               console.error(`[ProtectedRoute] Tenant claim found (${currentTenantId}), but document not found in Firestore!`);
+               setTenantFromAuth(null); // Limpar contexto
+               setTenantId(null);
+               setIsAuthenticated(false); 
+               localStorage.removeItem('current_tenant');
+               // Considerar deslogar ou mostrar erro grave
+               // await auth.signOut(); 
+            }
+
           } else {
             console.warn("[ProtectedRoute] User logged in but lacks tenant_id claim.");
+            setTenantFromAuth(null); // Limpar contexto
             setTenantId(null);
             setIsAuthenticated(false); 
-            localStorage.removeItem('current_tenant'); // Limpa se não tiver tenant_id
-            // Considerar deslogar se não for o super admin?
-            // await auth.signOut();
+            localStorage.removeItem('current_tenant');
           }
         } catch (error) {
-           console.error("[ProtectedRoute] Error fetching token/claims:", error);
+           console.error("[ProtectedRoute] Error fetching token/claims or tenant document:", error);
+           setTenantFromAuth(null); // Limpar contexto
            setTenantId(null);
            setIsAuthenticated(false);
            localStorage.removeItem('current_tenant');
@@ -40,6 +64,7 @@ const ProtectedRoute = () => {
       } else {
         // Não logado
         console.log('[ProtectedRoute] No user logged in.');
+        setTenantFromAuth(null); // Limpar contexto
         setTenantId(null);
         localStorage.removeItem('current_tenant');
         setIsAuthenticated(false);
@@ -48,7 +73,7 @@ const ProtectedRoute = () => {
 
     // Cleanup subscription on unmount
     return () => unsubscribe();
-  }, []);
+  }, [setTenantFromAuth]); // Adicionar setTenantFromAuth como dependência
 
   if (isAuthenticated === null) {
     // Enquanto verifica o auth, mostra um loading centralizado

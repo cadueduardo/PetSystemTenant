@@ -88,6 +88,7 @@ import MedicationQueue from "./MedicationQueue";
 import { TenantProvider } from "@/components/tenant/TenantContext";
 import ProtectedRoute from './ProtectedRoute';
 import PrescriptionManager from './PrescriptionManager';
+import SuperAdminsPage from './SuperAdminsPage';
 
 /* Comentado PAGES pois não será mais usado 
 const PAGES = {
@@ -210,6 +211,7 @@ function PagesContent() {
                 <Route path="multitenant" element={<GerenciamentoMultiTenant />} />
                 <Route path="reports" element={<AdminReports />} />
                 <Route path="tools" element={<AdminTools />} />
+                <Route path="superadmins" element={<SuperAdminsPage />} />
             </Route>
 
             {/* Alias para /admin/dashboard */}
@@ -225,7 +227,7 @@ function PagesContent() {
                 <Route path="clientes" element={<Customers />} />
                 <Route path="cliente/:id" element={<CustomerDetails />} />
                 <Route path="cliente/editar/:id" element={<EditCustomer />} />
-                <Route path="calendario" element={<Calendar />} />
+                <Route path="agenda" element={<Calendar />} />
                 <Route path="pet/:id" element={<PetDetails />} />
                 <Route path="orc-estatisticas" element={<OCRStatistics />} />
                 <Route path="suporte" element={<Support />} />

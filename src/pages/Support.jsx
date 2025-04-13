@@ -1,294 +1,268 @@
-import React, { useState, useEffect } from "react";
-import { User as UserEntity } from "@/api/entities";
-import { SupportTicket } from "@/api/entities";
-import { KnowledgeArticle } from "@/api/entities";
-import { Tenant } from "@/api/entities";
-import { useNavigate } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { useState, useEffect } from "react";
+// import { User as UserEntity } from "@/api/entities"; // Removido
+// import { SupportTicket } from "@/api/entities"; // Removido
+// import { KnowledgeArticle } from "@/api/entities"; // Removido
+// import { useNavigate } from "react-router-dom"; // Removido
+// import { createPageUrl } from "@/utils"; // Removido
 import { format } from "date-fns";
 import { pt } from "date-fns/locale";
+import {
+   doc, Timestamp, getDoc
+} from "firebase/firestore";
+import { useTenant } from "@/components/tenant/TenantContext";
+import { useToast } from "@/components/ui/use-toast";
+// import { getAuth } from "firebase/auth"; // Comentado ou removido
+import { db } from "@/lib/firebaseConfig";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { getApp } from "firebase/app"; // Importar getApp para passar para getFunctions
 
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+// import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"; // Removido
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+// import { Input } from "@/components/ui/input"; // Removido
+// import { Badge } from "@/components/ui/badge"; // Removido (usado em getStatus/PriorityBadge, mas as chamadas foram removidas)
+// import {
+//   Table,
+//   TableBody,
+//   TableCell,
+//   TableHead,
+//   TableHeader,
+//   TableRow,
+// } from "@/components/ui/table"; // Removido
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Plus,
-  Search,
-  BookOpen,
-  MessageSquareMore,
-  ArrowRight,
-  AlertTriangle,
-  Clock,
-  CheckCircle2,
-  Loader2
+  // Plus, // Mantido? Usado em Novo Chamado
+  // Search, // Removido
+  // BookOpen, // Removido
+  // MessageSquareMore, // Removido
+  // ArrowRight, // Removido
+  AlertTriangle, // Mantido (Card Acesso Suporte)
+  Clock, // Mantido (Card Acesso Suporte)
+  CheckCircle2, // Mantido (Card Acesso Suporte)
+  Loader2 // Mantido (Loadings)
 } from "lucide-react";
 
-import NewTicketForm from "../components/support/NewTicketForm";
-import KnowledgeBaseSearch from "../components/support/KnowledgeBaseSearch";
-import Chatbot from "../components/support/Chatbot";
+// Remover imports de componentes não usados se as seções foram removidas
+// import NewTicketForm from "../components/support/NewTicketForm"; 
+// import KnowledgeBaseSearch from "../components/support/KnowledgeBaseSearch";
+// import Chatbot from "../components/support/Chatbot";
 
-const priorityColors = {
-  low: "bg-blue-100 text-blue-800 border-blue-200",
-  medium: "bg-yellow-100 text-yellow-800 border-yellow-200",
-  high: "bg-red-100 text-red-800 border-red-200"
-};
+// const priorityColors = { ... }; // Remover se getPriorityBadge for removido
+// const statusColors = { ... }; // Remover se getStatusBadge for removido
 
-const statusColors = {
-  open: "bg-blue-100 text-blue-800 border-blue-200",
-  in_progress: "bg-yellow-100 text-yellow-800 border-yellow-200",
-  waiting_customer: "bg-purple-100 text-purple-800 border-purple-200",
-  resolved: "bg-green-100 text-green-800 border-green-200",
-  closed: "bg-gray-100 text-gray-800 border-gray-200"
-};
+// Instanciar Firebase Functions ESPECIFICANDO A REGIÃO
+const app = getApp(); // Obter a instância padrão do Firebase App
+const functions = getFunctions(app, 'us-central1'); // MUDAR REGIÃO
+const manageSupportAccessCallable = httpsCallable(functions, 'manageSupportAccess');
 
 export default function SupportPage() {
-  const navigate = useNavigate();
-  const [showNewTicket, setShowNewTicket] = useState(false);
-  const [tickets, setTickets] = useState([]);
-  const [articles, setArticles] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [currentTenant, setCurrentTenant] = useState(null);
-  const [showChatbot, setShowChatbot] = useState(false);
+  // const navigate = useNavigate(); // Removido
+  // const [showNewTicket, setShowNewTicket] = useState(false); // Remover se botão Novo Chamado for removido
+  // const [tickets, setTickets] = useState([]); 
+  // const [articles, setArticles] = useState([]); 
+  // const [isLoading, setIsLoading] = useState(true); // Removido (usaremos isSupportAccessLoading)
+  // const [searchTerm, setSearchTerm] = useState(""); // Remover se busca for removida
+  // const [showChatbot, setShowChatbot] = useState(false); // Remover se botão Chatbot for removido
+  const [isSupportAccessLoading, setIsSupportAccessLoading] = useState(true);
+  const [isUpdatingAccess, setIsUpdatingAccess] = useState(false);
+  const [supportAccessGranted, setSupportAccessGranted] = useState(false);
+  const [supportAccessExpiresAt, setSupportAccessExpiresAt] = useState(null);
+  const { toast } = useToast();
+
+  const { currentTenant } = useTenant();
+  const tenantId = currentTenant?.id;
 
   useEffect(() => {
+    if (tenantId) {
     loadData();
-  }, []);
+    }
+  }, [tenantId]);
 
   const loadData = async () => {
-    setIsLoading(true);
-    try {
-      const userData = await UserEntity.me();
-      const tenants = await Tenant.list();
-      const activeTenant = tenants.find(t => t.status === "active");
-      
-      if (activeTenant) {
-        setCurrentTenant(activeTenant);
-        
-        const ticketData = await SupportTicket.filter({ 
-          tenant_id: activeTenant.id,
-          created_by_email: userData.email 
-        });
-        setTickets(ticketData);
+    if (!tenantId) {
+       console.log("Support.jsx - loadData: tenantId is null/undefined. Skipping fetch.");
+       setIsSupportAccessLoading(false);
+       return; 
+    }
 
-        const articleData = await KnowledgeArticle.filter({ tenant_id: activeTenant.id });
-        setArticles(articleData);
+    console.log(`Support.jsx - loadData: START - Fetching data for tenant ID: ${tenantId}`);
+    setIsSupportAccessLoading(true);
+    setSupportAccessGranted(false);
+    setSupportAccessExpiresAt(null);
+    let success = false;
+    
+    try {
+      console.log(`Support.jsx - loadData: Getting tenant document ref...`);
+      const tenantRef = doc(db, "tenants", tenantId);
+      console.log(`Support.jsx - loadData: Attempting getDoc...`);
+      const tenantSnap = await getDoc(tenantRef);
+      console.log(`Support.jsx - loadData: getDoc finished. Exists: ${tenantSnap.exists()}`);
+      
+      if (!tenantSnap.exists()) {
+          console.error("Support.jsx - loadData: Tenant document not found for ID:", tenantId);
+          toast({ title: "Erro", description: "Documento do tenant não encontrado.", variant: "destructive" });
+          return; 
       }
+      
+      console.log(`Support.jsx - loadData: Tenant document found. Processing data...`);
+      const tenantData = tenantSnap.data();
+      let currentGranted = tenantData.supportAccessGranted || false;
+      let currentExpires = tenantData.supportAccessExpiresAt || null;
+          
+      if (currentGranted && currentExpires && currentExpires.toMillis() < Date.now()) {
+          console.log(`Support.jsx - loadData: Support access found but expired.`);
+          currentGranted = false; 
+          currentExpires = null;
+      }
+      
+      setSupportAccessGranted(currentGranted);
+      setSupportAccessExpiresAt(currentExpires);
+      console.log(`Support.jsx - loadData: Support status set - Granted: ${currentGranted}, Expires: ${currentExpires?.toDate()}`);
+      success = true;
+
     } catch (error) {
-      console.error("Erro ao carregar dados:", error);
+      success = false;
+      console.error("Support.jsx - loadData: ERROR during fetch:", error);
+      toast({ title: "Erro ao Carregar Dados", description: error.message || "Falha ao buscar informações.", variant: "destructive" });
+      setSupportAccessGranted(false);
+      setSupportAccessExpiresAt(null);
     } finally {
-      setIsLoading(false);
+      setIsSupportAccessLoading(false);
+      console.log(`Support.jsx - loadData: FINALLY block executed. Loadings set to false. Success: ${success}`);
     }
   };
 
-  const handleTicketCreated = () => {
-    setShowNewTicket(false);
-    loadData();
+  const grantSupportAccess = async () => {
+    if (!tenantId) {
+      console.error("Grant Access Error: Tenant ID inválido.");
+      toast({ title: "Erro", description: "ID do Tenant inválido.", variant: "destructive" });
+      return;
+    }
+    setIsUpdatingAccess(true);
+    try {
+      console.log("[grantSupportAccess] Calling Cloud Function 'manageSupportAccess' with action: grant");
+      const result = await manageSupportAccessCallable({ action: 'grant' });
+      console.log("[grantSupportAccess] Cloud Function result:", result);
+      
+      const resultData = result.data;
+
+      if (resultData?.success) {
+        const expirationDate = new Date();
+        expirationDate.setDate(expirationDate.getDate() + 1);
+        setSupportAccessGranted(true);
+        setSupportAccessExpiresAt(Timestamp.fromDate(expirationDate));
+        
+        toast({ title: "Sucesso", description: resultData.message || "Acesso concedido." });
+      } else {
+        toast({ title: "Erro Inesperado", description: resultData?.message || "Falha ao conceder acesso.", variant: "destructive" });
+      }
+
+    } catch (error) {
+      console.error("Erro ao chamar a função manageSupportAccess (grant):", error);
+      const message = error.message || "Falha ao comunicar com o servidor para conceder acesso.";
+      toast({ title: "Erro", description: message, variant: "destructive" });
+    } finally {
+      setIsUpdatingAccess(false);
+    }
   };
 
-  const getStatusBadge = (status) => {
-    const statusLabels = {
-      open: "Aberto",
-      in_progress: "Em Andamento",
-      waiting_customer: "Aguardando Cliente",
-      resolved: "Resolvido",
-      closed: "Fechado"
-    };
+  const revokeSupportAccess = async () => {
+    if (!tenantId) {
+      console.error("Revoke Access Error: Tenant ID inválido.");
+      toast({ title: "Erro", description: "ID do Tenant inválido.", variant: "destructive" });
+      return;
+    }
+    setIsUpdatingAccess(true);
+    try {
+      console.log("[revokeSupportAccess] Calling Cloud Function 'manageSupportAccess' with action: revoke");
+      const result = await manageSupportAccessCallable({ action: 'revoke' });
+      console.log("[revokeSupportAccess] Cloud Function result:", result);
 
-    return (
-      <Badge variant="outline" className={statusColors[status]}>
-        {statusLabels[status]}
-      </Badge>
-    );
+      const resultData = result.data;
+
+       if (resultData?.success) {
+        setSupportAccessGranted(false);
+        setSupportAccessExpiresAt(null);
+        toast({ title: "Sucesso", description: resultData.message || "Acesso revogado." });
+       } else {
+         toast({ title: "Erro Inesperado", description: resultData?.message || "Falha ao revogar acesso.", variant: "destructive" });
+       }
+
+    } catch (error) {
+      console.error("Erro ao chamar a função manageSupportAccess (revoke):", error);
+      const message = error.message || "Falha ao comunicar com o servidor para revogar acesso.";
+      toast({ title: "Erro", description: message, variant: "destructive" });
+    } finally {
+      setIsUpdatingAccess(false);
+    }
   };
 
-  const getPriorityBadge = (priority) => {
-    const priorityLabels = {
-      low: "Baixa",
-      medium: "Média",
-      high: "Alta"
-    };
-
-    return (
-      <Badge variant="outline" className={priorityColors[priority]}>
-        {priorityLabels[priority]}
-      </Badge>
-    );
-  };
+  const formattedExpiration = supportAccessExpiresAt 
+    ? format(supportAccessExpiresAt.toDate(), "dd/MM/yyyy 'às' HH:mm", { locale: pt })
+    : null;
 
   return (
     <div className="container mx-auto py-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
         <div>
           <h1 className="text-2xl font-bold">Suporte</h1>
-          <p className="text-gray-500">Central de ajuda e suporte ao cliente</p>
-        </div>
-        <div className="flex gap-2">
-          <Button 
-            variant="outline"
-            onClick={() => setShowChatbot(true)}
-            className="flex items-center gap-2"
-          >
-            <MessageSquareMore className="w-4 h-4" />
-            Chatbot
-          </Button>
-          <Button onClick={() => setShowNewTicket(true)} className="flex items-center gap-2">
-            <Plus className="w-4 h-4" />
-            Novo Chamado
-          </Button>
+          <p className="text-gray-500">Acesso Remoto para Suporte</p>
         </div>
       </div>
 
-      {showNewTicket && (
-        <Card className="mb-6">
+      <Card className="mb-6 bg-amber-50 border-amber-200">
           <CardHeader>
-            <CardTitle>Novo Chamado</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-amber-800">
+            <AlertTriangle className="w-5 h-5" />
+            Acesso Remoto para Suporte
+          </CardTitle>
           </CardHeader>
           <CardContent>
-            <NewTicketForm
-              onSuccess={handleTicketCreated}
-              onCancel={() => setShowNewTicket(false)}
-              trialId={currentTenant?.id}
-            />
-          </CardContent>
-        </Card>
-      )}
-
-      <Tabs defaultValue="tickets">
-        <TabsList className="mb-6">
-          <TabsTrigger value="tickets" className="flex items-center gap-2">
-            <MessageSquareMore className="w-4 h-4" />
-            Meus Chamados
-          </TabsTrigger>
-          <TabsTrigger value="knowledge" className="flex items-center gap-2">
-            <BookOpen className="w-4 h-4" />
-            Base de Conhecimento
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="tickets">
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
-                <CardTitle>Lista de Chamados</CardTitle>
-                <div className="relative w-full md:w-64">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
-                  <Input
-                    type="search"
-                    placeholder="Buscar chamados..."
-                    className="pl-8"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
+          {isSupportAccessLoading ? (
+            <div className="flex items-center gap-2 text-gray-600">
+              <Loader2 className="w-4 h-4 animate-spin" /> Verificando status do acesso...
                 </div>
+          ) : supportAccessGranted ? (
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <p className="text-green-700 font-medium flex items-center gap-1">
+                  <CheckCircle2 className="w-4 h-4" /> Acesso ao suporte CONCEDIDO.
+                </p>
+                <p className="text-sm text-gray-600">
+                  A equipe de suporte pode acessar sua conta para diagnóstico até {formattedExpiration}.
+                </p>
               </div>
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-                </div>
-              ) : tickets.length === 0 ? (
-                <div className="text-center py-8">
-                  <MessageSquareMore className="mx-auto h-12 w-12 text-gray-400" />
-                  <h3 className="mt-2 text-sm font-semibold text-gray-900">
-                    Nenhum chamado encontrado
-                  </h3>
-                  <p className="mt-1 text-sm text-gray-500">
-                    Clique em "Novo Chamado" para criar seu primeiro chamado de suporte
-                  </p>
+              <Button 
+                variant="destructive"
+                onClick={revokeSupportAccess}
+                disabled={isUpdatingAccess}
+              >
+                {isUpdatingAccess ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Revogar Acesso
+              </Button>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Título</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Prioridade</TableHead>
-                        <TableHead>Última Atualização</TableHead>
-                        <TableHead className="w-[100px]"></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {tickets
-                        .filter(ticket => 
-                          ticket.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          ticket.description.toLowerCase().includes(searchTerm.toLowerCase())
-                        )
-                        .map((ticket) => (
-                          <TableRow 
-                            key={ticket.id}
-                            className="cursor-pointer hover:bg-gray-50"
-                            onClick={() => navigate(createPageUrl(`TicketDetails?id=${ticket.id}`))}
-                          >
-                            <TableCell>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                               <div>
-                                <p className="font-medium">{ticket.title}</p>
-                                <p className="text-sm text-gray-500 truncate">
-                                  {ticket.description}
+                <p className="text-red-700 font-medium flex items-center gap-1">
+                  <Clock className="w-4 h-4" /> Acesso ao suporte NÃO concedido.
+                </p>
+                <p className="text-sm text-gray-600">
+                  Conceda acesso temporário (24h) para que nossa equipe possa investigar problemas em sua conta.
                                 </p>
                               </div>
-                            </TableCell>
-                            <TableCell>
-                              {getStatusBadge(ticket.status)}
-                            </TableCell>
-                            <TableCell>
-                              {getPriorityBadge(ticket.priority)}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2">
-                                <Clock className="w-4 h-4 text-gray-400" />
-                                <span className="text-sm">
-                                  {format(new Date(ticket.updated_date), "dd/MM/yyyy HH:mm")}
-                                </span>
-                              </div>
-                            </TableCell>
-                            <TableCell>
                               <Button
-                                variant="ghost"
-                                size="sm"
-                                className="flex items-center gap-1"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  navigate(createPageUrl(`TicketDetails?id=${ticket.id}`));
-                                }}
-                              >
-                                Ver
-                                <ArrowRight className="w-4 h-4" />
+                variant="default" 
+                className="bg-amber-600 hover:bg-amber-700"
+                onClick={grantSupportAccess}
+                disabled={isUpdatingAccess}
+              >
+                 {isUpdatingAccess ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Conceder Acesso (24h)
                               </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                    </TableBody>
-                  </Table>
                 </div>
               )}
             </CardContent>
           </Card>
-        </TabsContent>
-
-        <TabsContent value="knowledge">
-          <KnowledgeBaseSearch articles={articles} isLoading={isLoading} />
-        </TabsContent>
-      </Tabs>
-
-      {showChatbot && (
-        <Chatbot
-          onClose={() => setShowChatbot(false)}
-          trialId={currentTenant?.id}
-        />
-      )}
     </div>
   );
 }

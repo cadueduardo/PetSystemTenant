@@ -1,5 +1,5 @@
 {
-  "name": "base44-app",
+  "name": "petfacil-app",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "dev:all": "concurrently \"npm run dev\" \"cd backend_mocks && python -m uvicorn mock_api:app --port=8000 --reload\" \"cd backend_mocks && powershell -File start_audio_server.ps1\""
+    "dev:all": "concurrently \"npm run dev\" \"cd backend_mocks && python -m uvicorn mock_api:app --port=8000 --reload\" \"cd backend_mocks && powershell -File start_audio_server.ps1\"",
+    "deploy": "npm run build && gsutil -m rsync -d -r dist/ gs://gcs-petfacil-app && gcloud compute url-maps invalidate-cdn-cache petfacil-lb --path \"/*\""
   },
   "dependencies": {
     "@base44/sdk": "^0.1.2",
@@ -48,6 +49,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.0.0",
+    "cors": "^2.8.5",
     "date-fns": "^3.6.0",
     "embla-carousel-react": "^8.5.2",
     "firebase": "^11.6.0",
@@ -77,6 +79,7 @@
   "devDependencies": {
     "@eslint/js": "^9.19.0",
     "@flydotio/dockerfile": "^0.7.8",
+    "@types/cors": "^2.8.17",
     "@types/node": "^22.13.5",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
