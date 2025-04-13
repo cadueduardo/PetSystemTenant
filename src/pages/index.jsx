@@ -90,6 +90,13 @@ import ProtectedRoute from './ProtectedRoute';
 import PrescriptionManager from './PrescriptionManager';
 import SuperAdminsPage from './SuperAdminsPage';
 
+// --- NOVAS IMPORTAÇÕES ---
+import ProfilesPage from './Tenant/ProfilesPage';
+import ProfileFormPage from './Tenant/ProfileFormPage';
+import EmployeesPage from './Tenant/EmployeesPage';
+import EmployeeFormPage from './Tenant/EmployeeFormPage';
+// --- FIM NOVAS IMPORTAÇÕES ---
+
 /* Comentado PAGES pois não será mais usado 
 const PAGES = {
     
@@ -257,6 +264,16 @@ function PagesContent() {
                 <Route path="live-vet/relatorio/:appointmentId" element={<ConsultaReportPage />} />
                 <Route path="medicacao" element={<MedicationQueue />} />
                 <Route path="prescription-manager" element={<PrescriptionManager />} />
+
+                {/* --- NOVAS ROTAS --- */}
+                <Route path="perfis" element={<ProfilesPage />} />
+                <Route path="perfis/novo" element={<ProfileFormPage />} />
+                <Route path="perfis/editar/:profileId" element={<ProfileFormPage />} />
+                <Route path="colaboradores" element={<EmployeesPage />} />
+                <Route path="colaborador/novo" element={<EmployeeFormPage />} />
+                <Route path="colaborador/editar/:employeeId" element={<EmployeeFormPage />} />
+                {/* --- FIM NOVAS ROTAS --- */}
+                
               </Route>
             </Route>
             

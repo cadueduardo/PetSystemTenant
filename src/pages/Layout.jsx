@@ -22,9 +22,17 @@ import {
   ClipboardList,
   LifeBuoy,
   LogOut, // Import Logout icon
+  UsersRound, // <--- Adicionar ícone para Perfis/Funções
 } from "lucide-react";
 import { useTheme } from "next-themes";
 // import { useTenant } from "@/components/tenant/TenantContext"; // Removido useTenant
+
+// ----- SIMULAÇÃO DAS CLAIMS - REMOVER DEPOIS E BUSCAR REAL -----
+// Assumindo que o hook de autenticação traria algo assim para um Admin
+const useAuth = () => ({ 
+  userClaims: { isAdmin: true, tenant_id: 'test-tenant' } 
+});
+// ---------------------------------------------------------------
 
 const classNames = (...classes) => {
   return classes.filter(Boolean).join(' ');
@@ -36,6 +44,10 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate(); // Obter a função navigate
   // const { navigateWithStore } = useTenant(); // Removida desestruturação
+
+  // ----- Obter claims (simulado por enquanto) -----
+  const { userClaims } = useAuth(); 
+  // -----------------------------------------------
 
   const isActive = (href) => {
     // Adicionada verificação para path exato do dashboard
@@ -267,8 +279,39 @@ export default function Layout() {
               <SettingsIcon className="h-5 w-5" />
               <span>Configurações</span>
             </Link>
+
+            {/* --- NOVOS LINKS: Perfis e Colaboradores (Somente Admin) --- */}
+            {userClaims?.isAdmin && (
+              <>
+                <Link
+                  to="/tenant/perfis"
+                  onClick={(e) => handleNavigation(e, "/tenant/perfis")}
+                  className={classNames(
+                    `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                    isActive("/tenant/perfis") ? "bg-accent font-medium" : ""
+                  )}
+                >
+                  <UsersRound className="h-5 w-5" /> 
+                  <span>Perfis</span>
+                </Link>
+
+                <Link
+                  to="/tenant/colaboradores"
+                  onClick={(e) => handleNavigation(e, "/tenant/colaboradores")}
+                  className={classNames(
+                    `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                    isActive("/tenant/colaboradores") ? "bg-accent font-medium" : ""
+                  )}
+                >
+                  <Users className="h-5 w-5" />
+                  <span>Colaboradores</span>
+                </Link>
+              </>
+            )}
+            {/* --- FIM NOVOS LINKS --- */}
+
             {/* Adicionando o Link de Suporte aqui */}
-            {supportLink} 
+            {supportLink}
 
             {/* --- Logout Button --- */}
             <button
