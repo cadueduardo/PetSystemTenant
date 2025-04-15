@@ -10,6 +10,12 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { useTenant } from '@/components/tenant/TenantContext';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+// Importar do arquivo de configuração
+import { PERMISSION_RESOURCES, PERMISSION_ACTIONS, formatPermission, parsePermission, AVAILABLE_MODULES } from '@/config/permissions';
+
+// --- Log Módulo ---
+console.log("--- MODULE LOAD: src/pages/Tenant/ProfileFormPage.jsx ---");
+// -----------------
 
 // ----- SIMULAÇÃO DAS CLAIMS - REMOVER DEPOIS E BUSCAR REAL ----
 // const useAuth = () => ({
@@ -17,19 +23,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 // });
 // -----------------------------------------------------------
 
-// --- Definição dos Recursos e Ações para Permissões ---
-// (Simplificado - pode ser movido para um arquivo de configuração)
-const PERMISSION_RESOURCES = [
-    { id: 'clientes', label: 'Clientes', modules: ['vet', 'shop'] },
-    { id: 'agenda_vet', label: 'Agenda (Vet)', modules: ['vet'] },
-    { id: 'agenda_shop', label: 'Agenda (Shop)', modules: ['shop'] },
-    { id: 'prontuarios', label: 'Prontuários (Vet)', modules: ['vet'] },
-    { id: 'produtos', label: 'Produtos (Shop)', modules: ['shop'] },
-    { id: 'servicos', label: 'Serviços', modules: ['vet', 'shop'] },
-    { id: 'financeiro', label: 'Financeiro', modules: ['vet', 'shop'] },
-    { id: 'perfis_colaboradores', label: 'Perfis/Colaboradores', modules: ['vet', 'shop'] }, // Gerenciar permissões/acessos
-];
-const PERMISSION_ACTIONS = ['ler', 'escrever']; // 'criar', 'editar', 'excluir' poderiam ser adicionados
+// --- REMOVER Definição dos Recursos e Ações para Permissões ---
+// const PERMISSION_RESOURCES = [
+//     { id: 'clientes', label: 'Clientes', modules: ['vet', 'shop'] },
+//     { id: 'agenda_vet', label: 'Agenda (Vet)', modules: ['vet'] },
+//     { id: 'agenda_shop', label: 'Agenda (Shop)', modules: ['shop'] },
+//     { id: 'prontuarios', label: 'Prontuários (Vet)', modules: ['vet'] },
+//     { id: 'produtos', label: 'Produtos (Shop)', modules: ['shop'] },
+//     { id: 'servicos', label: 'Serviços', modules: ['vet', 'shop'] },
+//     { id: 'financeiro', label: 'Financeiro', modules: ['vet', 'shop'] },
+//     { id: 'perfis_colaboradores', label: 'Perfis/Colaboradores', modules: ['vet', 'shop'] }, // Gerenciar permissões/acessos
+// ];
+// const PERMISSION_ACTIONS = ['ler', 'escrever']; // 'criar', 'editar', 'excluir' poderiam ser adicionados
 // --------------------------------------------------------
 
 // --- Adicionar Tipos de Perfil Predefinidos ---
@@ -44,64 +49,104 @@ const PROFILE_TYPES = [
 // ------------------------------------------
 
 function ProfileFormPage() {
-  const { profileId } = useParams(); // Pega o ID da URL, se existir (edição)
+  // --- Log Renderização ---
+  console.log("[ProfileFormPage] Component rendering.");
+  // ----------------------
+
+  const { profileId } = useParams();
   const navigate = useNavigate();
   const db = getFirestore();
-  // const { userClaims } = useAuth(); // Remover hook simulado
-  // const tenantId = userClaims?.tenant_id; // Remover claim simulado
-  const { tenantId } = useTenant(); // Usar o hook useTenant
+  const tenantContext = useTenant(); // <-- CORREÇÃO: Obter contexto completo
+  const isEditing = Boolean(profileId);
 
   const [formData, setFormData] = useState({
     nome: '',
     tipo: '',
     descricao: '',
     modulos: [],
-    permissoes: [] // Armazenará as strings completas: modulo:recurso:acao
+    permissoes: []
   });
-  const [permissionSelections, setPermissionSelections] = useState({}); // Estado auxiliar para os checkboxes de permissão
-  const [loading, setLoading] = useState(false);
+  const [permissionSelections, setPermissionSelections] = useState({});
+  const [loading, setLoading] = useState(false); // Loading geral (edição + submit)
   const [error, setError] = useState(null);
-  const isEditing = Boolean(profileId);
 
   // Efeito para buscar dados do perfil se estiver editando
   useEffect(() => {
-    if (isEditing && tenantId) {
-      setLoading(true);
-      const docRef = doc(db, 'perfis', profileId);
-      getDoc(docRef).then(docSnap => {
-        if (docSnap.exists() && docSnap.data().tenantId === tenantId) {
-          const data = docSnap.data();
-          setFormData({
-            nome: data.nome || '',
-            tipo: data.tipo || '',
-            descricao: data.descricao || '',
-            modulos: data.modulos || [],
-            permissoes: data.permissoes || []
-          });
-          // Preencher o estado auxiliar dos checkboxes de permissão
-          const initialSelections = {};
-          data.permissoes?.forEach(perm => {
-              const parts = perm.split(':'); // ex: vet:agenda_vet:ler
-              if (parts.length === 3) {
-                  const [, resource, action] = parts;
-                  if (!initialSelections[resource]) initialSelections[resource] = {};
-                  initialSelections[resource][action] = true;
-              }
-          });
-          setPermissionSelections(initialSelections);
-        } else {
-          setError("Perfil não encontrado ou pertence a outro tenant.");
-          navigate('/tenant/perfis'); // Redireciona se não encontrar
-        }
-      }).catch(err => {
-        console.error("Erro ao buscar perfil:", err);
-        setError("Falha ao carregar dados do perfil.");
-      }).finally(() => {
-        setLoading(false);
-      });
+    console.log(`[ProfileFormPage] Edit useEffect triggered. isEditing: ${isEditing}, isLoading: ${tenantContext.isLoading}, error: ${tenantContext.error}, currentTenant:`, tenantContext.currentTenant);
+
+    // 1. Só roda em modo de edição
+    if (!isEditing) {
+        console.log("[ProfileFormPage] Not in edit mode, skipping fetch.");
+        return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profileId, isEditing, db, tenantId]); // Removido navigate da dependência para evitar loop se erro ocorrer
+
+    // 2. Esperar TenantContext
+    if (tenantContext.isLoading) {
+        console.log("[ProfileFormPage] TenantContext is loading (Edit mode)...");
+        setLoading(true); // Usa loading geral
+        setError(null);
+        return;
+    }
+
+    // 3. Tratar erro do TenantContext
+    if (tenantContext.error) {
+        console.error("[ProfileFormPage] TenantContext error (Edit mode):", tenantContext.error);
+        setError(`Erro ao carregar dados da loja: ${tenantContext.error}`);
+        setLoading(false);
+        return;
+    }
+
+    // 4. Obter tenantId APÓS contexto carregado
+    const currentTenantId = tenantContext.currentTenant?.id;
+    if (!currentTenantId) {
+        console.error("[ProfileFormPage] TenantId missing after context load (Edit mode). CurrentTenant:", tenantContext.currentTenant);
+        setError("ID da Loja não encontrado no contexto. Não é possível buscar perfil para edição.");
+        setLoading(false);
+        return;
+    }
+
+    // 5. Buscar dados do perfil para edição
+    console.log(`[ProfileFormPage] Fetching profile ${profileId} for tenant ${currentTenantId}...`);
+    setLoading(true);
+    setError(null);
+
+    const docRef = doc(db, 'perfis', profileId);
+    getDoc(docRef).then(docSnap => {
+      if (docSnap.exists() && docSnap.data().tenantId === currentTenantId) { // Valida tenantId do perfil
+        console.log("[ProfileFormPage] Profile data fetched successfully.");
+        const data = docSnap.data();
+        setFormData({
+          nome: data.nome || '',
+          tipo: data.tipo || '',
+          descricao: data.descricao || '',
+          modulos: data.modulos || [],
+          permissoes: data.permissoes || []
+        });
+        // Preencher o estado auxiliar dos checkboxes de permissão
+        const initialSelections = {};
+        data.permissoes?.forEach(perm => {
+            const parsed = parsePermission(perm);
+            if (parsed) {
+                const { resource, action } = parsed;
+                if (!initialSelections[resource]) initialSelections[resource] = {};
+                initialSelections[resource][action] = true;
+            }
+        });
+        setPermissionSelections(initialSelections);
+      } else {
+        console.error(`[ProfileFormPage] Profile ${profileId} not found or wrong tenant.`);
+        setError("Perfil não encontrado ou pertence a outra loja.");
+        // navigate('/tenant/perfis'); // Considerar não redirecionar imediatamente no erro
+      }
+    }).catch(err => {
+      console.error("[ProfileFormPage] Error fetching profile for edit:", err);
+      setError("Falha ao carregar dados do perfil.");
+    }).finally(() => {
+      setLoading(false);
+    });
+
+  // Dependências corretas
+  }, [profileId, isEditing, db, tenantContext.isLoading, tenantContext.currentTenant, tenantContext.error]); // Removido navigate
 
   // Handler para campos de texto e select
   const handleInputChange = (e) => {
@@ -165,13 +210,14 @@ function ProfileFormPage() {
       if (resource.modules.some(rm => formData.modulos.includes(rm))) {
         PERMISSION_ACTIONS.forEach(action => {
           if (permissionSelections[resource.id]?.[action]) {
-            // Define o prefixo do módulo
-            let moduloPrefix = 'ambos'; // Padrão se aplica a ambos
-            if (resource.modules.length === 1) {
-                moduloPrefix = resource.modules[0]; // Usa o único módulo se for específico
-            }
-
-            permissionStrings.push(`${moduloPrefix}:${resource.id}:${action}`);
+            // Usa a função de formatar do config
+            permissionStrings.push(formatPermission(resource.id, action)); // ex: clientes:ler
+            // REMOVER lógica do prefixo do módulo
+            // let moduloPrefix = 'ambos'; // Padrão se aplica a ambos
+            // if (resource.modules.length === 1) {
+            //     moduloPrefix = resource.modules[0]; // Usa o único módulo se for específico
+            // }
+            // permissionStrings.push(`${moduloPrefix}:${resource.id}:${action}`);
           }
         });
       }
@@ -182,8 +228,12 @@ function ProfileFormPage() {
   // Handler para submissão do formulário
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!tenantId) {
-      setError("Erro: Tenant ID não disponível.");
+    setError(null);
+
+    const currentTenantId = tenantContext.currentTenant?.id;
+    if (!currentTenantId) {
+      console.error("[ProfileFormPage] Submit Error: Tenant ID missing from context.");
+      setError("Erro crítico: ID da Loja não encontrado. Não é possível salvar.");
       return;
     }
     if (!formData.nome.trim()) {
@@ -200,7 +250,7 @@ function ProfileFormPage() {
     }
 
     setLoading(true);
-    setError(null);
+    console.log("[handleSubmit - ProfileForm] Submit button clicked, state set to loading."); // <-- Log 1
 
     const finalPermissions = generatePermissionStrings();
     const profileData = {
@@ -209,32 +259,55 @@ function ProfileFormPage() {
       descricao: formData.descricao.trim(),
       modulos: formData.modulos,
       permissoes: finalPermissions,
-      tenantId: tenantId,
+      tenantId: currentTenantId,
       atualizadoEm: serverTimestamp(),
     };
 
     try {
       if (isEditing) {
+        console.log(`[handleSubmit - ProfileForm] Updating profile ${profileId}...`); // <-- Log 2a
         const docRef = doc(db, 'perfis', profileId);
         await updateDoc(docRef, profileData);
+        console.log(`[handleSubmit - ProfileForm] Profile ${profileId} updated.`); // <-- Log 3a
       } else {
+        console.log(`[handleSubmit - ProfileForm] Creating new profile...`); // <-- Log 2b
         profileData.criadoEm = serverTimestamp();
-        await addDoc(collection(db, 'perfis'), profileData);
+        const addedDoc = await addDoc(collection(db, 'perfis'), profileData);
+        console.log(`[handleSubmit - ProfileForm] New profile created with ID: ${addedDoc.id}.`); // <-- Log 3b
       }
-      navigate('/tenant/perfis'); // Volta para a lista após salvar
+      console.log("[handleSubmit - ProfileForm] Navigating back to list..."); // <-- Log 4 (Success)
+      navigate('/tenant/perfis');
     } catch (err) {
-      console.error("Erro ao salvar perfil: ", err);
-      setError("Falha ao salvar perfil. Verifique os dados e tente novamente.");
+      console.error("[handleSubmit - ProfileForm] Error saving profile: ", err);
+      setError(`Falha ao salvar perfil. ${err.message}`);
+      console.log("[handleSubmit - ProfileForm] Error occurred, loading set to false."); // <-- Log 5 (Error)
       setLoading(false);
-    }
+    } 
+    // Removido finally para não setar loading false em caso de sucesso ANTES da navegação
   };
 
-  if (!tenantId && !loading) return <p className="text-red-500">Erro: Tenant não identificado.</p>;
- // Se estiver carregando dados para edição
- if (loading && isEditing) {
-    return <div className="flex justify-center items-center h-32"><Loader2 className="h-8 w-8 animate-spin" /> Carregando dados do perfil...</div>;
- }
+  // ----- Renderização Condicional -----
+  // 1. Loading do Contexto
+  if (tenantContext.isLoading) {
+    return (
+      <div className="flex justify-center items-center h-40">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="ml-2">Carregando dados da loja...</p>
+      </div>
+    );
+  }
 
+  // 2. Erro no Contexto OU Erro geral da página
+  if (tenantContext.error || error) {
+    return (
+      <div className="text-red-600 flex items-center justify-center h-40">
+        <AlertCircle className="mr-2 h-5 w-5" />
+        {error || `Erro ao carregar dados da loja: ${tenantContext.error}`}
+      </div>
+    );
+  }
+  
+  // 3. Renderização principal do formulário (se contexto ok e sem erro geral)
   return (
     <form onSubmit={handleSubmit}>
       <Card>
@@ -243,120 +316,95 @@ function ProfileFormPage() {
           <CardDescription>Defina o nome, módulos e permissões para este perfil.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Campo Nome */}
-          <div className="space-y-2">
-            <Label htmlFor="nome">Nome do Perfil</Label>
-            <Input
-              id="nome"
-              name="nome"
-              value={formData.nome}
-              onChange={handleInputChange}
-              placeholder="Ex: Veterinário, Recepcionista, Gerente"
-              required
-              disabled={loading}
-            />
-          </div>
+          {/* Mostrar loading GERAL se estiver salvando/carregando edição */}
+          {loading && (
+            <div className="absolute inset-0 bg-white bg-opacity-75 flex justify-center items-center z-10">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="ml-2">{isEditing ? "Carregando dados do perfil..." : "Salvando..."}</p>
+            </div>
+          )}
 
-          {/* Campo Tipo (Novo) */}
-          <div className="space-y-2">
-            <Label htmlFor="tipo">Tipo do Perfil</Label>
-            <Select 
-              name="tipo"
-              value={formData.tipo}
-              onValueChange={handleTypeChange}
-              required 
-              disabled={loading}
-            >
-              <SelectTrigger id="tipo">
-                <SelectValue placeholder="Selecione o tipo principal" />
-              </SelectTrigger>
-              <SelectContent>
-                {PROFILE_TYPES.map((type) => (
-                  <SelectItem key={type.value} value={type.value}>
-                    {type.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Campo Descrição */}
-          <div className="space-y-2">
-            <Label htmlFor="descricao">Descrição (Opcional)</Label>
-            <Textarea
-              id="descricao"
-              name="descricao"
-              value={formData.descricao}
-              onChange={handleInputChange}
-              placeholder="Descreva brevemente a função deste perfil"
-              disabled={loading}
-            />
-          </div>
-
-          {/* Seleção de Módulos */}
-          <div className="space-y-2">
-            <Label>Módulos Aplicáveis</Label>
-            <div className="flex gap-4 pt-1">
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="modulo-vet"
-                  checked={formData.modulos.includes('vet')}
-                  onCheckedChange={() => handleModuleChange('vet')}
-                  disabled={loading}
-                 />
-                <Label htmlFor="modulo-vet">Clínica Veterinária</Label>
+          {/* Campos do Formulário */} 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+             {/* Coluna Esquerda: Nome, Tipo, Descrição */} 
+            <div className="space-y-4">
+               {/* ... Nome ... */} 
+              <div className="space-y-2">
+                <Label htmlFor="nome">Nome do Perfil</Label>
+                <Input id="nome" name="nome" value={formData.nome} onChange={handleInputChange} required />
               </div>
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="modulo-shop"
-                  checked={formData.modulos.includes('shop')}
-                  onCheckedChange={() => handleModuleChange('shop')}
-                  disabled={loading}
-                 />
-                <Label htmlFor="modulo-shop">Pet Shop</Label>
+              {/* ... Tipo ... */} 
+              <div className="space-y-2">
+                <Label htmlFor="tipo">Tipo de Perfil</Label>
+                <Select name="tipo" value={formData.tipo} onValueChange={handleTypeChange} required>
+                  <SelectTrigger id="tipo">
+                    <SelectValue placeholder="Selecione um tipo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PROFILE_TYPES.map(type => (
+                      <SelectItem key={type.value} value={type.value}>{type.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+               {/* ... Descrição ... */} 
+              <div className="space-y-2">
+                <Label htmlFor="descricao">Descrição (Opcional)</Label>
+                <Textarea id="descricao" name="descricao" value={formData.descricao} onChange={handleInputChange} />
               </div>
             </div>
-          </div>
 
-          {/* Seleção de Permissões */}
-          <div className="space-y-4">
-            <Label>Permissões Detalhadas</Label>
-            {PERMISSION_RESOURCES.map(resource => {
-              // Só mostra o recurso se for relevante para ALGUM dos módulos selecionados
-              const isResourceRelevant = resource.modules.some(rm => formData.modulos.includes(rm));
-              if (!isResourceRelevant) return null;
-
-              return (
-                <div key={resource.id} className="p-3 border rounded space-y-2">
-                   <p className="font-medium text-sm">{resource.label}</p>
-                   <div className="flex gap-4">
-                    {PERMISSION_ACTIONS.map(action => (
-                      <div key={action} className="flex items-center space-x-2">
-                        <Checkbox
-                          id={`perm-${resource.id}-${action}`}
-                          checked={permissionSelections[resource.id]?.[action] || false}
-                          onCheckedChange={() => handlePermissionChange(resource.id, action)}
-                          disabled={loading}
-                        />
-                        <Label htmlFor={`perm-${resource.id}-${action}`} className="capitalize text-sm">{action}</Label>
-                      </div>
-                    ))}
-                   </div>
+             {/* Coluna Direita: Módulos e Permissões */} 
+            <div className="space-y-6"> 
+              {/* ... Módulos ... */} 
+               <div className="space-y-2">
+                <Label>Módulos Acessíveis</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {AVAILABLE_MODULES.map(module => (
+                    <div key={module.id} className="flex items-center space-x-2">
+                      <Checkbox 
+                        id={`module-${module.id}`}
+                        checked={formData.modulos.includes(module.id)}
+                        onCheckedChange={() => handleModuleChange(module.id)}
+                      />
+                      <Label htmlFor={`module-${module.id}`} className="font-normal capitalize">{module.label}</Label>
+                    </div>
+                  ))}
                 </div>
-              );
-            })}
-          </div>
+               </div>
 
+              {/* ... Permissões ... */} 
+               <div className="space-y-4">
+                <Label>Permissões Detalhadas</Label>
+                {formData.modulos.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Selecione um módulo para ver as permissões.</p>
+                ) : (
+                  PERMISSION_RESOURCES
+                    .filter(resource => resource.modules.some(rm => formData.modulos.includes(rm))) // Filtra por módulo selecionado
+                    .map(resource => (
+                      <div key={resource.id} className="space-y-2 p-3 border rounded-md">
+                        <Label className="font-semibold capitalize">{resource.label}</Label>
+                        <div className="flex space-x-4">
+                          {PERMISSION_ACTIONS.map(action => (
+                            <div key={action} className="flex items-center space-x-2">
+                              <Checkbox
+                                id={`perm-${resource.id}-${action}`}
+                                checked={!!permissionSelections[resource.id]?.[action]}
+                                onCheckedChange={() => handlePermissionChange(resource.id, action)}
+                              />
+                              <Label htmlFor={`perm-${resource.id}-${action}`} className="font-normal capitalize">{action}</Label>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                )}
+               </div>
+            </div>
+          </div>
         </CardContent>
-        <CardFooter className="flex justify-end gap-2">
-          <Button 
-            type="button"
-            variant="outline"
-            onClick={() => navigate(-1)}
-            disabled={loading}
-           > 
-            Cancelar
-          </Button>
+        <CardFooter className="flex justify-end space-x-2">
+          <Button type="button" variant="outline" onClick={() => navigate('/tenant/perfis')} disabled={loading}>Cancelar</Button>
           <Button type="submit" disabled={loading}>
             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {isEditing ? 'Salvar Alterações' : 'Criar Perfil'}

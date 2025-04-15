@@ -20,28 +20,52 @@ function ProfilesPage() {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  // const { userClaims } = useAuth(); // Remover uso do hook simulado
-  const { tenantId } = useTenant(); // CORRIGIDO: Usar o hook useTenant e obter tenantId diretamente
+  const tenantContext = useTenant(); // <-- CORREÇÃO: Obter contexto completo
   const navigate = useNavigate(); // Obter a função navigate
   const db = getFirestore(); // Obter instância do DB aqui
   const { toast } = useToast(); // Obter função toast
 
+  // Log para depuração
+  console.log('[ProfilesPage] Rendering. Actual tenantContext value:', tenantContext);
+
   useEffect(() => {
-    if (!tenantId) {
-      setError("Tenant ID não encontrado. Não é possível buscar perfis.");
+    console.log(`[ProfilesPage] useEffect triggered. isLoading: ${tenantContext.isLoading}, error: ${tenantContext.error}, currentTenant:`, tenantContext.currentTenant);
+
+    // 1. Esperar TenantContext carregar
+    if (tenantContext.isLoading) {
+      console.log('[ProfilesPage] TenantContext is loading...');
+      setLoading(true);
+      setError(null);
+      return;
+    }
+
+    // 2. Verificar erro no TenantContext
+    if (tenantContext.error) {
+       console.error('[ProfilesPage] Error reported by TenantContext:', tenantContext.error);
+       setError(`Erro ao carregar informações da loja: ${tenantContext.error}`);
+       setLoading(false);
+       return;
+    }
+
+    // 3. Obter tenantId APÓS contexto carregado e sem erro
+    const currentTenantId = tenantContext.currentTenant?.id;
+    if (!currentTenantId) {
+      console.error('[ProfilesPage] TenantId missing after context load. CurrentTenant:', tenantContext.currentTenant);
+      setError("ID da Loja não encontrado no contexto. Não é possível buscar perfis.");
       setLoading(false);
       return;
     }
 
+    // 4. Buscar perfis com tenantId válido
+    console.log(`[ProfilesPage] TenantId found: ${currentTenantId}. Fetching profiles...`);
     setLoading(true);
     setError(null);
     const profilesCollection = collection(db, 'perfis');
-
-    // Query para buscar perfis apenas do tenantId logado
-    const q = query(profilesCollection, where("tenantId", "==", tenantId));
+    const q = query(profilesCollection, where("tenantId", "==", currentTenantId));
 
     // Listener em tempo real
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      console.log('[ProfilesPage] Profiles snapshot received.');
       const profilesData = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -49,24 +73,30 @@ function ProfilesPage() {
       setProfiles(profilesData);
       setLoading(false);
     }, (err) => {
-      console.error("Erro ao buscar perfis: ", err);
+      console.error("[ProfilesPage] Erro ao buscar perfis: ", err);
       setError("Falha ao carregar perfis. Tente novamente mais tarde.");
       setLoading(false);
     });
 
-    // Limpeza: Cancelar o listener quando o componente desmontar
-    return () => unsubscribe();
+    // Limpeza
+    return () => {
+      console.log('[ProfilesPage] Unsubscribing from profiles snapshot.');
+      unsubscribe();
+    };
 
-  }, [tenantId]); // Dependência: re-executar se o tenantId mudar
+  // Dependências corretas
+  }, [db, tenantContext.isLoading, tenantContext.currentTenant, tenantContext.error]);
 
   const handleAddProfile = () => {
-    navigate('/tenant/perfis/novo'); // CORRIGIDO: Usar o caminho da rota definida
+    navigate('/tenant/perfis/novo');
   };
 
-  // --- Função para Excluir Perfil ---
+  // --- Função para Excluir Perfil (Corrigida) ---
   const handleDeleteProfile = async (profileId, profileName) => {
-    if (!tenantId) {
-        alert("Erro: ID do Tenant não encontrado."); // Ou usar um modal/toast
+    // Obter tenantId do contexto NO MOMENTO da ação
+    const currentTenantId = tenantContext.currentTenant?.id;
+    if (!currentTenantId) {
+        toast({ variant: "destructive", title: "Erro", description: "ID da Loja não encontrado para exclusão." });
         return;
     }
 
@@ -76,46 +106,46 @@ function ProfilesPage() {
     }
 
     // 2. Verificar se algum colaborador usa este perfil
+    setLoading(true); // Ativa loading GERAL aqui?
+    setError(null);
     try {
-        setLoading(true);
-        setError(null);
-
         const employeesRef = collection(db, 'colaboradores');
         const q = query(
             employeesRef, 
-            where("tenantId", "==", tenantId),
+            where("tenantId", "==", currentTenantId), // Usa currentTenantId
             where("perfilId", "==", profileId), 
-            limit(1) // Só precisamos saber se existe pelo menos 1
+            limit(1) 
         );
         const querySnapshot = await getDocs(q);
 
         if (!querySnapshot.empty) {
-            // 3a. Perfil em uso - Mostrar Toast de Erro
             toast({
                 variant: "destructive",
                 title: "Erro ao Excluir Perfil",
                 description: `Não é possível excluir "${profileName}" pois está em uso por ${querySnapshot.size} colaborador(es).`,
             });
         } else {
-            // 3b. Perfil não está em uso - pode excluir
             const profileDocRef = doc(db, 'perfis', profileId);
+            // Validação extra (opcional): verificar se o perfil pertence ao tenant antes de deletar
+            // const profileSnap = await getDoc(profileDocRef);
+            // if (!profileSnap.exists() || profileSnap.data()?.tenantId !== currentTenantId) throw new Error("Perfil não encontrado ou não pertence a esta loja.")
             await deleteDoc(profileDocRef);
-            console.log(`Perfil ${profileId} (${profileName}) excluído com sucesso.`);
-            toast({ // Adiciona toast de sucesso (opcional)
+            console.log(`[ProfilesPage] Perfil ${profileId} (${profileName}) excluído com sucesso.`);
+            toast({
                 title: "Perfil Excluído",
                 description: `O perfil "${profileName}" foi excluído com sucesso.`,
             });
         }
 
     } catch (err) {
-        console.error("Erro ao excluir perfil:", err);
+        console.error("[ProfilesPage] Erro ao excluir perfil:", err);
         toast({
             variant: "destructive",
             title: "Erro ao Excluir",
             description: `Falha ao excluir o perfil "${profileName}". (${err.message})`,
         });
     } finally {
-        setLoading(false);
+        setLoading(false); // Desativa loading GERAL
     }
   };
   // --------------------------------
@@ -134,15 +164,16 @@ function ProfilesPage() {
           <CardTitle>Perfis Cadastrados</CardTitle>
         </CardHeader>
         <CardContent>
-          {loading && <p>Carregando perfis...</p>}
-
-          {error && (
+          {/* Lógica de loading/erro original */}
+          {(tenantContext.isLoading || loading) && <p>Carregando...</p>}
+          {!tenantContext.isLoading && error && (
             <div className="text-red-600 flex items-center my-4 p-3 border border-red-200 rounded-md bg-red-50">
               <AlertCircle className="mr-2 h-5 w-5 flex-shrink-0" /> {error}
             </div>
           )}
 
-          {!loading && !error && (
+          {/* Tabela */} 
+          {!tenantContext.isLoading && !loading && !error && (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -169,7 +200,6 @@ function ProfilesPage() {
                         ))}
                       </TableCell>
                       <TableCell>
-                        {/* Mostrar apenas algumas permissões ou um resumo */}
                         {profile.permissoes?.slice(0, 3).map(perm => (
                           <Badge key={perm} variant="outline" className="mr-1 mb-1 text-xs">{perm}</Badge>
                         ))}
@@ -189,7 +219,7 @@ function ProfilesPage() {
                            size="sm" 
                            className="text-red-600 hover:text-red-700"
                            onClick={() => handleDeleteProfile(profile.id, profile.nome)}
-                           disabled={loading}
+                           disabled={loading} // Desabilitar durante loading geral
                         >
                           <Trash2 className="mr-1 h-4 w-4" />
                           Excluir

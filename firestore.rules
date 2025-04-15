@@ -71,6 +71,18 @@ service cloud.firestore {
     }
     // --- FIM: Coleções Compartilhadas de Prescrição ---
 
+    // --- Regra para Coleção de Emails (Trigger Email Extension) ---
+    match /mail/{mailId} {
+      // Permite a criação por qualquer usuário autenticado que pertença a um tenant.
+      // Isso cobre o admin do tenant criando um convite.
+      allow create: if isAuthenticatedTenant();
+
+      // Nega leitura/escrita/exclusão direta pelo cliente para proteger a fila.
+      // Apenas o backend (Cloud Functions) deve gerenciar após a criação.
+      allow read, update, delete: if false; 
+    }
+    // --- FIM: Regra para Coleção de Emails ---
+
     // === Coleções Específicas do Tenant ===
 
     match /customers/{customerId} {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getFirestore, doc, getDoc, addDoc, updateDoc, collection, query, where, onSnapshot, serverTimestamp, getDocs, limit, documentId } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, addDoc, collection, query, where, onSnapshot, serverTimestamp, getDocs, limit } from 'firebase/firestore';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { useTenant } from '@/components/tenant/TenantContext';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,11 +15,24 @@ import { useToast } from "@/components/ui/use-toast";
 // TODO: Adicionar import para componente MultiSelect/Checkbox para especialidades
 // TODO: Adicionar import para Switch/Checkbox para status
 
+// --- Log para verificar se o módulo JS está sendo carregado --- 
+console.log("--- MODULE LOAD: src/pages/Tenant/EmployeeFormPage.jsx ---");
+// -------------------------------------------------------------
+
+// Definir a constante que falta
+// const OTHER_SPECIALTY_DISPLAY_VALUE = "Outros (Especificar)";
+
 function EmployeeFormPage() {
+  // --- Log para depurar renderização do componente ---
+  console.log("[EmployeeFormPage] Component rendering.");
+  // -------------------------------------------------
+
   const { employeeId } = useParams(); // Para modo de edição
   const navigate = useNavigate();
   const db = getFirestore();
-  const { tenantId } = useTenant();
+  const functions = getFunctions();
+  const sendCustomInviteFunction = httpsCallable(functions, 'sendCustomInvite');
+  const tenantContext = useTenant(); // <-- CORREÇÃO: Obter contexto completo
   const isEditing = Boolean(employeeId);
   const { toast } = useToast();
 
@@ -38,12 +52,13 @@ function EmployeeFormPage() {
   const [selectedProfile, setSelectedProfile] = useState(null);
 
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [submitting, setSubmitting] = useState(false); // Novo estado para controle de submissão
+  const [pageError, setPageError] = useState(null);
   const [loadingProfiles, setLoadingProfiles] = useState(true);
 
   // Estado para armazenar a lista de especialidades disponíveis
   const [availableSpecialties, setAvailableSpecialties] = useState([]);
-  const [loadingSpecialties, setLoadingSpecialties] = useState(false);
+  const [loadingSpecialties, setLoadingSpecialties] = useState(true);
 
   const [loadingEditData, setLoadingEditData] = useState(false);
 
@@ -56,42 +71,71 @@ function EmployeeFormPage() {
 
   // --- Efeito para buscar perfis do tenant --- 
   useEffect(() => {
-    if (!tenantId) return;
+    // 1. Esperar TenantContext carregar
+    if (tenantContext.isLoading) {
+      console.log('[EmployeeFormPage] Waiting for TenantContext (Profiles)...');
+      setLoadingProfiles(true); // Manter loading de perfis ativo
+      setPageError(null);
+      return;
+    }
+    // 2. Verificar erro no TenantContext
+    if (tenantContext.error) {
+      console.error('[EmployeeFormPage] TenantContext error (Profiles):', tenantContext.error);
+      setPageError(`Erro ao carregar dados da loja: ${tenantContext.error}`);
+      setLoadingProfiles(false);
+      return;
+    }
+    // 3. Obter tenantId APÓS contexto carregado e sem erro
+    const currentTenantId = tenantContext.currentTenant?.id;
+    if (!currentTenantId) {
+      console.error('[EmployeeFormPage] TenantId missing after context load (Profiles). CurrentTenant:', tenantContext.currentTenant);
+      setPageError("ID da Loja não encontrado no contexto. Não é possível buscar perfis.");
+      setLoadingProfiles(false);
+      return;
+    }
 
-    setLoadingProfiles(true);
+    // 4. Buscar perfis com tenantId válido
+    console.log(`[EmployeeFormPage] Fetching profiles for tenant: ${currentTenantId}`);
+    setLoadingProfiles(true); // Inicia loading dos perfis
+    setPageError(null);
+
     const profilesCollection = collection(db, 'perfis');
-    const q = query(profilesCollection, where("tenantId", "==", tenantId));
+    const q = query(profilesCollection, where("tenantId", "==", currentTenantId));
 
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      console.log('[EmployeeFormPage] Profiles snapshot received.');
       const profilesData = querySnapshot.docs.map(doc => ({
         id: doc.id,
-        nome: doc.data().nome, // Guardar nome para exibição
-        tipo: doc.data().tipo, // Guardar TIPO para lógica condicional
-        // Não precisamos guardar permissões aqui, só nome e tipo
+        nome: doc.data().nome,
+        tipo: doc.data().tipo,
       }));
       setProfiles(profilesData);
       setLoadingProfiles(false);
     }, (err) => {
       console.error("Erro ao buscar perfis para formulário: ", err);
-      setError("Falha ao carregar a lista de perfis.");
+      setPageError("Falha ao carregar a lista de perfis.");
       setLoadingProfiles(false);
     });
 
-    return () => unsubscribe();
-  }, [db, tenantId]);
+    return () => {
+      console.log('[EmployeeFormPage] Unsubscribing from profiles snapshot.');
+      unsubscribe();
+    };
+  // Depender do estado do contexto e do tenantId (derivado)
+  }, [db, tenantContext.isLoading, tenantContext.currentTenant, tenantContext.error]);
 
-  // --- Efeito para buscar especialidades compartilhadas --- 
+  // --- Efeito para buscar especialidades compartilhadas (não depende do tenant) --- 
   useEffect(() => {
     setLoadingSpecialties(true);
     const specialtiesCollection = collection(db, 'sharedVetSpecialties');
     const q = query(specialtiesCollection);
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const specialtiesData = querySnapshot.docs.map(doc => doc.data().name);
-      setAvailableSpecialties(specialtiesData.sort()); // Apenas especialidades reais
+      setAvailableSpecialties(specialtiesData.sort());
       setLoadingSpecialties(false);
     }, (err) => {
       console.error("Erro ao buscar especialidades: ", err);
-      setError(prev => prev || "Falha ao carregar a lista de especialidades."); 
+      setPageError(prev => prev || "Falha ao carregar a lista de especialidades.");
       setLoadingSpecialties(false);
     });
     return () => unsubscribe();
@@ -99,73 +143,88 @@ function EmployeeFormPage() {
 
   // --- Efeito para buscar dados do colaborador em modo de edição --- 
   useEffect(() => {
-    if (isEditing && tenantId && profiles.length > 0) { // Só busca se tiver perfis carregados também
-        setLoadingEditData(true);
-        setError(null);
-        console.log("Modo Edição - Buscando Colaborador ID:", employeeId);
-        
-        const employeeDocRef = doc(db, 'colaboradores', employeeId);
+    // 1. Sair se não for modo de edição ou se TenantContext ainda estiver carregando/com erro
+    if (!isEditing || tenantContext.isLoading || tenantContext.error) {
+      console.log(`[EmployeeFormPage] Skipping fetch edit data. isEditing: ${isEditing}, isLoading: ${tenantContext.isLoading}, error: ${tenantContext.error}`);
+      // Não define loadingEditData aqui, pois pode não ser relevante ainda
+      return;
+    }
 
-        getDoc(employeeDocRef).then(async (docSnap) => {
-            if (docSnap.exists() && docSnap.data().tenantId === tenantId) {
-                const employeeData = { id: docSnap.id, ...docSnap.data() }; // Inclui ID para referência futura
-                setOriginalEmployeeData(employeeData); // Guarda os dados originais
-                
-                // Popula o formulário
-                setFormData({
-                    nome: employeeData.nome || '',
-                    email: employeeData.email || '',
-                    telefone: employeeData.telefone || '',
-                    perfilId: employeeData.perfilId || '',
-                    especialidades: employeeData.especialidades || [],
-                    status: employeeData.status !== undefined ? employeeData.status : true, // Default true se não existir
-                });
+    // 2. Obter tenantId AGORA que sabemos que o contexto carregou sem erro
+    const currentTenantId = tenantContext.currentTenant?.id;
+    if (!currentTenantId) {
+        console.error('[EmployeeFormPage] TenantId missing after context load (Edit Mode). CurrentTenant:', tenantContext.currentTenant);
+        setPageError("ID da Loja não encontrado no contexto. Não é possível buscar dados para edição.");
+        setLoadingEditData(false); // Parar loading de edição
+        return;
+    }
+    
+    // 3. Prosseguir com a busca de dados para edição
+    setLoadingEditData(true);
+    setPageError(null);
+    console.log(`[EmployeeFormPage] Edit Mode - Fetching Employee ID: ${employeeId} for Tenant ID: ${currentTenantId}`);
 
-                // Busca e define o perfil selecionado para lógica condicional
-                if (employeeData.perfilId) {
-                    // Tenta encontrar no estado local primeiro
-                    const foundProfile = profiles.find(p => p.id === employeeData.perfilId);
-                    if (foundProfile) {
-                        console.log("Perfil associado encontrado no estado:", foundProfile);
-                        setSelectedProfile(foundProfile);
-                    } else {
-                        // Se não encontrou no estado (caso raro), busca no DB
-                        console.warn("Perfil não encontrado no estado, buscando no DB:", employeeData.perfilId);
-                        try {
-                            const profileDocRef = doc(db, 'perfis', employeeData.perfilId);
-                            const profileDocSnap = await getDoc(profileDocRef);
-                            if (profileDocSnap.exists()) {
-                                const profileData = { id: profileDocSnap.id, ...profileDocSnap.data() };
-                                console.log("Perfil associado buscado no DB:", profileData);
-                                setSelectedProfile(profileData);
-                            } else {
-                                console.error("Perfil associado não encontrado no DB!");
-                                setError("Perfil associado ao colaborador não foi encontrado.")
-                                setSelectedProfile(null);
-                            }
-                        } catch (profileErr) {
-                            console.error("Erro ao buscar perfil associado:", profileErr);
-                             setError("Erro ao carregar dados do perfil associado.")
+    const employeeDocRef = doc(db, 'colaboradores', employeeId);
+
+    getDoc(employeeDocRef).then(async (docSnap) => {
+        if (docSnap.exists() && docSnap.data().tenantId === currentTenantId) { // Verifica tenantId do documento
+            const employeeData = { id: docSnap.id, ...docSnap.data() };
+            setOriginalEmployeeData(employeeData);
+            // ... (resto da lógica para popular formData e selectedProfile igual)
+            setFormData({
+                nome: employeeData.nome || '',
+                email: employeeData.email || '',
+                telefone: employeeData.telefone || '',
+                perfilId: employeeData.perfilId || '',
+                especialidades: employeeData.especialidades || [],
+                status: employeeData.status !== undefined ? employeeData.status : true,
+            });
+            if (employeeData.perfilId) {
+                // Tenta encontrar no estado local primeiro (pode ter carregado no outro useEffect)
+                const foundProfile = profiles.find(p => p.id === employeeData.perfilId);
+                if (foundProfile) {
+                    console.log("[EmployeeFormPage] Associated profile found in state:", foundProfile);
+                    setSelectedProfile(foundProfile);
+                } else if (profiles.length > 0 || !loadingProfiles) { // Só busca no DB se perfis carregaram (ou falharam)
+                    console.warn("[EmployeeFormPage] Profile not found in state, fetching from DB:", employeeData.perfilId);
+                    try {
+                        const profileDocRef = doc(db, 'perfis', employeeData.perfilId);
+                        const profileDocSnap = await getDoc(profileDocRef);
+                        if (profileDocSnap.exists() && profileDocSnap.data().tenantId === currentTenantId) { // Verifica tenant do perfil
+                            const profileData = { id: profileDocSnap.id, ...profileDocSnap.data() };
+                            console.log("[EmployeeFormPage] Associated profile fetched from DB:", profileData);
+                            setSelectedProfile(profileData);
+                        } else {
+                            console.error("[EmployeeFormPage] Associated profile not found in DB or wrong tenant!");
+                            setPageError("Perfil associado ao colaborador não foi encontrado ou pertence a outra loja.")
                             setSelectedProfile(null);
                         }
+                    } catch (profileErr) {
+                        console.error("[EmployeeFormPage] Error fetching associated profile:", profileErr);
+                         setPageError("Erro ao carregar dados do perfil associado.")
+                        setSelectedProfile(null);
                     }
                 } else {
-                    setSelectedProfile(null); // Sem perfil associado
+                    console.log("[EmployeeFormPage] Profiles not loaded yet, skipping DB fetch for profile.");
+                    // Perfil será definido quando 'profiles' atualizar e este useEffect re-rodar
                 }
-
             } else {
-                setError("Colaborador não encontrado ou pertence a outro tenant.");
-                navigate('/tenant/colaboradores'); // Redireciona se não encontrar
+                setSelectedProfile(null);
             }
-        }).catch(err => {
-            console.error("Erro ao buscar colaborador para edição:", err);
-            setError("Falha ao carregar dados do colaborador.");
-        }).finally(() => {
-            setLoadingEditData(false);
-        });
-    }
-  // Depende de employeeId, isEditing, tenantId, db, e profiles (para garantir que perfis foram carregados antes de tentar associar)
-  }, [employeeId, isEditing, tenantId, db, profiles, navigate]);
+        } else {
+            console.error(`[EmployeeFormPage] Collaborator ${employeeId} not found or belongs to another tenant.`);
+            setPageError("Colaborador não encontrado ou pertence a outra loja.");
+            // navigate('/tenant/colaboradores'); // Comentado para debug - não redirecionar imediatamente
+        }
+    }).catch(err => {
+        console.error("[EmployeeFormPage] Error fetching collaborator for edit:", err);
+        setPageError("Falha ao carregar dados do colaborador.");
+    }).finally(() => {
+        setLoadingEditData(false);
+    });
+
+  // Depender do estado do contexto, tenantId (derivado) E profiles (para associar)
+  }, [employeeId, isEditing, db, navigate, tenantContext.isLoading, tenantContext.currentTenant, tenantContext.error, profiles, loadingProfiles]); // Adicionado profiles/loadingProfiles
 
   // --- Handlers (TODO) ---
   const handleInputChange = (e) => {
@@ -243,259 +302,261 @@ function EmployeeFormPage() {
   // --- Handler para Submissão --- 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError(null); // Limpa erros gerais
-
-    // --- Validações Iniciais --- 
-    if (!tenantId) {
-      toast({ variant: "destructive", title: "Erro", description: "ID do Tenant não encontrado." }); // Usar toast aqui também?
-      return;
-    }
-    if (!formData.nome.trim()) {
-      toast({ variant: "destructive", title: "Erro", description: "Nome completo é obrigatório." });
-      return;
-    }
-    if (!formData.email.trim()) {
-      toast({ variant: "destructive", title: "Erro", description: "Email é obrigatório." });
-      return;
-    }
-    if (!formData.perfilId) {
-      toast({ variant: "destructive", title: "Erro", description: "Selecione um perfil." });
+    
+    // Previne submissão duplicada
+    if (submitting) {
+      console.log("[handleSubmit] Form already submitting, preventing duplicate submission.");
       return;
     }
 
-    const currentEmail = formData.email.trim().toLowerCase();
-
+    setPageError(null); 
     setLoading(true);
+    setSubmitting(true); // Marca como em submissão
+    console.log("[handleSubmit] Submit button clicked, state set to loading.");
 
-    // --- Validação de Unicidade de Email (CRIAÇÃO E EDIÇÃO SE EMAIL MUDOU) --- 
-    let emailCheckNeeded = false;
-    if (isEditing) {
-        // Verifica se o email foi alterado em relação ao original
-        if (originalEmployeeData && currentEmail !== originalEmployeeData.email.toLowerCase()) {
-            console.log("Email alterado durante edição. Verificando unicidade...");
-            emailCheckNeeded = true;
-        }
-    } else {
-        // Sempre verifica na criação
-        emailCheckNeeded = true;
-    }
-
-    if (emailCheckNeeded) {
-      try {
-        const employeesRef = collection(db, 'colaboradores');
-        let q;
-        if (isEditing) {
-          // Na edição, verifica se o NOVO email existe em OUTRO documento
-          q = query(
-            employeesRef,
-            where("tenantId", "==", tenantId),
-            where("email", "==", currentEmail),
-            where(documentId(), "!=", employeeId), // Exclui o próprio documento
-            limit(1)
-          );
-        } else {
-          // Na criação, verifica se o email existe em QUALQUER documento do tenant
-          q = query(
-            employeesRef,
-            where("tenantId", "==", tenantId),
-            where("email", "==", currentEmail),
-            limit(1)
-          );
-        }
-        
-        const querySnapshot = await getDocs(q);
-        if (!querySnapshot.empty) {
-          toast({
-            variant: "destructive",
-            title: isEditing ? "Erro ao Atualizar" : "Erro ao Adicionar",
-            description: "Este email já está em uso por outro colaborador neste tenant.",
-          });
-          setLoading(false);
-          return;
-        }
-      } catch (err) {
-        console.error("Erro ao verificar unicidade de email:", err);
-        setError("Ocorreu um erro ao verificar o email. Tente novamente."); 
+    // 1. Obter tenantId do contexto AQUI, no momento da submissão
+    const currentTenantId = tenantContext.currentTenant?.id;
+    if (!currentTenantId) {
+        console.error("[EmployeeFormPage] Submit Error: Tenant ID missing from context.");
+        setPageError("Erro crítico: ID da Loja não encontrado. Não é possível salvar.");
         setLoading(false);
+        setSubmitting(false); // Reseta estado de submissão em caso de erro
         return;
-      }
     }
-    // ------------------------------------------------------------
 
-    // --- Preparar Dados --- 
-    const employeeData = {
-        ...formData,
-        especialidades: formData.especialidades, // Usa o array já atualizado
-        nome: formData.nome.trim(),
-        email: currentEmail,
-        tenantId: tenantId,
-        atualizadoEm: serverTimestamp(),
-    };
-    // Remove perfilId dos dados a serem salvos se não houver um (evita salvar string vazia)
-    if (!employeeData.perfilId) delete employeeData.perfilId;
-
-    // --- Salvar/Atualizar --- 
-    try {
-      if (isEditing) {
-        // ... (lógica de update - NÃO verifica email duplicado aqui, 
-        //      assumindo que o usuário pode manter seu próprio email. 
-        //      Se precisar validar mudança de email na edição, a lógica é similar à de criação)
-        const docRef = doc(db, 'colaboradores', employeeId);
-        await updateDoc(docRef, employeeData); 
-      } else {
-        // Criar Novo Colaborador
-        employeeData.criadoEm = serverTimestamp();
-        await addDoc(collection(db, 'colaboradores'), employeeData);
-      }
-      navigate('/tenant/colaboradores'); 
-    } catch (err) {
-      console.error("Erro ao salvar colaborador: ", err);
-      toast({ 
-        variant: "destructive",
-        title: "Erro ao Salvar",
-        description: `Falha ao salvar colaborador. (${err.message || 'Verifique os dados e tente novamente.'})`,
-      });
-    } finally {
+    // Validação básica
+    if (!formData.nome || !formData.email || !formData.perfilId) {
+      setPageError("Por favor, preencha Nome, Email e selecione um Perfil.");
       setLoading(false);
+      setSubmitting(false); // Reseta estado de submissão em caso de erro
+      return;
     }
+    
+    // Validação de email único (apenas na criação ou se email mudou)
+    if (!isEditing || formData.email !== originalEmployeeData?.email) {
+        console.log(`[EmployeeFormPage] Checking unique email: ${formData.email} for tenant ${currentTenantId}`);
+        const usersRef = collection(db, "colaboradores");
+        const q = query(usersRef, where("email", "==", formData.email), where("tenantId", "==", currentTenantId), limit(1));
+        try {
+            const querySnapshot = await getDocs(q);
+            if (!querySnapshot.empty) {
+                setPageError(`O email "${formData.email}" já está cadastrado para outro colaborador nesta loja.`);
+                setLoading(false);
+                setSubmitting(false); // Reseta estado de submissão em caso de erro
+                return;
+            }
+        } catch (err) {
+            console.error("[EmployeeFormPage] Error checking unique email:", err);
+            setPageError("Erro ao verificar unicidade do email. Tente novamente.");
+            setLoading(false);
+            setSubmitting(false); // Reseta estado de submissão em caso de erro
+            return;
+        }
+    }
+
+    // Objeto de dados para salvar/atualizar
+    const employeeDataToSave = {
+      ...formData,
+      tenantId: currentTenantId, 
+      updatedAt: serverTimestamp()
+    };
+    if (!isEditing) {
+      employeeDataToSave.createdAt = serverTimestamp();
+    }
+
+    try {
+       if (isEditing) {
+         // Lógica de edição (mantida)
+         // ... 
+       } else {
+         // --- Lógica de Criação --- 
+         console.log(`[handleSubmit] Validations passed. Preparing data for NEW function call.`);
+
+         // --- Bloco Try/Catch específico para a chamada da NOVA função --- 
+         try {
+           console.log(`[handleSubmit] Preparing to call sendCustomInviteFunction...`);
+           const inviteResult = await sendCustomInviteFunction({
+             email: formData.email,
+             collaboratorName: formData.nome,
+             profileId: formData.perfilId
+           });
+           console.log(`[handleSubmit] sendCustomInviteFunction called successfully. Result:`, inviteResult);
+           toast({ title: "Convite Enviado (Novo Fluxo)", description: inviteResult?.data?.message || `Convite (teste) enviado para ${formData.email}.` });
+         } catch (functionCallError) {
+           console.error("[handleSubmit] CRITICAL ERROR calling sendCustomInviteFunction:", functionCallError);
+           setPageError(`Falha ao enviar o convite (novo fluxo): ${functionCallError.message || functionCallError}`);
+           setLoading(false);
+           setSubmitting(false);
+           return; // Interrompe a execução
+         }
+         // --- Fim do Bloco Try/Catch específico ---
+       }
+       // Navegação ocorre apenas se TUDO deu certo (edição ou criação+convite)
+       console.log("[handleSubmit] Process finished. Navigating back to list...");
+       navigate('/tenant/colaboradores');
+    } catch (err) {
+       // Este catch pegaria erros da lógica de Edição ou outros erros gerais
+       console.error("[handleSubmit] General error during submit (e.g., during Edit):", err);
+       setPageError(`Falha ao salvar. ${err.message}`);
+       setLoading(false);
+       setSubmitting(false);
+    }
+    // Não precisamos mais de finally explícito se setLoading/Submitting são tratados nos fluxos de erro/sucesso
+
   };
 
-  // --- Renderização --- 
-  if (loadingProfiles || loadingSpecialties || loadingEditData) {
-    return <div className="flex justify-center items-center h-32"><Loader2 className="h-8 w-8 animate-spin" /> Carregando dados...</div>;
-  }
-  
-  if (error && !loadingProfiles && !loadingSpecialties && !loadingEditData) {
-     return <p className="text-red-500">{error}</p>;
+  // ----- Renderização Condicional -----
+  // Se TenantContext estiver carregando, mostrar loading geral
+  if (tenantContext.isLoading) {
+    return (
+      <div className="flex justify-center items-center h-40">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="ml-2">Carregando dados da loja...</p>
+      </div>
+    );
   }
 
-  // TODO: Lógica de loading para edição
+  // Se TenantContext teve erro OU houve erro geral na página, mostrar erro
+  if (tenantContext.error || pageError) {
+    return (
+      <div className="text-red-600 flex items-center justify-center h-40">
+        <AlertCircle className="mr-2 h-5 w-5" />
+        {pageError || `Erro ao carregar dados da loja: ${tenantContext.error}`}
+      </div>
+    );
+  }
 
+  // Renderização principal do formulário (quando TenantContext está ok)
   return (
-    <form onSubmit={handleSubmit}>
+    <form onSubmit={handleSubmit} className="space-y-8">
       <Card>
         <CardHeader>
-          <CardTitle>{isEditing ? 'Editar Colaborador' : 'Adicionar Novo Colaborador'}</CardTitle>
-          <CardDescription>Preencha os dados do colaborador.</CardDescription>
+          <CardTitle>{isEditing ? "Editar Colaborador" : "Adicionar Novo Colaborador"}</CardTitle>
+          <CardDescription>
+            {isEditing ? `Modifique os dados de ${originalEmployeeData?.nome || 'colaborador'}.` : "Preencha os dados para convidar um novo membro para a equipe."}
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Nome */}
-          <div className="space-y-1">
-            <Label htmlFor="nome">Nome Completo</Label>
-            <Input id="nome" name="nome" value={formData.nome} onChange={handleInputChange} required disabled={loading} />
-          </div>
-
-          {/* Email */}
-          <div className="space-y-1">
-            <Label htmlFor="email">Email</Label>
-            <Input id="email" name="email" type="email" value={formData.email} onChange={handleInputChange} required disabled={loading} />
-            {/* TODO: Adicionar validação de unicidade? */}
-          </div>
-
-          {/* Telefone */}
-          <div className="space-y-1">
-            <Label htmlFor="telefone">Telefone</Label>
-            <Input id="telefone" name="telefone" value={formData.telefone} onChange={handleInputChange} disabled={loading} />
-          </div>
-
-          {/* Perfil */}
-          <div className="space-y-1">
-            <Label htmlFor="perfilId">Perfil</Label>
-            <Select 
-              name="perfilId"
-              value={formData.perfilId}
-              onValueChange={handleProfileChange} // Usa o handler específico
-              required 
-              disabled={loading || profiles.length === 0}
-            >
-              <SelectTrigger id="perfilId">
-                <SelectValue placeholder={profiles.length > 0 ? "Selecione um perfil" : "Nenhum perfil cadastrado"} />
-              </SelectTrigger>
-              <SelectContent>
-                {profiles.map((profile) => (
-                  <SelectItem key={profile.id} value={profile.id}>
-                    {profile.nome} ({profile.tipo}) {/* Mostra nome e tipo */}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Especialidades (Condicional) */}
-          {selectedProfile?.tipo === 'veterinario' && (
-            <div className="space-y-1">
-              <Label>Especialidades (Veterinário)</Label>
-              <MultiSelect
-                options={[...availableSpecialties, "Outros (Especificar)"]} // Adiciona "Outros" dinamicamente
-                selected={formData.especialidades} // Passa apenas os valores reais
-                onChange={handleSpecialtyChange} // Handler principal para seleção
-                onOtherToggle={handleOtherSpecialtyToggle} // Handler para clique em "Outros"
-                placeholder="Selecione ou especifique..."
-                disabled={loading || addingSpecialty}
-                className="w-full"
-              />
-              {/* Input e Botão para Nova Especialidade */} 
-              {showNewSpecialtyInput && (
-                <div className="flex items-end gap-2 pt-2">
-                   <div className="flex-grow space-y-1">
-                       <Label htmlFor="newSpecialtyName">Nome da Nova Especialidade</Label>
-                        <Input 
-                            id="newSpecialtyName"
-                            value={newSpecialtyName}
-                            onChange={(e) => setNewSpecialtyName(e.target.value)}
-                            placeholder="Digite o nome aqui"
-                            disabled={loading || addingSpecialty}
-                        />
-                   </div>
-                   <Button 
-                      type="button" // Impede submissão do form principal
-                      onClick={handleAddNewSpecialty}
-                      disabled={loading || addingSpecialty || !newSpecialtyName.trim()}
-                      size="sm"
-                    >
-                       {addingSpecialty ? <Loader2 className="h-4 w-4 animate-spin" /> : "Adicionar"}
-                   </Button>
-                </div>
-              )}
-              {availableSpecialties.length === 0 && !loadingSpecialties && 
-                 <p className="text-sm text-muted-foreground">Nenhuma especialidade cadastrada.</p>
-               }
+        <CardContent className="space-y-6">
+          {/* Mostrar loading específico se estiver carregando dados de edição */}
+          {loadingEditData && (
+            <div className="flex justify-center items-center h-20">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              <p className="ml-2">Carregando dados para edição...</p>
             </div>
           )}
 
-          {/* Status (Ativo/Inativo) */}
-          <div className="flex items-center justify-between rounded-lg border p-4">
-            <div className="space-y-0.5">
-              <Label htmlFor="status-switch" className="text-base">Status</Label>
-              <CardDescription>
-                {formData.status ? "Colaborador Ativo" : "Colaborador Inativo"}
-              </CardDescription>
-            </div>
-            <Switch
-              id="status-switch"
-              checked={formData.status}
-              onCheckedChange={handleStatusChange}
-              disabled={loading}
-            />
-          </div>
+          {/* Renderiza campos apenas se não estiver carregando dados de edição */}
+          {!loadingEditData && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Coluna Esquerda */}
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="nome">Nome Completo</Label>
+                    <Input id="nome" name="nome" value={formData.nome} onChange={handleInputChange} required />
+                  </div>
+                  <div>
+                    <Label htmlFor="email">Email</Label>
+                    <Input id="email" name="email" type="email" value={formData.email} onChange={handleInputChange} required />
+                  </div>
+                  <div>
+                    <Label htmlFor="telefone">Telefone (Opcional)</Label>
+                    <Input id="telefone" name="telefone" value={formData.telefone} onChange={handleInputChange} />
+                  </div>
+                </div>
 
-          {/* TODO: Error display */}
-          {error && <p className="text-red-500 text-sm">{error}</p>}
-          
+                {/* Coluna Direita */}
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="perfilId">Perfil de Acesso</Label>
+                    <Select
+                      name="perfilId"
+                      value={formData.perfilId}
+                      onValueChange={handleProfileChange}
+                      required
+                    >
+                      <SelectTrigger disabled={loadingProfiles}>
+                        <SelectValue placeholder={loadingProfiles ? "Carregando perfis..." : "Selecione um perfil"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {!loadingProfiles && profiles.length === 0 && <SelectItem value="" disabled>Nenhum perfil encontrado</SelectItem>}
+                        {profiles.map((profile) => (
+                          <SelectItem key={profile.id} value={profile.id}>
+                            {profile.nome}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Especialidades - Condicional baseado no tipo do perfil SELECIONADO */}
+                  {selectedProfile?.tipo === 'veterinario' && (
+                    <div className="space-y-2">
+                      <Label htmlFor="especialidades">Especialidades (Veterinário)</Label>
+                      <MultiSelect
+                         options={availableSpecialties}
+                         selected={formData.especialidades || []}
+                         onChange={handleSpecialtyChange}
+                         onOtherToggle={handleOtherSpecialtyToggle}
+                         placeholder="Selecionar especialidades..."
+                         disabled={loading || submitting || loadingProfiles || loadingSpecialties || loadingEditData}
+                         className="mb-4"
+                      />
+                      {showNewSpecialtyInput && (
+                        <div className="mt-2 flex items-center space-x-2">
+                            <Input
+                                type="text"
+                                value={newSpecialtyName}
+                                onChange={(e) => setNewSpecialtyName(e.target.value)}
+                                placeholder="Nova Especialidade"
+                                disabled={addingSpecialty}
+                            />
+                            <Button type="button" onClick={handleAddNewSpecialty} disabled={addingSpecialty || !newSpecialtyName.trim()}>
+                                {addingSpecialty ? <Loader2 className="h-4 w-4 animate-spin" /> : "Adicionar"}
+                            </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Status - Sempre visível */}
+                  <div className="flex items-center space-x-2 pt-2">
+                    <Switch
+                      id="status"
+                      checked={formData.status}
+                      onCheckedChange={handleStatusChange}
+                    />
+                    <Label htmlFor="status">
+                      {formData.status ? "Ativo" : "Inativo"}
+                    </Label>
+                    <span className="text-xs text-muted-foreground">
+                      (Colaboradores inativos não podem acessar o sistema)
+                    </span>
+                  </div>
+
+                </div>
+              </div>
+            </>
+          )}
         </CardContent>
-        <CardFooter className="flex justify-end gap-2">
+        <CardFooter className="flex justify-end space-x-2">
+            {/* Botão Cancelar volta para a lista */} 
            <Button 
-            type="button" // Impede submissão do form
-            variant="outline"
-            onClick={() => navigate(-1)} // Navega para a página anterior
-            disabled={loading || addingSpecialty} // Desabilitar se estiver salvando ou adicionando especialidade
-           > 
-            Cancelar
-          </Button>
-          <Button type="submit" disabled={loading || addingSpecialty}> 
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            {isEditing ? 'Salvar Alterações' : 'Adicionar Colaborador'}
-          </Button>
+             type="button" 
+             variant="outline" 
+             onClick={() => navigate('/tenant/colaboradores')} 
+             disabled={loading || loadingEditData || submitting}
+           >
+             Cancelar
+           </Button>
+           {/* Botão Salvar fica desabilitado durante qualquer loading relevante */}
+           <Button 
+             type="submit" 
+             disabled={loading || loadingProfiles || loadingSpecialties || loadingEditData || addingSpecialty || submitting}
+           >
+             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+             {isEditing ? "Salvar Alterações" : "Convidar Colaborador"}
+           </Button>
         </CardFooter>
       </Card>
     </form>

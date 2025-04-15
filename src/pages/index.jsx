@@ -85,7 +85,6 @@ import LiveVetDashboard from "../modules/live-vet/pages/LiveVetDashboard";
 import LiveVetConsulta from "../modules/live-vet/pages/LiveVetConsulta";
 import ConsultaReportPage from "../modules/live-vet/pages/ConsultaReportPage";
 import MedicationQueue from "./MedicationQueue";
-import { TenantProvider } from "@/components/tenant/TenantContext";
 import ProtectedRoute from './ProtectedRoute';
 import PrescriptionManager from './PrescriptionManager';
 import SuperAdminsPage from './SuperAdminsPage';
@@ -95,6 +94,9 @@ import ProfilesPage from './Tenant/ProfilesPage';
 import ProfileFormPage from './Tenant/ProfileFormPage';
 import EmployeesPage from './Tenant/EmployeesPage';
 import EmployeeFormPage from './Tenant/EmployeeFormPage';
+import AcceptInvitationPage from './Public/AcceptInvitationPage';
+// Remover import desnecessário
+// import PasswordSetupPage from './PasswordSetupPage'; 
 // --- FIM NOVAS IMPORTAÇÕES ---
 
 /* Comentado PAGES pois não será mais usado 
@@ -202,14 +204,16 @@ function _getCurrentPage(url) {
 
 function PagesContent() {
     return (
-      <TenantProvider>
         <Routes>
             {/* Rota raiz - Landing Page */}
             <Route path="/" element={<Landing />} />
             
-            {/* Rotas sem layout */}
+            {/* Rotas sem layout (Públicas) */}
             <Route path="/adminlogin" element={<AdminLogin />} />
             <Route path="/login" element={<TenantLogin />} />
+            <Route path="/accept-invitation" element={<AcceptInvitationPage />} />
+            {/* Remover rota desnecessária */}
+            {/* <Route path="/set-password" element={<PasswordSetupPage />} /> */}
             
             {/* Rotas com AdminLayout */}
             <Route path="/admin" element={<AdminLayout />}>
@@ -283,7 +287,6 @@ function PagesContent() {
             {/* <Route path="*" element={<NotFound />} /> */}
 
         </Routes>
-      </TenantProvider>
     );
 }
 

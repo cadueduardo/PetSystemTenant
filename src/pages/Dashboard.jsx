@@ -1,6 +1,4 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { useTenant } from '@/components/tenant/TenantContext';
 import {
   CalendarCheck,
   Users,
@@ -39,46 +37,12 @@ async function getTenantDetails(tenantId) {
 */
 
 export default function Dashboard() {
-  const navigate = useNavigate();
   const { theme } = useTheme();
-  const [isLoading, setIsLoading] = useState(true); // Start as true
-  const [tenantInfo, setTenantInfo] = useState(null);
+  const { currentTenant: tenantDetails, isLoading: loadingTenant } = useTenant();
+  
+  console.log("[Dashboard] Rendering. Loading:", loadingTenant, "Details:", tenantDetails);
 
-  useEffect(() => {
-    // <<< Reverted to original logic >>>
-    setIsLoading(true); // Set loading at the beginning
-    const urlParams = new URLSearchParams(window.location.search);
-    let storeParam = urlParams.get('store');
-    
-    if (!storeParam) {
-      storeParam = localStorage.getItem('current_tenant');
-    }
-    
-    if (!storeParam) {
-      console.warn("Dashboard: Tenant ID/store param not found. Redirecting...");
-      // Decide where to redirect, maybe TenantLogin is better than Landing
-      navigate(createPageUrl("TenantLogin")); 
-      return;
-    }
-    
-    // Ensure current_tenant is set in localStorage
-    localStorage.setItem('current_tenant', storeParam); 
-
-    // Get name from localStorage or use fallback
-    const tenantName = localStorage.getItem('tenant_name') || 'PetClinic'; // Using fallback
-    
-    setTenantInfo({
-      name: tenantName, // Use the potentially stale name or fallback
-      accessUrl: storeParam // Use the ID as accessUrl for now
-    });
-    
-    // Simulate loading or finish immediately
-    // If you have other async operations, manage isLoading accordingly
-    setIsLoading(false); // Set loading to false after setup
-
-  }, [navigate]);
-
-  if (isLoading) { // Check isLoading state
+  if (loadingTenant) {
     return (
       <div className="flex justify-center items-center min-h-screen">
         <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
@@ -89,7 +53,7 @@ export default function Dashboard() {
   return (
     <div>
       <h2 className={`text-xl mb-6 ${theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}`}>
-        Bem-vindo ao painel de controle de {tenantInfo?.name || 'Loja'}
+        Bem-vindo ao painel de controle de {tenantDetails?.name || 'sua loja'}
       </h2>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

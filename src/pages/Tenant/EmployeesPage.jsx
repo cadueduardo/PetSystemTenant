@@ -1,126 +1,179 @@
 import { useState, useEffect } from 'react';
-import { getFirestore, collection, query, where, onSnapshot, doc, getDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { getFirestore, collection, query, where, onSnapshot, doc, getDoc, deleteDoc, updateDoc, documentId, getDocs } from 'firebase/firestore';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, PlusCircle, Pencil, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
-import { useNavigate } from 'react-router-dom'; // Para navegação
-import { useTenant } from '@/components/tenant/TenantContext'; // Adicionado useTenant
-import { useToast } from "@/components/ui/use-toast"; // Adicionado useToast
+import { useNavigate } from 'react-router-dom';
+import { useTenant } from '@/components/tenant/TenantContext';
+import { useToast } from "@/components/ui/use-toast";
 
-// ----- SIMULAÇÃO DAS CLAIMS - REMOVER DEPOIS E BUSCAR REAL ----
-// const useAuth = () => ({
-//   userClaims: { isAdmin: true, tenant_id: 'test-tenant' } // Precisa ser o tenantId real
-// });
-// -----------------------------------------------------------
+// --- Log para verificar se o módulo JS está sendo carregado --- 
+console.log("--- MODULE LOAD: src/pages/Tenant/EmployeesPage.jsx (Restoring Firestore Query) ---");
+// -------------------------------------------------------------
 
 function EmployeesPage() {
   const [employees, setEmployees] = useState([]);
-  const [profilesMap, setProfilesMap] = useState({}); // Para mapear ID do perfil para nome
-  const [loading, setLoading] = useState(true);
+  const [profilesMap, setProfilesMap] = useState({});
+  const [loading, setLoading] = useState(true); 
   const [error, setError] = useState(null);
-  // const { userClaims } = useAuth(); // Remover hook simulado
-  // const tenantId = userClaims?.tenant_id; // Remover claim simulado
-  const { tenantId } = useTenant(); // Usar o hook useTenant
+  const tenantContext = useTenant();
   const db = getFirestore();
-  const navigate = useNavigate(); // Hook para navegação
-  const { toast } = useToast(); // Obter função toast
+  const navigate = useNavigate();
+  const { toast } = useToast();
 
-  // Efeito para buscar colaboradores
+  // --- Log para depurar o contexto DEPOIS de obtê-lo ---
+  console.log('[EmployeesPage] Rendering. Actual tenantContext value:', tenantContext);
+  // -------------------------------------------------
+
+  // Efeito para buscar colaboradores (Firestore ATIVADO)
   useEffect(() => {
-    if (!tenantId) {
-      setError("Tenant ID não encontrado. Não é possível buscar colaboradores.");
-      setLoading(false);
+    console.log(`[EmployeesPage] useEffect triggered. isLoading: ${tenantContext.isLoading}, error: ${tenantContext.error}, currentTenant:`, tenantContext.currentTenant);
+
+    if (tenantContext.isLoading) {
+      console.log('[EmployeesPage] TenantContext is loading...');
+      setLoading(true);
+      setError(null);
       return;
     }
 
-    setLoading(true);
-    setError(null);
+    if (tenantContext.error) {
+       console.error('[EmployeesPage] Error reported by TenantContext:', tenantContext.error);
+       setError(`Erro ao carregar informações da loja: ${tenantContext.error}`);
+       setLoading(false);
+       return;
+    }
+
+    const tenantId = tenantContext.currentTenant?.id;
+
+    if (!tenantId) {
+      console.error('[EmployeesPage] TenantContext is ready, but tenantId is missing. currentTenant:', tenantContext.currentTenant);
+      setError("ID da Loja não encontrado após carregamento do contexto. Não é possível buscar colaboradores.");
+      setLoading(false); 
+      return;
+    }
+    
+    // --- FIRESTORE QUERY ATIVADA --- 
+    console.log(`[EmployeesPage] TenantId found: ${tenantId}. Fetching collaborators...`);
+    setLoading(true); // Inicia loading dos colaboradores
+    setError(null); // Limpa erros anteriores
+
     const employeesCollection = collection(db, 'colaboradores');
     const q = query(employeesCollection, where("tenantId", "==", tenantId));
 
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      const employeesData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      console.log('[EmployeesPage] Collaborators snapshot received.');
+      const employeesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setEmployees(employeesData);
-       // Buscar nomes dos perfis referenciados (uma vez ou sempre que a lista mudar)
-       fetchProfileNames(employeesData);
-      setLoading(false);
+      fetchProfileNames(employeesData); // Chama a função para buscar nomes dos perfis
+      setLoading(false); // Finaliza loading APÓS receber dados
     }, (err) => {
-      console.error("Erro ao buscar colaboradores: ", err);
+      console.error("[EmployeesPage] Error fetching collaborators: ", err);
       setError("Falha ao carregar colaboradores. Tente novamente mais tarde.");
-      setLoading(false);
+      setLoading(false); // Finaliza loading em caso de erro
     });
 
-    return () => unsubscribe();
+    return () => {
+      console.log('[EmployeesPage] Unsubscribing from collaborators snapshot.');
+      unsubscribe(); // Limpa o listener ao desmontar ou antes de re-executar
+    };
+    // --- FIM FIRESTORE QUERY ---
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantId]); // Removido db da dependência, getFirestore() é estável
+  }, [tenantContext.isLoading, tenantContext.currentTenant, tenantContext.error, db]); // Dependências corretas
 
-  // Função para buscar nomes dos perfis associados aos colaboradores
+  // --- Função para buscar nomes dos perfis (Restaurada) ---
   const fetchProfileNames = async (employeeList) => {
-    const profileIds = [...new Set(employeeList.map(emp => emp.perfilId).filter(Boolean))]; // IDs únicos de perfil
+    const profileIds = [...new Set(employeeList.map(emp => emp.perfilId).filter(Boolean))];
     if (profileIds.length === 0) {
-        setProfilesMap({}); // Limpa se não houver perfis
+        setProfilesMap({}); 
         return;
     }
 
-    const newProfilesMap = { ...profilesMap }; // Copia o mapa existente
-
-    // Busca apenas os perfis que ainda não estão no mapa
+    const newProfilesMap = { ...profilesMap }; 
     const profilesToFetch = profileIds.filter(id => !newProfilesMap[id]);
 
     if (profilesToFetch.length > 0) {
-        const promises = profilesToFetch.map(id => getDoc(doc(db, 'perfis', id)));
+        // Verifica se o tenantId está disponível antes de buscar perfis
+        const currentTenantId = tenantContext.currentTenant?.id;
+        if (!currentTenantId) {
+            console.warn("[fetchProfileNames] TenantId not available, cannot fetch profiles.");
+            return; 
+        }
+        console.log("[fetchProfileNames] Fetching missing profiles:", profilesToFetch);
+        // Busca apenas os documentos de perfis pertencentes ao tenant atual
+        const profilesRef = collection(db, 'perfis');
+        const q = query(profilesRef, where(documentId(), 'in', profilesToFetch), where('tenantId', '==', currentTenantId));
+        
         try {
-            const profileDocs = await Promise.all(promises);
-            profileDocs.forEach(docSnap => {
-            if (docSnap.exists()) {
-                newProfilesMap[docSnap.id] = docSnap.data().nome; // Armazena nome por ID
-            } else {
-                 newProfilesMap[docSnap.id] = 'Perfil não encontrado'; // Fallback
-            }
+            const querySnapshot = await getDocs(q);
+            querySnapshot.forEach(docSnap => {
+                if (docSnap.exists()) {
+                    newProfilesMap[docSnap.id] = docSnap.data().nome; 
+                } else {
+                    // Este caso não deveria ocorrer com a query acima, mas por segurança:
+                    newProfilesMap[docSnap.id] = 'Perfil não encontrado'; 
+                }
+            });
+            // Preenche IDs não encontrados (caso a query não retorne por algum motivo)
+            profilesToFetch.forEach(id => {
+                if (!newProfilesMap[id]) {
+                     newProfilesMap[id] = 'Perfil inválido/não pertence';
+                }
             });
             setProfilesMap(newProfilesMap);
         } catch (error) {
-            console.error("Erro ao buscar nomes dos perfis:", error);
-            // Poderia definir um erro específico aqui
+            console.error("[fetchProfileNames] Error fetching profile names:", error);
+            // Preenche os não encontrados com erro
+            profilesToFetch.forEach(id => {
+                newProfilesMap[id] = 'Erro ao buscar';
+            });
+             setProfilesMap(newProfilesMap);
         }
     }
   };
+  // ---------------------------------------------------------
 
- // Função para lidar com ativação/desativação
- const handleToggleStatus = async (employeeId, currentStatus) => {
-    const newStatus = !currentStatus; // Inverte o status atual
+  // --- Função para lidar com ativação/desativação (Restaurada) ---
+  const handleToggleStatus = async (employeeId, currentStatus) => {
+    const newStatus = !currentStatus;
     const statusLabel = newStatus ? "Ativo" : "Inativo";
-    console.log(`Tentando alterar status de ${employeeId} para ${statusLabel}`);
+    console.log(`[EmployeesPage] Toggling status for ${employeeId} to ${statusLabel}`);
     
-    const docRef = doc(db, 'colaboradores', employeeId);
+    // Verificar tenantId aqui também por segurança
+    const currentTenantId = tenantContext.currentTenant?.id;
+    if (!currentTenantId) {
+        toast({ variant: "destructive", title: "Erro", description: "ID da Loja não encontrado para alterar status." });
+        return;
+    }
 
+    const docRef = doc(db, 'colaboradores', employeeId);
     try {
+      // Validação extra: garantir que o doc pertence ao tenant?
+      // const docSnap = await getDoc(docRef); // Opcional, pode adicionar custo de leitura
+      // if (!docSnap.exists() || docSnap.data().tenantId !== currentTenantId) throw new Error("Documento não encontrado ou pertence a outro tenant");
+      
       await updateDoc(docRef, { status: newStatus });
       toast({
         title: "Status Alterado",
         description: `Status do colaborador alterado para ${statusLabel}.`,
       });
-      // O listener onSnapshot atualizará a UI automaticamente.
     } catch (error) {
-      console.error("Erro ao alterar status do colaborador:", error);
+      console.error("[EmployeesPage] Error toggling status:", error);
       toast({
         variant: "destructive",
         title: "Erro ao Alterar Status",
         description: `Não foi possível alterar o status. (${error.message})`,
       });
     }
- };
+  };
+  // ------------------------------------------------------------
 
-  // --- Função para Excluir Colaborador ---
+  // --- Função para Excluir Colaborador (Restaurada) ---
   const handleDeleteEmployee = async (employeeId, employeeName) => {
-    if (!tenantId) {
-        toast({ variant: "destructive", title: "Erro", description: "ID do Tenant não encontrado." });
+    const currentTenantId = tenantContext.currentTenant?.id; 
+    if (!currentTenantId) {
+        toast({ variant: "destructive", title: "Erro", description: "ID da Loja não disponível para exclusão." });
         return;
     }
 
@@ -128,17 +181,20 @@ function EmployeesPage() {
         return;
     }
 
+    console.log(`[EmployeesPage] Deleting employee ${employeeId} for tenant ${currentTenantId}`);
     try {
-      // Indicar visualmente que algo está acontecendo (opcional, poderia usar estado de loading por linha)
       const docRef = doc(db, 'colaboradores', employeeId);
+      // Validação extra (opcional):
+      // const docSnap = await getDoc(docRef);
+      // if (!docSnap.exists() || docSnap.data().tenantId !== currentTenantId) throw new Error("Documento não encontrado ou pertence a outro tenant");
+      
       await deleteDoc(docRef);
       toast({
           title: "Colaborador Excluído",
           description: `O colaborador "${employeeName}" foi excluído com sucesso.`,
       });
-      // A lista será atualizada automaticamente pelo onSnapshot
     } catch (err) {
-      console.error("Erro ao excluir colaborador:", err);
+      console.error("[EmployeesPage] Error deleting employee:", err);
       toast({
           variant: "destructive",
           title: "Erro ao Excluir",
@@ -146,13 +202,13 @@ function EmployeesPage() {
       });
     }
   };
-  // -----------------------------------
+  // ----------------------------------------------------
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-semibold">Gestão de Colaboradores</h1>
-        <Button onClick={() => navigate('/tenant/colaborador/novo')}> {/* Navega para form de novo */}
+        <Button onClick={() => navigate('/tenant/colaborador/novo')}> 
           <PlusCircle className="mr-2 h-4 w-4" /> Adicionar Colaborador
         </Button>
       </div>
@@ -162,15 +218,15 @@ function EmployeesPage() {
           <CardTitle>Colaboradores Cadastrados</CardTitle>
         </CardHeader>
         <CardContent>
-          {loading && <p>Carregando colaboradores...</p>}
-
-          {error && (
+          {/* Lógica de Loading/Erro original */}
+          {(tenantContext.isLoading || loading) && <p>Carregando...</p>}
+          {!tenantContext.isLoading && error && (
             <div className="text-red-600 flex items-center">
               <AlertCircle className="mr-2 h-5 w-5" /> {error}
             </div>
           )}
-
-          {!loading && !error && (
+          {/* Tabela Restaurada */}
+          {!tenantContext.isLoading && !loading && !error && (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -200,7 +256,7 @@ function EmployeesPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right space-x-1">
-                         {/* Botão de Status */}
+                         {/* Botões restaurados e conectados aos handlers */}
                          <Button
                             variant="ghost"
                             size="icon"
@@ -210,7 +266,6 @@ function EmployeesPage() {
                          >
                            {employee.status ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
                          </Button>
-                         {/* Botão Editar */}
                          <Button
                             variant="ghost"
                             size="icon"
@@ -218,19 +273,18 @@ function EmployeesPage() {
                             title="Editar"
                             className="text-blue-600 hover:text-blue-700"
                          >
-                            <Pencil className="h-4 w-4" />
-                         </Button>
-                         {/* Botão Excluir */}
-                         <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDeleteEmployee(employee.id, employee.nome)} // Conectado ao handler
-                            title="Excluir Colaborador"
-                            className="text-red-600 hover:text-red-700"
-                          >
-                             <Trash2 className="h-4 w-4" />
+                             <Pencil className="h-4 w-4" />
                           </Button>
-                      </TableCell>
+                          <Button
+                             variant="ghost"
+                             size="icon"
+                             onClick={() => handleDeleteEmployee(employee.id, employee.nome)}
+                             title="Excluir Colaborador"
+                             className="text-red-600 hover:text-red-700"
+                           >
+                              <Trash2 className="h-4 w-4" />
+                           </Button>
+                       </TableCell>
                     </TableRow>
                   ))
                 )}

@@ -15,5 +15,21 @@
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json" 
-  }
+  },
+    // --- ADICIONE ESTA SEÇÃO ---
+    "hosting": {
+      "public": "dist", // <-- VERIFIQUE: Mude para "build" se for o caso
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ]
+    }
+    // --- FIM DA SEÇÃO ADICIONADA ---
 }
