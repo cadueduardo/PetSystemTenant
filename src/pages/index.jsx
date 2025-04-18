@@ -95,6 +95,7 @@ import ProfileFormPage from './Tenant/ProfileFormPage';
 import EmployeesPage from './Tenant/EmployeesPage';
 import EmployeeFormPage from './Tenant/EmployeeFormPage';
 import AcceptInvitationPage from './Public/AcceptInvitationPage';
+import AgendaPage from './Tenant/AgendaPage';
 // Remover import desnecessário
 // import PasswordSetupPage from './PasswordSetupPage'; 
 // --- FIM NOVAS IMPORTAÇÕES ---
@@ -238,7 +239,8 @@ function PagesContent() {
                 <Route path="clientes" element={<Customers />} />
                 <Route path="cliente/:id" element={<CustomerDetails />} />
                 <Route path="cliente/editar/:id" element={<EditCustomer />} />
-                <Route path="agenda" element={<Calendar />} />
+                <Route path="agenda" element={<AgendaPage />} />
+                <Route path="calendario-mensal" element={<Calendar />} />
                 <Route path="pet/:id" element={<PetDetails />} />
                 <Route path="orc-estatisticas" element={<OCRStatistics />} />
                 <Route path="suporte" element={<Support />} />

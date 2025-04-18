@@ -205,9 +205,14 @@ async def end_recording(session_info: dict = Body(...)):
 
 
 if __name__ == "__main__":
-    port = 8001 # Mantém a porta 8001 para este serviço
-    print(f"Iniciando Mock Audio Service com Integração Gemini na porta {port}...")
+    # <<< MODIFICAR PORTA E HOST >>>
+    # port = 8001 # Linha antiga
+    port = int(os.getenv("PORT", 8080)) # Lê a variável PORT do ambiente ou usa 8080
+    host = "0.0.0.0" # Escuta em todas as interfaces para o Cloud Run
+    
+    print(f"Iniciando Mock Audio Service com Integração Gemini na porta {port} e host {host}...")
     if not GEMINI_API_KEY:
          print("AVISO: GEMINI_API_KEY não definida. As sugestões do Gemini não funcionarão.")
     # Roda sem reload para estabilidade com chamadas de API e estado em memória
-    uvicorn.run("audio_service_mock:app", host="127.0.0.1", port=port, log_level="info")
+    # <<< USAR host e port DEFINIDOS ACIMA >>>
+    uvicorn.run("audio_service_mock:app", host=host, port=port, log_level="info")

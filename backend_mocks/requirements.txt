@@ -1,0 +1,4 @@
+fastapi
+uvicorn[standard] # Inclui dependências padrão como websockets
+google-generativeai
+python-dotenv 

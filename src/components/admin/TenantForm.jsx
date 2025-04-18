@@ -39,7 +39,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 const app = getApp();
-const functions = getFunctions(app, 'southamerica-east1');
+const functions = getFunctions(app, 'us-central1');
 
 export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
   const [isSubmitting, setIsSubmitting] = useState(false);

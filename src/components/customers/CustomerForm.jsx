@@ -84,6 +84,22 @@ export default function CustomerForm({ customer, onSuccess }) {
         tenant_id: currentTenant
       };
 
+      // ---> START phone_waha_id LOGIC <---
+      if (formData.phone) {
+        const cleanedPhone = formData.phone.replace(/\D/g, '');
+        // Basic check for Brazilian numbers (DDD + 8 or 9 digits)
+        if (cleanedPhone.length >= 10 && cleanedPhone.length <= 11) {
+           customerData.phone_waha_id = `55${cleanedPhone}@c.us`;
+           console.log('[CustomerForm] Generated phone_waha_id:', customerData.phone_waha_id);
+        } else {
+           console.warn('[CustomerForm] Phone number does not seem valid for waha_id generation:', formData.phone);
+           customerData.phone_waha_id = null; // Ou tratar como erro?
+        }
+      } else {
+        customerData.phone_waha_id = null; // Garante que seja nulo se não houver telefone
+      }
+      // ---> END phone_waha_id LOGIC <---
+
       let wasReactivated = false;
 
       if (customer) {

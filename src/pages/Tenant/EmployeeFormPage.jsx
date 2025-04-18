@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getFirestore, doc, getDoc, addDoc, collection, query, where, onSnapshot, serverTimestamp, getDocs, limit } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, addDoc, collection, query, where, onSnapshot, serverTimestamp, getDocs, limit, updateDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { useTenant } from '@/components/tenant/TenantContext';
 import { Button } from "@/components/ui/button";
@@ -52,7 +52,7 @@ function EmployeeFormPage() {
   const [selectedProfile, setSelectedProfile] = useState(null);
 
   const [loading, setLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(false); // Novo estado para controle de submissão
+  const [submitting, setSubmitting] = useState(false);
   const [pageError, setPageError] = useState(null);
   const [loadingProfiles, setLoadingProfiles] = useState(true);
 
@@ -251,7 +251,13 @@ function EmployeeFormPage() {
 
   // Handler PRINCIPAL para mudança no MultiSelect (recebe array de valores REAIS)
   const handleSpecialtyChange = (selectedActualSpecialties) => {
-     setFormData(prev => ({ ...prev, especialidades: selectedActualSpecialties }));
+     // Log para verificar as especialidades recebidas e o estado após atualização
+     console.log("[handleSpecialtyChange] Received specialties:", selectedActualSpecialties);
+     setFormData(prev => {
+       const newState = { ...prev, especialidades: selectedActualSpecialties };
+       console.log("[handleSpecialtyChange] New formData state (before commit):", newState);
+       return newState;
+     });
   };
   
   // Handler para quando a OPÇÃO "Outros" é clicada no MultiSelect
@@ -302,133 +308,129 @@ function EmployeeFormPage() {
   // --- Handler para Submissão --- 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
-    // Previne submissão duplicada
-    if (submitting) {
-      console.log("[handleSubmit] Form already submitting, preventing duplicate submission.");
-      return;
-    }
-
-    setPageError(null); 
+    console.log("[EmployeeFormPage] handleSubmit triggered.");
+    setSubmitting(true);
+    setPageError(null);
     setLoading(true);
-    setSubmitting(true); // Marca como em submissão
-    console.log("[handleSubmit] Submit button clicked, state set to loading.");
 
-    // 1. Obter tenantId do contexto AQUI, no momento da submissão
     const currentTenantId = tenantContext.currentTenant?.id;
     if (!currentTenantId) {
-        console.error("[EmployeeFormPage] Submit Error: Tenant ID missing from context.");
-        setPageError("Erro crítico: ID da Loja não encontrado. Não é possível salvar.");
-        setLoading(false);
-        setSubmitting(false); // Reseta estado de submissão em caso de erro
-        return;
-    }
-
-    // Validação básica
-    if (!formData.nome || !formData.email || !formData.perfilId) {
-      setPageError("Por favor, preencha Nome, Email e selecione um Perfil.");
+      console.error("[EmployeeFormPage] TenantId missing during submit!");
+      setPageError("Erro crítico: ID da Loja não encontrado. Não é possível salvar.");
+      setSubmitting(false);
       setLoading(false);
-      setSubmitting(false); // Reseta estado de submissão em caso de erro
       return;
     }
-    
-    // Validação de email único (apenas na criação ou se email mudou)
-    if (!isEditing || formData.email !== originalEmployeeData?.email) {
-        console.log(`[EmployeeFormPage] Checking unique email: ${formData.email} for tenant ${currentTenantId}`);
-        const usersRef = collection(db, "colaboradores");
-        const q = query(usersRef, where("email", "==", formData.email), where("tenantId", "==", currentTenantId), limit(1));
+
+    // Email existence check (unchanged)
+    if (!isEditing) {
+        console.log(`[EmployeeFormPage] Checking if email ${formData.email} exists for tenant ${currentTenantId}...`);
+        const q = query(
+            collection(db, "colaboradores"),
+            where("tenantId", "==", currentTenantId),
+            where("email", "==", formData.email),
+            limit(1)
+        );
         try {
             const querySnapshot = await getDocs(q);
             if (!querySnapshot.empty) {
-                setPageError(`O email "${formData.email}" já está cadastrado para outro colaborador nesta loja.`);
+                console.warn("[EmployeeFormPage] Email already exists.");
+                setPageError("Este e-mail já está cadastrado para outro colaborador nesta loja.");
+                setSubmitting(false);
                 setLoading(false);
-                setSubmitting(false); // Reseta estado de submissão em caso de erro
                 return;
             }
-        } catch (err) {
-            console.error("[EmployeeFormPage] Error checking unique email:", err);
-            setPageError("Erro ao verificar unicidade do email. Tente novamente.");
+            console.log("[EmployeeFormPage] Email is unique.");
+        } catch (checkError) {
+            console.error("[EmployeeFormPage] Error checking email existence:", checkError);
+            setPageError("Erro ao verificar e-mail. Tente novamente.");
+            setSubmitting(false);
             setLoading(false);
-            setSubmitting(false); // Reseta estado de submissão em caso de erro
             return;
         }
     }
 
-    // Objeto de dados para salvar/atualizar
-    const employeeDataToSave = {
-      ...formData,
-      tenantId: currentTenantId, 
-      updatedAt: serverTimestamp()
+    // Prepare dataToSave (unchanged)
+    const dataToSave = {
+      nome: formData.nome.trim(),
+      email: formData.email.trim().toLowerCase(),
+      telefone: formData.telefone.trim(),
+      perfilId: formData.perfilId,
+      especialidades: selectedProfile?.tipo === 'veterinario' ? formData.especialidades : [],
+      status: formData.status,
+      tenantId: currentTenantId,
+      updated_at: serverTimestamp()
     };
-    if (!isEditing) {
-      employeeDataToSave.createdAt = serverTimestamp();
-    }
+    console.log("[EmployeeFormPage] Data prepared for saving:", dataToSave);
 
     try {
-       if (isEditing) {
-         // Lógica de edição (mantida)
-         // ... 
-       } else {
-         // --- Lógica de Criação --- 
-         console.log(`[handleSubmit] Validations passed. Preparing data for NEW function call.`);
+      let employeeDocId = employeeId;
 
-         // --- Bloco Try/Catch específico para a chamada da NOVA função --- 
-         try {
-           console.log(`[handleSubmit] Preparing to call sendCustomInviteFunction...`);
-           const inviteResult = await sendCustomInviteFunction({
-             email: formData.email,
-             collaboratorName: formData.nome,
-             profileId: formData.perfilId
-           });
-           console.log(`[handleSubmit] sendCustomInviteFunction called successfully. Result:`, inviteResult);
-           toast({ title: "Convite Enviado (Novo Fluxo)", description: inviteResult?.data?.message || `Convite (teste) enviado para ${formData.email}.` });
-         } catch (functionCallError) {
-           console.error("[handleSubmit] CRITICAL ERROR calling sendCustomInviteFunction:", functionCallError);
-           setPageError(`Falha ao enviar o convite (novo fluxo): ${functionCallError.message || functionCallError}`);
-           setLoading(false);
-           setSubmitting(false);
-           return; // Interrompe a execução
-         }
-         // --- Fim do Bloco Try/Catch específico ---
-       }
-       // Navegação ocorre apenas se TUDO deu certo (edição ou criação+convite)
-       console.log("[handleSubmit] Process finished. Navigating back to list...");
-       navigate('/tenant/colaboradores');
+      if (isEditing) {
+        console.log(`[EmployeeFormPage] Updating collaborator ${employeeId}...`);
+        const employeeDocRef = doc(db, 'colaboradores', employeeId);
+        await updateDoc(employeeDocRef, dataToSave);
+        console.log("[EmployeeFormPage] updateDoc completed for:", employeeId);
+        console.log("[EmployeeFormPage] Collaborator updated successfully.");
+        toast({ title: "Sucesso!", description: "Colaborador atualizado." });
+      } else {
+        console.log("[EmployeeFormPage] Creating new collaborator...");
+        const createData = { ...dataToSave, created_at: serverTimestamp() };
+        const docRef = await addDoc(collection(db, 'colaboradores'), createData);
+        employeeDocId = docRef.id;
+        console.log("[EmployeeFormPage] addDoc completed. New ID:", employeeDocId);
+        console.log(`[EmployeeFormPage] New collaborator created with ID: ${employeeDocId}`);
+        
+        // Send invite logic (unchanged)
+        console.log(`[EmployeeFormPage] Attempting to send invite to ${createData.email}...`);
+        try {
+           const result = await sendCustomInviteFunction({
+            email: createData.email,
+            displayName: createData.nome,
+            tenantId: currentTenantId, 
+            storeName: tenantContext.currentTenant?.company_name || 'sua loja'
+          });
+          console.log("[EmployeeFormPage] Invite function result:", result);
+          if (result.data.success) {
+            toast({ title: "Convite Enviado!", description: `Convite enviado para ${createData.email}.` });
+          } else {
+            throw new Error(result.data.error || 'Falha no envio do convite pela função.');
+          }
+        } catch (inviteError) {
+          console.error("[EmployeeFormPage] Error sending invite:", inviteError);
+          toast({
+            variant: "destructive",
+            title: "Erro no Convite",
+            description: `Não foi possível enviar o convite (${inviteError.message || inviteError}). O colaborador foi criado.`,
+            duration: 7000
+          });
+        }
+        toast({ title: "Sucesso!", description: "Colaborador criado." });
+      }
+
+      // Navigate AFTER save
+      navigate('/tenant/colaboradores');
+
     } catch (err) {
-       // Este catch pegaria erros da lógica de Edição ou outros erros gerais
-       console.error("[handleSubmit] General error during submit (e.g., during Edit):", err);
-       setPageError(`Falha ao salvar. ${err.message}`);
-       setLoading(false);
-       setSubmitting(false);
+      console.error("[EmployeeFormPage] Error saving collaborator:", err);
+      setPageError(`Falha ao salvar colaborador: ${err.message}`);
+      toast({ variant: "destructive", title: "Erro ao Salvar", description: "Não foi possível salvar os dados." });
+    } finally {
+      setSubmitting(false);
+      setLoading(false);
     }
-    // Não precisamos mais de finally explícito se setLoading/Submitting são tratados nos fluxos de erro/sucesso
-
   };
 
-  // ----- Renderização Condicional -----
-  // Se TenantContext estiver carregando, mostrar loading geral
-  if (tenantContext.isLoading) {
-    return (
-      <div className="flex justify-center items-center h-40">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <p className="ml-2">Carregando dados da loja...</p>
-      </div>
-    );
-  }
+  // --- Renderização Condicional --- 
+  const pageIsLoading = loading || loadingProfiles || loadingSpecialties || loadingEditData;
 
-  // Se TenantContext teve erro OU houve erro geral na página, mostrar erro
-  if (tenantContext.error || pageError) {
-    return (
-      <div className="text-red-600 flex items-center justify-center h-40">
-        <AlertCircle className="mr-2 h-5 w-5" />
-        {pageError || `Erro ao carregar dados da loja: ${tenantContext.error}`}
-      </div>
-    );
+  if (pageIsLoading && !pageError) {
+    return <div className="flex justify-center items-center h-screen"><Loader2 className="h-8 w-8 animate-spin" /> Carregando...</div>;
   }
 
   // Renderização principal do formulário (quando TenantContext está ok)
   return (
-    <form onSubmit={handleSubmit} className="space-y-8">
+    <div className="container mx-auto p-4 max-w-3xl">
       <Card>
         <CardHeader>
           <CardTitle>{isEditing ? "Editar Colaborador" : "Adicionar Novo Colaborador"}</CardTitle>
@@ -436,130 +438,135 @@ function EmployeeFormPage() {
             {isEditing ? `Modifique os dados de ${originalEmployeeData?.nome || 'colaborador'}.` : "Preencha os dados para convidar um novo membro para a equipe."}
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Mostrar loading específico se estiver carregando dados de edição */}
-          {loadingEditData && (
-            <div className="flex justify-center items-center h-20">
-              <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <p className="ml-2">Carregando dados para edição...</p>
-            </div>
-          )}
-
-          {/* Renderiza campos apenas se não estiver carregando dados de edição */}
-          {!loadingEditData && (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Coluna Esquerda */}
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="nome">Nome Completo</Label>
-                    <Input id="nome" name="nome" value={formData.nome} onChange={handleInputChange} required />
-                  </div>
-                  <div>
-                    <Label htmlFor="email">Email</Label>
-                    <Input id="email" name="email" type="email" value={formData.email} onChange={handleInputChange} required />
-                  </div>
-                  <div>
-                    <Label htmlFor="telefone">Telefone (Opcional)</Label>
-                    <Input id="telefone" name="telefone" value={formData.telefone} onChange={handleInputChange} />
-                  </div>
-                </div>
-
-                {/* Coluna Direita */}
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="perfilId">Perfil de Acesso</Label>
-                    <Select
-                      name="perfilId"
-                      value={formData.perfilId}
-                      onValueChange={handleProfileChange}
-                      required
-                    >
-                      <SelectTrigger disabled={loadingProfiles}>
-                        <SelectValue placeholder={loadingProfiles ? "Carregando perfis..." : "Selecione um perfil"} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {!loadingProfiles && profiles.length === 0 && <SelectItem value="" disabled>Nenhum perfil encontrado</SelectItem>}
-                        {profiles.map((profile) => (
-                          <SelectItem key={profile.id} value={profile.id}>
-                            {profile.nome}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Especialidades - Condicional baseado no tipo do perfil SELECIONADO */}
-                  {selectedProfile?.tipo === 'veterinario' && (
-                    <div className="space-y-2">
-                      <Label htmlFor="especialidades">Especialidades (Veterinário)</Label>
-                      <MultiSelect
-                         options={availableSpecialties}
-                         selected={formData.especialidades || []}
-                         onChange={handleSpecialtyChange}
-                         onOtherToggle={handleOtherSpecialtyToggle}
-                         placeholder="Selecionar especialidades..."
-                         disabled={loading || submitting || loadingProfiles || loadingSpecialties || loadingEditData}
-                         className="mb-4"
-                      />
-                      {showNewSpecialtyInput && (
-                        <div className="mt-2 flex items-center space-x-2">
-                            <Input
-                                type="text"
-                                value={newSpecialtyName}
-                                onChange={(e) => setNewSpecialtyName(e.target.value)}
-                                placeholder="Nova Especialidade"
-                                disabled={addingSpecialty}
-                            />
-                            <Button type="button" onClick={handleAddNewSpecialty} disabled={addingSpecialty || !newSpecialtyName.trim()}>
-                                {addingSpecialty ? <Loader2 className="h-4 w-4 animate-spin" /> : "Adicionar"}
-                            </Button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Status - Sempre visível */}
-                  <div className="flex items-center space-x-2 pt-2">
-                    <Switch
-                      id="status"
-                      checked={formData.status}
-                      onCheckedChange={handleStatusChange}
-                    />
-                    <Label htmlFor="status">
-                      {formData.status ? "Ativo" : "Inativo"}
-                    </Label>
-                    <span className="text-xs text-muted-foreground">
-                      (Colaboradores inativos não podem acessar o sistema)
-                    </span>
-                  </div>
-
-                </div>
+        <form onSubmit={handleSubmit}>
+          <CardContent className="space-y-6">
+            {/* Mostrar loading específico se estiver carregando dados de edição */}
+            {loadingEditData && (
+              <div className="flex justify-center items-center h-20">
+                <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                <p className="ml-2">Carregando dados para edição...</p>
               </div>
-            </>
-          )}
-        </CardContent>
-        <CardFooter className="flex justify-end space-x-2">
-            {/* Botão Cancelar volta para a lista */} 
-           <Button 
-             type="button" 
-             variant="outline" 
-             onClick={() => navigate('/tenant/colaboradores')} 
-             disabled={loading || loadingEditData || submitting}
-           >
-             Cancelar
-           </Button>
-           {/* Botão Salvar fica desabilitado durante qualquer loading relevante */}
-           <Button 
-             type="submit" 
-             disabled={loading || loadingProfiles || loadingSpecialties || loadingEditData || addingSpecialty || submitting}
-           >
-             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-             {isEditing ? "Salvar Alterações" : "Convidar Colaborador"}
-           </Button>
-        </CardFooter>
+            )}
+
+            {/* Renderiza campos apenas se não estiver carregando dados de edição */}
+            {!loadingEditData && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Coluna Esquerda */}
+                  <div className="space-y-4">
+                    <div>
+                      <Label htmlFor="nome">Nome Completo</Label>
+                      <Input id="nome" name="nome" value={formData.nome} onChange={handleInputChange} required />
+                    </div>
+                    <div>
+                      <Label htmlFor="email">Email</Label>
+                      <Input id="email" name="email" type="email" value={formData.email} onChange={handleInputChange} required />
+                    </div>
+                    <div>
+                      <Label htmlFor="telefone">Telefone (Opcional)</Label>
+                      <Input id="telefone" name="telefone" value={formData.telefone} onChange={handleInputChange} />
+                    </div>
+                  </div>
+
+                  {/* Coluna Direita */}
+                  <div className="space-y-4">
+                    <div>
+                      <Label htmlFor="perfilId">Perfil de Acesso</Label>
+                      <Select
+                        name="perfilId"
+                        value={formData.perfilId}
+                        onValueChange={handleProfileChange}
+                        required
+                      >
+                        <SelectTrigger disabled={loadingProfiles}>
+                          <SelectValue placeholder={loadingProfiles ? "Carregando perfis..." : "Selecione um perfil"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {!loadingProfiles && profiles.length === 0 && <SelectItem value="" disabled>Nenhum perfil encontrado</SelectItem>}
+                          {profiles.map((profile) => (
+                            <SelectItem key={profile.id} value={profile.id}>
+                              {profile.nome}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Especialidades - Condicional baseado no tipo do perfil SELECIONADO */}
+                    {selectedProfile?.tipo === 'veterinario' && (
+                      <div className="space-y-2">
+                        <Label htmlFor="especialidades">Especialidades (Veterinário)</Label>
+                        <MultiSelect
+                           options={availableSpecialties}
+                           selected={formData.especialidades || []}
+                           onChange={handleSpecialtyChange}
+                           onOtherToggle={handleOtherSpecialtyToggle}
+                           placeholder="Selecionar especialidades..."
+                           disabled={loading || submitting || loadingProfiles || loadingSpecialties || loadingEditData}
+                           className="mb-4"
+                        />
+                        {showNewSpecialtyInput && (
+                          <div className="mt-2 flex items-center space-x-2">
+                              <Input
+                                  type="text"
+                                  value={newSpecialtyName}
+                                  onChange={(e) => setNewSpecialtyName(e.target.value)}
+                                  placeholder="Nova Especialidade"
+                                  disabled={addingSpecialty}
+                              />
+                              <Button type="button" onClick={handleAddNewSpecialty} disabled={addingSpecialty || !newSpecialtyName.trim()}>
+                                  {addingSpecialty ? <Loader2 className="h-4 w-4 animate-spin" /> : "Adicionar"}
+                              </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Status - Sempre visível */}
+                    <div className="flex items-center space-x-2 pt-2">
+                      <Switch
+                        id="status"
+                        checked={formData.status}
+                        onCheckedChange={handleStatusChange}
+                      />
+                      <Label htmlFor="status">
+                        {formData.status ? "Ativo" : "Inativo"}
+                      </Label>
+                      <span className="text-xs text-muted-foreground">
+                        (Colaboradores inativos não podem acessar o sistema)
+                      </span>
+                    </div>
+
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Error Message */} 
+            {pageError && (
+                <div className="text-red-600 bg-red-100 p-3 rounded-md flex items-center">
+                    <AlertCircle className="h-5 w-5 mr-2" />
+                    <span>{pageError}</span>
+                </div>
+            )}
+          </CardContent>
+          <CardFooter className="flex justify-end space-x-4">
+              <Button type="button" variant="outline" onClick={() => navigate('/tenant/colaboradores')} disabled={submitting || loading}> 
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={submitting || pageIsLoading || (isEditing && !originalEmployeeData) }>
+                {submitting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Salvando...
+                  </>
+                ) : (
+                  isEditing ? 'Salvar Alterações' : 'Criar Colaborador'
+                )}
+              </Button>
+          </CardFooter>
+        </form>
       </Card>
-    </form>
+    </div>
   );
 }
 

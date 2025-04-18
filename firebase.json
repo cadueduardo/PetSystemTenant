@@ -14,22 +14,59 @@
   ],
   "firestore": {
     "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json" 
+    "indexes": "firestore.indexes.json"
   },
-    // --- ADICIONE ESTA SEÇÃO ---
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "functions": {
+      "port": 5001
+    },
+    "firestore": {
+      "port": 8081
+    },
+    "database": {
+      "port": 9000
+    },
     "hosting": {
-      "public": "dist", // <-- VERIFIQUE: Mude para "build" se for o caso
-      "ignore": [
-        "firebase.json",
-        "**/.*",
-        "**/node_modules/**"
-      ],
-      "rewrites": [
-        {
-          "source": "**",
-          "destination": "/index.html"
-        }
-      ]
+      "port": 5002
+    },
+    "pubsub": {
+      "port": 8086
+    },
+    "storage": {
+      "port": 9199
+    },
+    "eventarc": {
+      "port": 9299
+    },
+    "hub": {
+      "port": 4401
+    },
+    "logging": {
+      "port": 4501
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4001
     }
-    // --- FIM DA SEÇÃO ADICIONADA ---
+  }
 }

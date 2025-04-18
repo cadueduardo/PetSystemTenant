@@ -20,11 +20,13 @@ import { medicationTaskService } from '@/api/firebase/medicationTaskService';
 import { queueService } from '@/api/firebase/queueService';
 import { addPendingItems } from '@/api/mock/chargeableItemService';
 
-// URLs do NOVO serviço de áudio mock
-const AUDIO_SERVICE_BASE_URL = 'http://localhost:8001';
+// <<< ATUALIZAR URLs para Cloud Run >>>
+// const AUDIO_SERVICE_BASE_URL = 'http://localhost:8001'; // URL Antiga
+const AUDIO_SERVICE_BASE_URL = 'https://audio-service-768612251806.us-central1.run.app'; // NOVA URL Cloud Run HTTPS
 const START_RECORDING_URL = `${AUDIO_SERVICE_BASE_URL}/start_recording`;
 const END_RECORDING_URL = `${AUDIO_SERVICE_BASE_URL}/end_recording`;
-const WEBSOCKET_URL_BASE = 'ws://localhost:8001/audio_stream'; // WebSocket URL
+// const WEBSOCKET_URL_BASE = 'ws://localhost:8001/audio_stream'; // URL Antiga WS
+const WEBSOCKET_URL_BASE = 'wss://audio-service-768612251806.us-central1.run.app/audio_stream'; // NOVA URL Cloud Run WSS (Secure WebSocket)
 
 export default function LiveVetConsulta() {
   const { appointmentId } = useParams();
@@ -120,33 +122,44 @@ export default function LiveVetConsulta() {
         let currentApptData = apptData; // Variável para manter dados atualizados
 
         // <<< MARCAR COMO EM ANDAMENTO E DEFINIR START_TIME >>>
-        if ( (apptData.status === 'scheduled' || apptData.status === 'confirmed') && !apptData.start_time ) {
-           console.log('[useEffect Main] Agendamento precisa ser iniciado. Atualizando status e start_time...');
+        // Atualiza se estiver agendado, confirmado OU JÁ CHEGOU, mas AINDA não tem start_time registrado.
+        if ( ['scheduled', 'confirmed', 'arrived'].includes(currentApptData.status) /* && !currentApptData.start_time */ ) {
+          // Removido o check de !start_time para garantir que sempre marque como 'in_progress' ao entrar aqui,
+          // mesmo que um start_time tenha sido definido anteriormente (ex: reabrindo consulta).
+          // O start_time só será atualizado se não existir.
+           console.log(`[useEffect Main] Status atual (${currentApptData.status}) indica necessidade de iniciar/confirmar 'in_progress'.`);
            try {
-              const startTimeUpdate = new Date().toISOString();
-              // Chama update mas não usa o valor de retorno (que é undefined)
-              await Appointment.update(appointmentId, {
-                 status: 'in_progress',
-                 start_time: startTimeUpdate
-              });
-              console.log('[useEffect Main] Agendamento marcado como in_progress (sem retorno verificado).');
-              // Atualiza a variável local com os novos dados
+              const updatePayload = { status: 'in_progress' };
+              // Define start_time apenas se ele ainda não existir
+              if (!currentApptData.start_time) {
+                updatePayload.start_time = new Date().toISOString();
+                console.log('[useEffect Main] Definindo start_time para agora.');
+              } else {
+                console.log('[useEffect Main] Mantendo start_time existente:', currentApptData.start_time);
+              }
+              
+              await Appointment.update(appointmentId, updatePayload);
+              console.log('[useEffect Main] Agendamento atualizado para in_progress.');
+              
+              // Atualiza a variável local E o estado para refletir a mudança imediatamente
               currentApptData = {
-                ...apptData, // Começa com os dados originais
-                status: 'in_progress', // Define o novo status
-                start_time: startTimeUpdate // Define o novo start_time
+                ...currentApptData, // Começa com os dados carregados ou atualizados anteriormente
+                status: 'in_progress', // Garante o novo status
+                // Adiciona start_time ao objeto local se ele foi definido no payload
+                ...(updatePayload.start_time && { start_time: updatePayload.start_time })
               };
+              setAppointment(currentApptData); // <<< ATUALIZA O ESTADO LOCAL >>>
+
            } catch (startError) {
               console.error("[useEffect Main] Erro ao atualizar agendamento para in_progress:", startError);
               toast({ title: "Erro", description: "Não foi possível marcar o início do atendimento.", variant: "destructive" });
-              // Em caso de erro ao atualizar, continua com os dados originais (apptData)
-              // currentApptData já é apptData neste ponto, então não precisa fazer nada
+              // Continua com os dados que temos (currentApptData)
            }
         }
         // <<< FIM DA LÓGICA DE INÍCIO >>>
-        
-        // Define o estado com os dados corretos (originais ou atualizados localmente)
-        setAppointment(currentApptData);
+
+        // Define o estado com os dados corretos (pode ter sido atualizado acima)
+        // setAppointment(currentApptData); // << REMOVIDO - agora é feito dentro do IF ou antes
 
         // <<< CARREGAR DADOS DA CONSULTA ANTERIOR (SE EXISTIR) >>>
         try {
@@ -1130,7 +1143,10 @@ export default function LiveVetConsulta() {
                     <CardHeader>
                         <CardTitle>Atendimento Atual</CardTitle>
                         <CardDescription>
-                            {service.name} - {format(parseISO(appointment.date), 'dd/MM/yyyy')} às {appointment.time}
+                            {service?.name || 'Serviço não encontrado'} -
+                            {appointment?.start_time && typeof appointment.start_time === 'string' ? 
+                                ` ${format(parseISO(appointment.start_time), 'dd/MM/yyyy HH:mm')}` 
+                                : ' Data/hora inválida'}
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-6">

@@ -150,7 +150,7 @@ export const serviceService = {
       const docRef = await addDoc(servicesCollection, dataToSave);
       console.log(`[serviceService.create] Service created with ID: ${docRef.id} for Tenant ${tenantId}`);
       // Return the newly created object with ID
-      const createdService = await this.get(docRef.id); // Use get to ensure consistency
+      const createdService = await serviceService.get(docRef.id);
       return createdService;
     } catch (error) {
       console.error(`[serviceService.create] Error creating service for Tenant ${tenantId}:`, error);
