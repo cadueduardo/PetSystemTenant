@@ -40,6 +40,16 @@ service cloud.firestore {
       
       // Tenant Admin: Atualizar apenas campos de suporte (RESTAURADA)
       allow update: if isTenantMember(tenantId) && isTenantUpdatingSupportAccessOnly();
+
+      // --- NOVA REGRA PARA SUBCOLEÇÃO 'integrations' ---
+      match /integrations/{integrationDocId} {
+        // Permite que usuários autenticados do mesmo tenant leiam
+        // Usa a função auxiliar já existente
+        allow read: if isTenantMember(tenantId);
+        // Nega escrita do lado do cliente por padrão (só a Cloud Function escreve)
+        allow write: if false;
+      }
+      // --- FIM DA NOVA REGRA ---
     }
 
     match /cancellationReasons/{reasonId} {

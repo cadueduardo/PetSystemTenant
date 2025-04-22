@@ -25,6 +25,7 @@ import {
   LifeBuoy,
   LogOut, // Import Logout icon
   UsersRound, // <--- Adicionar ícone para Perfis/Funções
+  Webhook, // <-- Adicionar ícone para Integrações
 } from "lucide-react";
 import { useTheme } from "next-themes";
 
@@ -424,7 +425,22 @@ export default function Layout() {
                   <span>Colaboradores</span>
                 </Link>
             )}
-            {/* --- Fim Links Admin --- */} 
+
+            {/* Integrações (Admin) */}
+            {isAdmin && (
+                <Link
+                  to="/tenant/integracoes"
+                  onClick={(e) => handleNavigation(e, "/tenant/integracoes")}
+                  className={classNames(
+                    `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
+                    isActive("/tenant/integracoes") ? "bg-accent font-medium" : ""
+                  )}
+                >
+                  <Webhook className="h-5 w-5" /> 
+                  <span>Integrações</span>
+                </Link>
+            )}
+            {/* --- Fim Links Admin --- */}
 
             {/* Suporte (todos veem) */} 
             {supportLink}

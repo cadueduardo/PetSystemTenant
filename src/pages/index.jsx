@@ -96,6 +96,7 @@ import EmployeesPage from './Tenant/EmployeesPage';
 import EmployeeFormPage from './Tenant/EmployeeFormPage';
 import AcceptInvitationPage from './Public/AcceptInvitationPage';
 import AgendaPage from './Tenant/AgendaPage';
+import IntegrationsPage from './Tenant/IntegrationsPage';
 // Remover import desnecessário
 // import PasswordSetupPage from './PasswordSetupPage'; 
 // --- FIM NOVAS IMPORTAÇÕES ---
@@ -279,6 +280,10 @@ function PagesContent() {
                 <Route path="colaborador/novo" element={<EmployeeFormPage />} />
                 <Route path="colaborador/editar/:employeeId" element={<EmployeeFormPage />} />
                 {/* --- FIM NOVAS ROTAS --- */}
+
+                {/* --- ROTA PARA INTEGRAÇÕES --- */}
+                <Route path="integracoes" element={<IntegrationsPage />} /> 
+                {/* --- FIM ROTA INTEGRAÇÕES --- */}
                 
               </Route>
             </Route>
