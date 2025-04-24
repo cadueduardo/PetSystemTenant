@@ -7,14 +7,14 @@ import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { pt } from "date-fns/locale";
 import {
-   doc, Timestamp, getDoc
+   doc, Timestamp, getDoc, collection, addDoc, query, where, orderBy, onSnapshot, updateDoc
 } from "firebase/firestore";
 import { useTenant } from "@/components/tenant/TenantContext";
 import { useToast } from "@/components/ui/use-toast";
 // import { getAuth } from "firebase/auth"; // Comentado ou removido
-import { db } from "@/lib/firebaseConfig";
-import { getFunctions, httpsCallable } from "firebase/functions";
-import { getApp } from "firebase/app"; // Importar getApp para passar para getFunctions
+import { db, functions } from '@/lib/firebaseConfig'; // <<< IMPORTAR db e functions >>>
+// import { getFunctions, httpsCallable } from "firebase/functions"; // <<< REMOVER getFunctions >>>
+import { httpsCallable } from "firebase/functions"; // <<< MANTER httpsCallable >>>
 
 import { Button } from "@/components/ui/button";
 // import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"; // Removido
@@ -50,9 +50,11 @@ import {
 // const statusColors = { ... }; // Remover se getStatusBadge for removido
 
 // Instanciar Firebase Functions ESPECIFICANDO A REGIÃO
-const app = getApp(); // Obter a instância padrão do Firebase App
-const functions = getFunctions(app, 'us-central1'); // MUDAR REGIÃO
+// const functions = getFunctions('southamerica-east1'); // <<< USAR REGIÃO DIRETAMENTE >>>
 const manageSupportAccessCallable = httpsCallable(functions, 'manageSupportAccess');
+
+// Callable functions (usando 'functions' importado)
+// const generateSupportTokenCallable = httpsCallable(functions, 'generateSupportToken'); // Comentado pois não usado
 
 export default function SupportPage() {
   // const navigate = useNavigate(); // Removido

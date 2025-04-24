@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getFirestore, doc, getDoc, addDoc, collection, query, where, onSnapshot, serverTimestamp, getDocs, limit, updateDoc } from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { doc, getDoc, addDoc, collection, query, where, onSnapshot, serverTimestamp, getDocs, limit, updateDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { useTenant } from '@/components/tenant/TenantContext';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import { AlertCircle, Loader2 } from 'lucide-react';
 import { Switch } from "@/components/ui/switch";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { useToast } from "@/components/ui/use-toast";
+import { db, auth, functions } from '@/lib/firebaseConfig';
 // TODO: Adicionar import para componente MultiSelect/Checkbox para especialidades
 // TODO: Adicionar import para Switch/Checkbox para status
 
@@ -22,6 +23,11 @@ console.log("--- MODULE LOAD: src/pages/Tenant/EmployeeFormPage.jsx ---");
 // Definir a constante que falta
 // const OTHER_SPECIALTY_DISPLAY_VALUE = "Outros (Especificar)";
 
+// Função para criar convite
+const sendEmployeeInviteCallable = httpsCallable(functions, 'sendEmployeeInvite');
+// Função para resetar senha (se aplicável)
+// const resetEmployeePasswordCallable = httpsCallable(functions, 'resetEmployeePassword');
+
 function EmployeeFormPage() {
   // --- Log para depurar renderização do componente ---
   console.log("[EmployeeFormPage] Component rendering.");
@@ -29,9 +35,6 @@ function EmployeeFormPage() {
 
   const { employeeId } = useParams(); // Para modo de edição
   const navigate = useNavigate();
-  const db = getFirestore();
-  const functions = getFunctions();
-  const sendCustomInviteFunction = httpsCallable(functions, 'sendCustomInvite');
   const tenantContext = useTenant(); // <-- CORREÇÃO: Obter contexto completo
   const isEditing = Boolean(employeeId);
   const { toast } = useToast();
@@ -381,10 +384,9 @@ function EmployeeFormPage() {
         console.log("[EmployeeFormPage] addDoc completed. New ID:", employeeDocId);
         console.log(`[EmployeeFormPage] New collaborator created with ID: ${employeeDocId}`);
         
-        // Send invite logic (unchanged)
         console.log(`[EmployeeFormPage] Attempting to send invite to ${createData.email}...`);
         try {
-           const result = await sendCustomInviteFunction({
+           const result = await sendEmployeeInviteCallable({
             email: createData.email,
             displayName: createData.nome,
             tenantId: currentTenantId, 
@@ -408,7 +410,6 @@ function EmployeeFormPage() {
         toast({ title: "Sucesso!", description: "Colaborador criado." });
       }
 
-      // Navigate AFTER save
       navigate('/tenant/colaboradores');
 
     } catch (err) {

@@ -2,22 +2,30 @@ import { useState, useEffect, useCallback } from 'react';
 // import { Card, CardContent, Typography, Button, CircularProgress, Box, Chip, Alert } from '@mui/material'; // Remover importações MUI não usadas
 import { useTenant } from '@/components/tenant/TenantContext';
 // import { toast } from 'react-toastify'; // Remover toast de react-toastify
-import { getFunctions, httpsCallable } from "firebase/functions";
-import { getFirestore, doc, onSnapshot } from "firebase/firestore"; // Adicionar imports Firestore
+import { httpsCallable } from "firebase/functions"; // <<< MANTER httpsCallable >>>
+import { doc, onSnapshot } from "firebase/firestore"; // <<< MANTER doc, onSnapshot >>>
+import { db, functions } from '@/lib/firebaseConfig'; // <<< IMPORTAR db e functions >>>
 import { Button } from '@/components/ui/button'; // Usar Button de shadcn
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"; // Usar Card de shadcn
 import { Loader2 } from 'lucide-react'; // Manter Loader2 se for usado
 import { useToast } from "@/components/ui/use-toast"; // Usar useToast de shadcn
 import { Alert as ShadcnAlert, AlertDescription, AlertTitle } from "@/components/ui/alert" // Renomear para evitar conflito
-
-const functions = getFunctions();
-const db = getFirestore(); // Inicializar Firestore
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 // --- Funções Callable (Remover não usadas) ---
-// const getWahaSessionStatusCallable = httpsCallable(functions, 'getWahaSessionStatus'); 
+// const getWahaSessionStatusCallable = httpsCallable(functions, 'getWahaSessionStatus'); // Ainda não usado
 // const getWahaQrCodeCallable = httpsCallable(functions, 'getWahaQrCode'); 
-const startWahaSessionCallable = httpsCallable(functions, 'startWahaSession');
-// TODO: Adicionar callable para stopWahaSession
+// const startWahaSessionCallable = httpsCallable(functions, 'startWahaSession');
+// const stopWahaSessionCallable = httpsCallable(functions, 'stopWahaSession');
 
 // --- Constante para nome do documento Firestore --- 
 const FIRESTORE_WAHA_DOC = 'wahaIntegration';
@@ -30,9 +38,12 @@ function WahaConfigForm() {
     const [qrCodeValue, setQrCodeValue] = useState(null);
     const [actionLoading, setActionLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false); // <<< ESTADO PARA O DIALOG >>>
     
     // --- NOVO: Efeito Listener do Firestore --- 
     useEffect(() => {
+        let isMounted = true; // Flag para evitar updates em componente desmontado
+
         // Se não houver ID do tenant, não faz nada e limpa o estado
         if (!currentTenant?.id) {
             setSessionStatus('Desconhecido');
@@ -55,84 +66,131 @@ function WahaConfigForm() {
             (snapshot) => {
                 console.log('[Firestore Listener] Snapshot received.');
                 if (snapshot.exists()) {
-                    const data = snapshot.data();
-                    console.log('[Firestore Listener] Data:', data);
-                    setSessionStatus(data.status || 'Desconhecido');
-                    setQrCodeValue(data.qrCodeDataUri || null);
-                    // Não setar erro aqui, deixa o webhook/outras funções tratarem
-                    // setError(null); 
+                    const firestoreData = snapshot.data();
+                    console.log('[Firestore Listener] Data:', firestoreData);
+
+                    // Atualiza o status da sessão sempre
+                    if (isMounted) {
+                         setSessionStatus(firestoreData.status || 'Desconhecido');
+                    }
+
+                    // Lógica para buscar QR Code SE necessário
+                    if (firestoreData.status === 'QRCode' && !firestoreData.qrCodeDataUri) {
+                         console.log('[Firestore Listener] Status is QRCode and no QR data URI found. Fetching QR...');
+                         if(isMounted) { setQrCodeValue(null); }
+                         
+                         const getWahaQrCodeCallable = httpsCallable(functions, 'getWahaQrCode'); 
+                         getWahaQrCodeCallable()
+                            .then((result) => {
+                                 if (isMounted) {
+                                      console.log('[Firestore Listener] QR Code fetched successfully:', result.data);
+                                      setQrCodeValue(result.data.qrCodeDataUri);
+                                      setError(null); // Limpa erro se buscar com sucesso
+                                 }
+                            })
+                            .catch((callError) => {
+                                 if (isMounted) {
+                                     console.error('[Firestore Listener] Error fetching QR Code:', callError);
+                                     setError(`Falha ao buscar QR Code: ${callError.message}`);
+                                     setQrCodeValue(null); // Garante que QR não seja exibido em caso de erro
+                                 }
+                            });
+                    } else if (isMounted) {
+                         // Se o status não for QRCode ou se já tiver URI, usa o valor do Firestore
+                         setQrCodeValue(firestoreData.qrCodeDataUri || null);
+                    }
                 } else {
                     console.log('[Firestore Listener] Document does not exist. Setting state to Desconectado.');
-                    setSessionStatus('Desconectado'); // Assume desconectado se não houver dados
-                    setQrCodeValue(null);
+                    if (isMounted) {
+                        setSessionStatus('Desconectado'); // Assume desconectado se não houver dados
+                        setQrCodeValue(null);
+                        setError(null);
+                    }
                 }
-                setLoadingStatus(false); // Esconde loading após receber dados (ou ausência deles)
+                if (isMounted) {
+                     setLoadingStatus(false); // Esconde loading após receber dados (ou ausência deles)
+                }
             },
             (err) => {
                 console.error('[Firestore Listener] Error listening to document:', err);
-                setError('Erro ao receber atualizações em tempo real. Tente recarregar a página.');
-                setSessionStatus('Erro');
-                setQrCodeValue(null);
-                setLoadingStatus(false);
+                if (isMounted) {
+                    setError('Erro ao receber atualizações em tempo real. Tente recarregar a página.');
+                    setSessionStatus('Erro');
+                    setQrCodeValue(null);
+                    setLoadingStatus(false);
+                }
             }
         );
 
         // Função de cleanup: Para de ouvir quando o componente desmontar ou tenantId mudar
         return () => {
             console.log(`[Firestore Listener] Cleaning up listener for tenant: ${currentTenant.id}`);
+            isMounted = false; // Define a flag como falsa na desmontagem
             unsubscribe();
         };
 
     }, [currentTenant?.id]); // Dependência: reativa se o tenant mudar
 
-    // --- Função para Gerenciar Conexão (Super Simplificada) ---
-    const handleManageConnection = useCallback(async () => {
-        setError(null); 
-        // Não precisa limpar QR code aqui, o listener vai atualizar
-        
-        if (sessionStatus === 'QRCode' || sessionStatus === 'Conectado') {
-             // Se estiver com QR ou Conectado, a ação é Desconectar (ou reiniciar?)
-             // TODO: Implementar Desconexão/Logout via API WAHA
-             console.log('TODO: Implementar lógica de desconexão/logout.');
-             toast({ title: "Ação Pendente", description: "Função de desconectar ainda não implementada." });
-             return; 
+    // --- NOVA FUNÇÃO PARA EXECUTAR A DESCONEXÃO --- 
+    const executeDisconnect = async () => {
+        console.log('[executeDisconnect] Proceeding with stop session...');
+        setError(null);
+        setActionLoading(true);
+        toast({ title: "Desconectando...", description: "Enviando solicitação para desconectar a sessão." });
+        try {
+            const stopWahaSessionCallable = httpsCallable(functions, 'stopWahaSession'); 
+            const result = await stopWahaSessionCallable();
+            if (result?.data?.code === 'not-found') {
+                toast({ title: "Sessão Desconectada", description: "A sessão já estava desconectada ou não foi encontrada." });
+            } else {
+                toast({ title: "Desconexão Solicitada", description: "Solicitação enviada. Aguarde a atualização do status." });
+            }
+        } catch (callError) {
+            console.error('[executeDisconnect] Error stopping session:', callError);
+            let errorMessage = 'Erro ao tentar desconectar a sessão.';
+            errorMessage = callError?.message || errorMessage;
+            setError(errorMessage);
+            setSessionStatus('Erro'); 
+            toast({ title: "Erro ao Desconectar", description: errorMessage, variant: "destructive" });
+        } finally {
+            setActionLoading(false);
         }
+    };
 
-        if (sessionStatus === 'Desconectado' || sessionStatus === 'Erro' || sessionStatus === 'Desconhecido' || sessionStatus === 'Iniciando') {
-             // A única ação aqui é TENTAR iniciar a sessão
-            // O listener do Firestore cuidará de mostrar o QR ou o status Conectado.
-            console.log('[handleManageConnection] Attempting to start session...');
-            setActionLoading(true); 
+    // --- Função para Gerenciar Conexão --- MODIFICADA ---
+    const handleManageConnection = useCallback(async () => {
+        
+        if (sessionStatus === 'Conectado' || sessionStatus === 'QRCode') {
+            // --- APENAS ABRIR O DIÁLOGO --- 
+            console.log('[handleManageConnection] Opening confirmation dialog...');
+            setIsConfirmDialogOpen(true); 
+        } else { 
+             // --- CHAMAR FUNÇÃO DE CONECTAR (lógica existente) --- 
+             setError(null); 
+             setActionLoading(true); 
+             console.log('[handleManageConnection] Attempting to start session...');
+             toast({ title: "Iniciando Conexão...", description: "Enviando solicitação para conectar e obter QR Code." });
             try {
-                // Apenas chama a função para iniciar
+                const startWahaSessionCallable = httpsCallable(functions, 'startWahaSession'); 
                 const result = await startWahaSessionCallable();
-                
-                // Verifica se o resultado indica que já estava iniciado (código nosso)
                 if (result?.data?.code === 'already-started') {
                      toast({ title: "Sessão Ativa", description: "A sessão já está em processo de inicialização ou ativa." });
-                     // O listener deve pegar o status correto (QRCode ou Conectado) em breve
                  } else {
                      toast({ title: "Iniciando", description: "Solicitação enviada. Aguardando QR Code ou conexão..." });
-                     // Define status localmente para 'Iniciando' para feedback imediato?
-                     setSessionStatus('Iniciando'); 
                  }
-                 // Não precisa fazer mais nada aqui, o listener e o webhook cuidam do resto
-
-            } catch (startError) {
-                 console.error('[handleManageConnection] Error starting session:', startError);
+             } catch (callError) {
+                 console.error('[handleManageConnection] Error starting session:', callError);
                  let errorMessage = 'Erro ao tentar iniciar a conexão.';
-                 // Tenta extrair mensagem de HttpsError
-                 errorMessage = startError?.message || errorMessage;
+                 errorMessage = callError?.message || errorMessage;
                  setError(errorMessage);
-                 setSessionStatus('Erro'); // Define como erro se start falhar
+                 setSessionStatus('Erro'); 
                  toast({ title: "Erro ao Iniciar", description: errorMessage, variant: "destructive" });
-            } finally {
-                 setActionLoading(false);
-            }
-        } 
-        // Remover else if 'Iniciando' - a lógica acima já cobre
+             } finally {
+                 setActionLoading(false); 
+             }
+        }
 
-    }, [sessionStatus, toast]); // Remover dependências não usadas
+    }, [sessionStatus, toast]); // Dependências atualizadas
 
     // Adaptação para Status 
     const getStatusClasses = (status) => {
@@ -219,12 +277,32 @@ function WahaConfigForm() {
                         {/* Botão de Ação Principal */} 
                         <Button
                             onClick={handleManageConnection}
-                            // Desabilitar apenas durante a ação de iniciar/parar ou carregamento inicial
                             disabled={loadingStatus || actionLoading}
                         >
-                             {actionLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} 
+                             {actionLoading && (sessionStatus === 'Iniciando' || sessionStatus === 'Desconectado' || sessionStatus === 'Erro') && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} 
                             {getButtonText(sessionStatus)}
                         </Button>
+
+                        {/* <<< ADICIONAR AlertDialog PARA CONFIRMAÇÃO >>> */}
+                        <AlertDialog open={isConfirmDialogOpen} onOpenChange={setIsConfirmDialogOpen}>
+                            {/* <AlertDialogTrigger> Não precisamos de um gatilho separado, o botão principal controla */}
+                            <AlertDialogContent>
+                                <AlertDialogHeader>
+                                <AlertDialogTitle>Confirmar Desconexão</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    Tem certeza que deseja desconectar a sessão atual do WhatsApp?
+                                    Isso interromperá o envio e recebimento de mensagens até que você conecte novamente.
+                                </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                <AlertDialogCancel disabled={actionLoading}>Cancelar</AlertDialogCancel>
+                                <AlertDialogAction onClick={executeDisconnect} disabled={actionLoading}>
+                                    {actionLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} 
+                                    Confirmar Desconexão
+                                </AlertDialogAction>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialog>
 
                     </div>
                 )}

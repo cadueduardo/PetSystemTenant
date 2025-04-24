@@ -6,8 +6,8 @@ import {
     // ServiceMock,         // <<< Removido - Usaremos Serviço Firebase
     // QueueServiceMock,    // <<< Removido - Usaremos Serviço Firebase
     ProductMock,        
-    TenantMock,         
-    CustomizationMock,  
+    // TenantMock, // <-- REMOVE MOCK
+    // CustomizationMock, // <-- REMOVE MOCK
     FinancialConfigMock,
     FinancialTransactionMock,
     HealthPlanMock,
@@ -44,6 +44,9 @@ import { cancellationReasonService } from './firebase/cancellationReasonService'
 // <<< Adiciona imports dos novos serviços >>>
 import { serviceService } from './firebase/serviceService';
 import { queueService } from './firebase/queueService'; 
+// <-- IMPORT NEW SERVICES -->
+import { tenantService } from './firebase/tenantService';
+import { customizationService } from './firebase/customizationService';
 
 // REMOVIDAS outras importações de mockData.js que causavam conflito
 
@@ -54,8 +57,8 @@ export const Service = serviceService; // <<< Usa Serviço Firebase
 export const Appointment = appointmentService;
 export const QueueService = queueService; // <<< Usa Serviço Firebase
 export const Product = ProductMock;
-export const Tenant = TenantMock;
-export const Customization = CustomizationMock;
+export const Tenant = tenantService; // <-- USE REAL SERVICE
+export const Customization = customizationService; // <-- USE REAL SERVICE
 export const FinancialConfig = FinancialConfigMock;
 export const FinancialTransaction = FinancialTransactionMock;
 export const HealthPlan = HealthPlanMock;

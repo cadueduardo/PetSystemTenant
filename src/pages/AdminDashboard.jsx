@@ -65,12 +65,10 @@ import {
 import { adminTenantService } from "@/api/firebase/adminTenantService";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
-import { getFunctions, httpsCallable } from "firebase/functions";
-import { getApp } from "firebase/app";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from '@/lib/firebaseConfig';
 
-// Re-instanciar Firebase Functions e httpsCallable
-const app = getApp();
-const functions = getFunctions(app, 'us-central1'); // MUDAR REGIÃO
+// Callable usando 'functions' importado
 const generateSupportTokenCallable = httpsCallable(functions, 'generateSupportToken');
 
 export default function AdminDashboard() {

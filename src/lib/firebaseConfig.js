@@ -2,6 +2,7 @@ import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getStorage } from "firebase/storage";
+import { getFunctions } from "firebase/functions";
 // Importe outros serviços do Firebase que você precisar (ex: getStorage)
 // import { getStorage } from "firebase/storage";
 
@@ -50,6 +51,7 @@ const app = initializeApp(firebaseConfigPlaceholder);
 const db = getFirestore(app); // Instância do Firestore Database
 const auth = getAuth(app);     // Instância do Firebase Authentication
 const storage = getStorage(app); // Exemplo se for usar Storage
+const functions = getFunctions(app, 'southamerica-east1'); // Initialize functions with region
 
 // Exporta as instâncias dos serviços para serem usadas em outros lugares
-export { db, auth, storage }; 
+export { db, auth, storage, functions }; 

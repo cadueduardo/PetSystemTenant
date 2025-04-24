@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '@/lib/firebaseConfig';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,7 +12,6 @@ import { useToast } from "@/components/ui/use-toast";
 function AcceptInvitationPage() {
   const [searchParams] = useSearchParams();
   const { toast } = useToast();
-  const functions = getFunctions();
 
   const [token, setToken] = useState(null);
   const [password, setPassword] = useState('');
@@ -61,9 +61,8 @@ function AcceptInvitationPage() {
 
     try {
       console.log('[AcceptInvitationPage] Calling completeInvitation function...');
-      // Definir a função callable para a PRÓXIMA função que criaremos
-      const completeInvitationFunction = httpsCallable(functions, 'completeInvitation');
-      const result = await completeInvitationFunction({ token: token, password: password });
+      const completeInvitationCallable = httpsCallable(functions, 'completeInvitation');
+      const result = await completeInvitationCallable({ token: token, password: password });
 
       console.log('[AcceptInvitationPage] completeInvitation function success:', result.data);
       setSuccessMessage(result.data.message || "Convite aceito e senha definida com sucesso! Você já pode fazer login.");

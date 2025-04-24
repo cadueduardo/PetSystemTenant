@@ -7,7 +7,8 @@ import dayGridPlugin from '@fullcalendar/daygrid'; // para visão mensal opciona
 import timeGridPlugin from '@fullcalendar/timegrid'; // ADICIONAR PLUGIN timeGrid
 import ptBrLocale from '@fullcalendar/core/locales/pt-br'; // Importar locale PT-BR
 import { getFirestore, collection, query, where, getDocs, Timestamp, doc, getDoc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore'; // Importar funções do Firestore e Timestamp - REMOVIDO addDoc, updateDoc
-import { getFunctions, httpsCallable } from 'firebase/functions'; // Importar funções do Firebase Functions
+import { httpsCallable } from 'firebase/functions'; // Importar funções do Firebase Functions - REMOVIDO getFunctions
+import { functions } from '@/lib/firebaseConfig'; // <-- IMPORT PRE-CONFIGURED FUNCTIONS INSTANCE
 // import { useTenant } from '@/components/tenant/TenantContext'; // Desativado para mock de recursos
 import { useToast } from "@/components/ui/use-toast"; // <-- RE-ADICIONAR IMPORT useToast
 import AppointmentForm from '@/components/appointment/AppointmentForm'; // <-- IMPORTAR FORMULÁRIO
@@ -516,7 +517,7 @@ export default function AgendaPage() {
     console.log(`[ContextMenu Action] Sending WAHA confirmation for ${eventId}`);
     setContextMenu({ ...contextMenu, visible: false }); // Fecha o menu
     try {
-      const sendWaha = httpsCallable(getFunctions(), 'sendWahaConfirmation');
+      const sendWaha = httpsCallable(functions, 'sendWahaConfirmation'); // <-- USE IMPORTED functions INSTANCE
       await sendWaha({ appointmentId: eventId });
       toast({ title: "Confirmação Enviada", description: "Mensagem de confirmação via WhatsApp enviada.", variant: "success" });
       // Status será atualizado pela cloud function e refletido pelo listener

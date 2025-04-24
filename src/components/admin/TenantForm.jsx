@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import PropTypes from 'prop-types';
-import { getFunctions, httpsCallable } from "firebase/functions";
-import { getApp } from "firebase/app";
+import { httpsCallable } from "firebase/functions";
+import { functions } from '@/lib/firebaseConfig';
 import { toast } from "@/components/ui/use-toast";
 import {
   Dialog,
@@ -37,9 +37,6 @@ import {
   CheckCircle2
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
-
-const app = getApp();
-const functions = getFunctions(app, 'us-central1');
 
 export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
   const [isSubmitting, setIsSubmitting] = useState(false);

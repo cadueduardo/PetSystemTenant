@@ -40,8 +40,6 @@ service cloud.firestore {
       
       // Tenant Admin: Atualizar apenas campos de suporte (RESTAURADA)
       allow update: if isTenantMember(tenantId) && isTenantUpdatingSupportAccessOnly();
-
-      // --- NOVA REGRA PARA SUBCOLEÇÃO 'integrations' ---
       match /integrations/{integrationDocId} {
         // Permite que usuários autenticados do mesmo tenant leiam
         // Usa a função auxiliar já existente
@@ -49,14 +47,12 @@ service cloud.firestore {
         // Nega escrita do lado do cliente por padrão (só a Cloud Function escreve)
         allow write: if false;
       }
-      // --- FIM DA NOVA REGRA ---
     }
 
     match /cancellationReasons/{reasonId} {
       allow read: if request.auth != null; // Qualquer autenticado pode ler
       allow write: if isSuperAdmin(); // Apenas Super Admin pode criar/editar/deletar
     }
-
     // --- Regra para Especialidades Compartilhadas ---
     match /sharedVetSpecialties/{specialtyId} {
       allow read: if request.auth != null; // Qualquer usuário autenticado pode ler
@@ -122,10 +118,11 @@ service cloud.firestore {
        allow create: if isTenantMember(request.resource.data.tenant_id)
                       // <<< Adicionar validações de customer/pet/service se necessário >>>
                       ; 
-       allow update: if isTenantMember(resource.data.tenant_id)
-                      && request.resource.data.tenant_id == resource.data.tenant_id
-                      // <<< Impedir mudança de IDs chave? >>>
-                      ; 
+      
+          // Atualizar: Permitido para membro do tenant OU para chamadas de backend (Cloud Functions)
+          allow update: if (isTenantMember(resource.data.tenant_id) && request.resource.data.tenant_id == resource.data.tenant_id)
+                         || request.auth == null; // <<< ADICIONADO: Permite backend/serviço
+                   
        allow delete: if isTenantMember(resource.data.tenant_id);
     }
     
@@ -250,7 +247,6 @@ service cloud.firestore {
       // Escrita (Excluir): Admin pode excluir (a checagem do tenantId já está em isTenantAdmin).
       allow delete: if isTenantAdmin(resource.data.tenantId);
     }
-
     match /colaboradores/{colaboradorId} {
        // Leitura: Qualquer membro autenticado do mesmo tenant pode ler dados de colaboradores.
        // Ajuste: get explícito e list baseado em tenantId
@@ -273,5 +269,34 @@ service cloud.firestore {
     }
     // --- FIM: Perfis e Colaboradores ---
 
+    // +++ INÍCIO: Regras para Customizações +++
+    match /customizations/{customizationId} {
+      // Leitura: Membro do tenant pode ler a customização do seu tenant.
+      // 'list' requer query com 'where("tenant_id", "==", request.auth.token.tenant_id)'
+      allow get: if isTenantMember(resource.data.tenant_id);
+      allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+
+      // Criação: Membro do tenant pode criar a customização para seu tenant.
+      allow create: if isTenantMember(request.resource.data.tenant_id)
+                      && request.resource.data.tenant_id == request.auth.token.tenant_id; // Garante tenant_id correto
+
+      // Atualização: Membro do tenant pode atualizar sua customização.
+      // Impede a mudança do tenant_id e created_at.
+      // TEMPORARILY SIMPLIFIED FOR DEBUGGING:
+      // allow update: if isTenantMember(resource.data.tenant_id);
+                      // Original conditions removed for testing:
+                      // && !('created_at' in request.resource.data) // Impede mudança de created_at
+                      // && (!('id' in request.resource.data) || request.resource.data.id == resource.data.id); // Impede mudança de id, se presente
+
+      // RESTORED AND IMPROVED RULE using request.writeFields:
+      allow update: if isTenantMember(resource.data.tenant_id)
+                      && !('created_at' in request.writeFields) // Check if 'created_at' is being written
+                      && !('id' in request.writeFields);         // Check if 'id' is being written
+
+      // Exclusão: Bloqueada do lado do cliente por padrão.
+      allow delete: if false;
+    }
+    // +++ FIM: Regras para Customizações +++
+
   }
-} 
+}

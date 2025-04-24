@@ -37,9 +37,9 @@ import { toast } from "@/components/ui/use-toast";
 import { CalendarIcon, Loader2, X, Clock, CheckCircle, UserCheck, PlayCircle, Ban, AlertTriangle, MessageSquareText, HelpCircle } from "lucide-react";
 import { useForm } from "react-hook-form";
 import PropTypes from 'prop-types';
-import { Timestamp, getFirestore, collection, query, where, getDocs, doc, updateDoc, addDoc, deleteDoc } from 'firebase/firestore';
+import { Timestamp, collection, query, where, getDocs, doc, updateDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { Check, ChevronsUpDown } from "lucide-react";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { httpsCallable } from "firebase/functions";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import {
@@ -50,6 +50,10 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { db, functions } from '@/lib/firebaseConfig';
+
+// Funções callable (Mantenha as que você precisa)
+// const getPetByIdCallable = httpsCallable(functions, 'getPetById');
 
 // Define Status Styles Locally for easy access
 const statusStyles = {
@@ -161,7 +165,6 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
     }
     console.log(`[loadServices] Loading services type '${serviceType}' for tenant '${tenantId}'`);
     try {
-      const db = getFirestore();
       const servicesCollection = collection(db, 'services');
       const q = query(
         servicesCollection,
@@ -510,7 +513,6 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
      console.log("[onSubmit] Final data being sent to Firestore:", JSON.stringify(appointmentData, null, 2));
 
     try {
-      const db = getFirestore();
       const appointmentsCollection = collection(db, 'appointments');
       let savedAppointmentId = null; 
       
@@ -550,7 +552,6 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
     setIsSendingWaha(true);
     console.log(`[AppointmentForm] Chamando sendWahaConfirmation para ID: ${initialData.appointmentId}`);
     try {
-        const functions = getFunctions();
         const sendWahaConfirmation = httpsCallable(functions, 'sendWahaConfirmation');
         const result = await sendWahaConfirmation({ appointmentId: initialData.appointmentId });
 
@@ -583,7 +584,6 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
       console.log(`[handleDelete] Attempting to delete appointment: ${appointmentIdToDelete}`);
       setIsDeleting(true);
       try {
-        const db = getFirestore();
         const appointmentRef = doc(db, "appointments", appointmentIdToDelete);
         await deleteDoc(appointmentRef);
         console.log(`[handleDelete] Appointment ${appointmentIdToDelete} deleted successfully.`);
@@ -636,15 +636,14 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                           key={statusKey}
                           type="button"
                           variant={isCurrent ? 'default' : 'outline'}
-                          disabled={true}
                           size="xs"
                           className={cn(
                             "h-auto px-2 py-1 text-xs border transition-all",
                             style.color,
-                            isCurrent ? "ring-2 ring-offset-1 ring-indigo-500" : "opacity-70",
-                            "cursor-not-allowed opacity-50"
+                            isCurrent ? "ring-2 ring-offset-1 ring-indigo-500" : "opacity-70 hover:opacity-90"
                           )}
                           onClick={() => {
+                            form.setValue('status', statusKey, { shouldDirty: true, shouldValidate: true });
                           }}
                           aria-pressed={isCurrent}
                         >

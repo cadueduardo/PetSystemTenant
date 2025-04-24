@@ -7,7 +7,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Ban, CheckCheck, Trash2, MessageSquareText, X } from 'lucide-react';
+import { Ban, CheckCheck, Trash2, MessageSquareText, X, UserCheck } from 'lucide-react';
 
 // Componente do Menu de Contexto
 export function AppointmentContextMenu({
@@ -43,6 +43,7 @@ export function AppointmentContextMenu({
   const showConfirmWaha = eventStatus === 'scheduled';
   const showCancel = eventStatus === 'scheduled' || eventStatus === 'pending_confirmation' || eventStatus === 'confirmed';
   const showConfirmManual = eventStatus === 'scheduled' || eventStatus === 'pending_confirmation';
+  const showMarkArrived = eventStatus === 'confirmed';
   const showDelete = true; 
 
   // --- DEBUG: Renderizar um div simples em vez do DropdownMenu --- (REMOVIDO)
@@ -96,6 +97,14 @@ export function AppointmentContextMenu({
              </DropdownMenuItem>
           )}
 
+          {/* Ação: Marcar como Chegou */}
+          {showMarkArrived && (
+            <DropdownMenuItem onClick={() => onUpdateStatus(eventId, 'arrived')}>
+              <UserCheck className="mr-2 h-4 w-4 text-yellow-600" />
+              <span>Marcar como Chegou</span>
+            </DropdownMenuItem>
+          )}
+
           {/* Ação: Cancelar Agendamento */}
           {showCancel && (
             <DropdownMenuItem onClick={() => onUpdateStatus(eventId, 'canceled')}>
@@ -105,7 +114,7 @@ export function AppointmentContextMenu({
           )}
 
           {/* Separador antes de ações destrutivas */}
-          {(showConfirmWaha || showCancel || showConfirmManual) && showDelete && <DropdownMenuSeparator />}
+          {(showConfirmWaha || showCancel || showConfirmManual || showMarkArrived) && showDelete && <DropdownMenuSeparator />}
 
           {/* Ação: Remover Agendamento */}
           {showDelete && (
