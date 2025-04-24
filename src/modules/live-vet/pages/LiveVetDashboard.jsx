@@ -5,14 +5,30 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, AlertCircle, Play, Clock, RefreshCcw } from 'lucide-react';
+import { Loader2, AlertCircle, Play, Clock, RefreshCcw, UserCircle, ClipboardList, XCircle } from 'lucide-react';
 import { Appointment, Service, Pet, Customer } from '@/api/entities';
 import { toast } from '@/components/ui/use-toast';
 import { isToday, parseISO, differenceInSeconds, format } from 'date-fns';
 import { createPageUrl } from '@/utils'; // Precisamos desta função
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"; // Importar Tooltip
 import { queueService } from '@/api/firebase/queueService';
 import { medicationTaskService } from '@/api/firebase/medicationTaskService';
+import { petService } from '@/api/firebase/petService';
+import ServiceTimer from '@/components/queue/ServiceTimer';
+import { Badge } from "@/components/ui/badge"; // <-- Adicionar import do Badge
+import { collection, query, where, getDocs, limit, doc, updateDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebaseConfig'; // <<< Assumindo que db é exportado daqui
+
+// Função auxiliar para exibir o status como Badge
+const getStatusBadge = (status) => {
+  const statusText = status || 'Desconhecido';
+  let badgeVariant = "secondary"; // Default variant
+  // Adicionar lógica de variantes se necessário (ex: destructive para canceled)
+  if (status === 'canceled' || status === 'no_show') badgeVariant = "destructive";
+  if (status === 'completed') badgeVariant = "outline";
+  if (status === 'in_progress') badgeVariant = "default"; // Primary color usually
+  
+  return <Badge variant={badgeVariant} className="capitalize">{statusText.replace('_',' ')}</Badge>;
+};
 
 export default function LiveVetDashboard() {
   const navigate = useNavigate(); // Inicializando useNavigate
@@ -130,9 +146,67 @@ export default function LiveVetDashboard() {
               Customer.get(appt.customer_id).catch(() => ({ full_name: 'Cliente não encontrado' })),
               Service.get(appt.service_id).catch(() => ({ name: 'Serviço não encontrado' }))
             ]);
+            // Ensure pet has a recordNumber
+            let recordNumber = pet.recordNumber;
+            if (!recordNumber) {
+              const next = Math.floor(Math.random() * 90000000) + 10000000;
+              recordNumber = `PT-${next}`;
+              await petService.update(pet.id, { recordNumber });
+            }
+            // <<< INÍCIO: LÓGICA ALTERADA PARA BUSCAR EPISÓDIO DA SUBCOLEÇÃO >>>
+            let episodeNumber = '-';
+            if (tenantId && recordNumber) { // Precisa do tenantId e prontuarioId
+                const episodesPath = `tenants/${tenantId}/prontuarios/${recordNumber}/episodes`;
+                console.log(`[LiveVetDash] Buscando episódio em ${episodesPath} para Appt ID ${appt.id}`);
+                try {
+                    const episodesCollectionRef = collection(db, episodesPath);
+                    const q = query(episodesCollectionRef, where('appointmentId', '==', appt.id), limit(1));
+                    const querySnapshot = await getDocs(q);
+                    
+                    if (!querySnapshot.empty) {
+                        const episodeDoc = querySnapshot.docs[0];
+                        const episodeData = episodeDoc.data();
+                        console.log(`[LiveVetDash] Episódio encontrado na subcoleção: ID=${episodeDoc.id}, Data:`, episodeData);
+                        
+                        // Tenta pegar episodeNumber existente, senão gera um NOVO e atualiza
+                        if (episodeData.episodeNumber) {
+                            episodeNumber = episodeData.episodeNumber;
+                        } else {
+                            console.log(`[LiveVetDash] Episódio ${episodeDoc.id} sem episodeNumber. Gerando e atualizando...`);
+                            const nextEp = Math.floor(Math.random() * 90000000) + 10000000;
+                            episodeNumber = `EP-${nextEp}`;
+                            // ATUALIZAÇÃO: A entidade Consultation não é mais usada aqui.
+                            // Precisamos chamar updateDoc diretamente ou criar um episodeService.
+                            // Por simplicidade, vamos tentar atualizar aqui, mas idealmente isso estaria num service.
+                            // await Consultation.update(episodeDoc.id, { episodeNumber }); // << Linha antiga removida
+                             try {
+                                const episodeDocRef = doc(db, episodesPath, episodeDoc.id); // Ref para o doc específico
+                                await updateDoc(episodeDocRef, { episodeNumber: episodeNumber });
+                                console.log(`[LiveVetDash] Episódio ID ${episodeDoc.id} atualizado com Episode#: ${episodeNumber}`);
+                             } catch (updateError) {
+                                console.error(`[LiveVetDash] FALHA ao atualizar episódio ID ${episodeDoc.id} com episodeNumber:`, updateError);
+                                episodeNumber = '-'; // Reverte se falhar
+                             }
+                        }
+                    } else {
+                        console.log(`[LiveVetDash] Nenhum episódio encontrado na subcoleção para Appt ID ${appt.id}. EpisodeNumber permanecerá '-'`);
+                    }
+                } catch (episodeQueryError) {
+                    console.error(`[LiveVetDash] Erro ao buscar episódio na subcoleção para ${appt.id}:`, episodeQueryError);
+                    episodeNumber = '-'; // Mantém '-' em caso de erro na query
+                }
+            } else {
+                console.warn(`[LiveVetDash] TenantId (${tenantId}) ou ProntuarioId/RecordNumber (${recordNumber}) faltando para Appt ID ${appt.id}. Não foi possível buscar episódio.`);
+            }
+            // <<< FIM: LÓGICA ALTERADA >>>
+
             return {
               ...appt,
               petName: pet.name,
+              recordNumber,
+              episodeNumber,
+              petId: pet.id,
+              episodesCount: Array.isArray(pet.consultationHistory) ? pet.consultationHistory.length : 0,
               customerName: customer.full_name,
               serviceName: service.name,
             };
@@ -281,6 +355,30 @@ export default function LiveVetDashboard() {
     }
   };
 
+  const handleStatusChange = (appointmentId, newStatus) => {
+    // Implemente a lógica para atualizar o status do agendamento
+    console.log(`[LiveVetDash] Status do agendamento ${appointmentId} mudou para: ${newStatus}`);
+    // Adicione a lógica para atualizar o status no banco de dados
+  };
+
+  const handleSelectService = (appointment) => {
+    // Implemente a lógica para selecionar um serviço
+    console.log(`[LiveVetDash] Selecionando serviço para o agendamento: ${appointment.id}`);
+    // Adicione a lógica para navegar para a página de edição do serviço
+  };
+
+  const handleAddNotes = (appointmentId) => {
+    // Implemente a lógica para adicionar uma nota ao agendamento
+    console.log(`[LiveVetDash] Adicionando nota ao agendamento: ${appointmentId}`);
+    // Adicione a lógica para navegar para a página de adição de nota
+  };
+
+  const handleOpenRemoveModal = (appointment) => {
+    // Implemente a lógica para abrir o modal de remoção
+    console.log(`[LiveVetDash] Abrindo modal de remoção para o agendamento: ${appointment.id}`);
+    // Adicione a lógica para abrir o modal de remoção
+  };
+
   return (
     <div className="p-6">
       <h1 className="text-3xl font-bold mb-6">Live Vet - Fila de Atendimento</h1>
@@ -318,40 +416,77 @@ export default function LiveVetDashboard() {
                       <TableHead>Chegada</TableHead>
                       <TableHead>Cliente</TableHead>
                       <TableHead>Pet</TableHead>
+                      <TableHead>Prontuário</TableHead>
+                      <TableHead>Episódios</TableHead>
                       <TableHead>Serviço</TableHead>
                       <TableHead>Observações</TableHead>
                       <TableHead className="text-right">Ações</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filaDeEsperaItems.length > 0 ? (
-                      filaDeEsperaItems.map(item => (
+                    {filaDeEsperaItems.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={10} className="text-center py-8 text-gray-500">
+                          Nenhum atendimento encontrado com os filtros selecionados.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      filaDeEsperaItems.map((item) => (
                         <TableRow key={item.id}>
-                          <TableCell>{item.check_in_time ? format(item.check_in_time.toDate(), 'HH:mm') : 'N/A'}</TableCell> {/* Assuming check_in_time field exists */}
+                          <TableCell>
+                            {item.check_in_time ? format(item.check_in_time.toDate(), 'HH:mm') : 'N/A'}
+                          </TableCell>
                           <TableCell>{item.customerName}</TableCell>
-                          <TableCell>{item.petName}</TableCell>
+                          <TableCell>
+                            <div className="font-medium">{item.petName}</div>
+                          </TableCell>
+                          <TableCell>{item.recordNumber || '-'}</TableCell>
+                          <TableCell>{item.episodeNumber || '-'}</TableCell>
                           <TableCell>{item.serviceName}</TableCell>
-                          <TableCell>{item.notes || '-'}</TableCell>
+                          <TableCell>{getStatusBadge(item.status)}</TableCell>
+                          <TableCell>
+                            <ServiceTimer 
+                              service={item} 
+                              onUpdateStatus={(newStatus) => 
+                                handleStatusChange(item.id, newStatus)
+                              } 
+                            />
+                          </TableCell>
                           <TableCell className="text-right">
-                            <TooltipProvider delayDuration={100}>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button variant="ghost" size="icon" onClick={() => handleStartConsultation(item.id)}>
-                                    <Play className="h-4 w-4" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>Iniciar Consulta</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
+                            <div className="flex justify-end gap-2">
+                               <Button 
+                                variant="default"
+                                size="sm"
+                                onClick={() => handleStartConsultation(item.id)}
+                              >
+                                <Play className="h-4 w-4 mr-2" /> 
+                                Iniciar Consulta
+                              </Button>
+                              <Button 
+                                variant="ghost" 
+                                size="icon"
+                                onClick={() => handleSelectService(item)}
+                              >
+                                <UserCircle className="h-4 w-4" />
+                              </Button>
+                              <Button 
+                                variant="outline" 
+                                size="icon"
+                                onClick={() => handleAddNotes(item.id)}
+                              >
+                                <ClipboardList className="h-4 w-4" />
+                              </Button>
+                              <Button 
+                                variant="outline" 
+                                size="icon"
+                                onClick={() => handleOpenRemoveModal(item)}
+                              >
+                                <XCircle className="h-4 w-4" />
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-center text-muted-foreground py-4">Nenhum paciente na fila de espera.</TableCell>
-                      </TableRow>
                     )}
                   </TableBody>
                 </Table>
@@ -390,6 +525,8 @@ export default function LiveVetDashboard() {
                       <TableRow>
                         <TableHead>Horário</TableHead>
                         <TableHead>Pet</TableHead>
+                        <TableHead>Prontuário</TableHead>
+                        <TableHead>Episódios</TableHead>
                         <TableHead>Cliente</TableHead>
                         <TableHead>Serviço</TableHead>
                         <TableHead className="text-right">Ações</TableHead>
@@ -400,8 +537,10 @@ export default function LiveVetDashboard() {
                         <TableRow key={item.id}>
                           <TableCell>{item.start_time?.toDate ? format(item.start_time.toDate(), 'HH:mm') : '--:--'}</TableCell>
                           <TableCell className="font-medium">
-                            {item.petName}
+                            <div className="font-medium">{item.petName}</div>
+                            <div className="text-xs text-gray-500">{item.petId}</div>
                           </TableCell>
+                          <TableCell>{item.episodesCount}</TableCell>
                           <TableCell>{item.customerName}</TableCell>
                           <TableCell>{item.serviceName}</TableCell>
                           <TableCell className="text-right">
@@ -464,7 +603,10 @@ export default function LiveVetDashboard() {
                        {followUpItems.map((item) => (
                          <TableRow key={item.id}>
                            <TableCell>{item.follow_up_time?.toDate ? format(item.follow_up_time.toDate(), 'HH:mm') : '--:--'}</TableCell>
-                           <TableCell className="font-medium text-orange-600 font-bold">{item.petName}</TableCell>
+                           <TableCell className="font-medium text-orange-600 font-bold">
+                             <div className="font-medium">{item.petName}</div>
+                             <div className="text-xs text-gray-500">{item.petId}</div>
+                           </TableCell>
                            <TableCell>{item.customerName}</TableCell>
                            <TableCell className="text-orange-600 font-bold">{item.original_service_name}</TableCell>
                            <TableCell className="text-orange-600 font-bold">{item.administeredMedication}</TableCell>

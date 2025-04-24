@@ -1714,3 +1714,172 @@ export const scheduledAutoCancellation = onSchedule(
 );
 
 // --- Fim do Arquivo ---
+
+// --- Helpers for Prontuário and Episódio ID generation ---
+function pad8(num: number): string {
+  return num.toString().padStart(8, '0');
+}
+
+async function nextSeq(
+  tenantId: string,
+  field: 'prontuarioSeq' | 'episodeSeq'
+): Promise<number> {
+  const counterRef = db.collection('counters').doc(tenantId);
+  await counterRef.set({ [field]: admin.firestore.FieldValue.increment(1) }, { merge: true });
+  const snap = await counterRef.get();
+  return snap.data()?.[field] || 0;
+}
+
+async function getOrCreateProntuario(
+  tenantId: string,
+  petId: string,
+  tutorId: string
+): Promise<{ id: string }> {
+  const prontRef = db.collection(`tenants/${tenantId}/prontuarios`);
+  const querySnap = await prontRef.where('petId', '==', petId).limit(1).get();
+  if (!querySnap.empty) {
+    return { id: querySnap.docs[0].id };
+  }
+  const seq = await nextSeq(tenantId, 'prontuarioSeq');
+  const id = `PT-${pad8(seq)}`;
+  await prontRef.doc(id).set({
+    id,
+    petId,
+    tutorId,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  return { id };
+}
+
+async function createEpisode(
+  prontuarioId: string,
+  appointmentId: string,
+  data: { tenantId: string; petId: string; tutorId: string; serviceId: string; serviceName: string; module: string; professionalId: string; professionalName: string; specialtyId: string | null }
+): Promise<string> {
+  const episodesRef = db.collection(
+    `tenants/${data.tenantId}/prontuarios/${prontuarioId}/episodes`
+  );
+  const seq = await nextSeq(data.tenantId, 'episodeSeq');
+  const episodeId = `EP-${pad8(seq)}`;
+  await episodesRef.doc(episodeId).set({
+    id: episodeId,
+    appointmentId,
+    prontuarioId: prontuarioId, // Add prontuarioId for potential direct queries
+    tenantId: data.tenantId,
+    petId: data.petId,
+    tutorId: data.tutorId,
+    serviceId: data.serviceId,
+    serviceName: data.serviceName,
+    module: data.module, // Store module for clarity
+    professionalId: data.professionalId,
+    professionalName: data.professionalName,
+    specialtyId: data.specialtyId,
+    checkinTime: admin.firestore.FieldValue.serverTimestamp(), // Consistent naming
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    status: 'in_progress', // Episode starts in progress
+    // Add other relevant fields from appointment if needed (e.g., price_table_id)
+  });
+  logger.info(`[createEpisode] Created episode ${episodeId} for prontuario ${prontuarioId}`);
+  return episodeId;
+}
+
+// --- Trigger: on appointment status change to 'arrived' ---
+export const onAppointmentArrived = onDocumentUpdated(
+  'appointments/{appointmentId}',
+  async (event: FirestoreEvent<Change<QueryDocumentSnapshot> | undefined, { appointmentId: string }>) => {
+    const functionStartTime = Date.now();
+    const appointmentId = event.params.appointmentId;
+    logger.info(`[onAppointmentArrived - ENTRY - ${appointmentId}] Function invoked.`);
+
+    if (!event.data) {
+      logger.warn(`[onAppointmentArrived - ${appointmentId}] Event data is missing. Exiting.`);
+      return null;
+    }
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+
+    // Check if status changed TO 'arrived'
+    if (after?.status !== 'arrived' || before?.status === 'arrived') {
+      logger.info(`[onAppointmentArrived - ${appointmentId}] Status not changed to 'arrived' or already was 'arrived'. Exiting. Before: ${before?.status}, After: ${after?.status}`);
+      return null;
+    }
+
+    const tenantId = after.tenant_id;
+    const petId = after.pet_id;
+    const tutorId = after.customer_id;
+    const serviceId = after.service_id;
+    const professionalId = after.professionalId;
+    const professionalName = after.professionalName;
+    const specialtyId = after.specialty_id || null;
+
+    if (!tenantId || !petId || !tutorId || !serviceId || !professionalId) {
+      logger.error(`[onAppointmentArrived - ${appointmentId}] Missing required data: tenantId, petId, tutorId, serviceId, or professionalId.`, { after });
+      return null;
+    }
+
+    logger.info(`[onAppointmentArrived - ${appointmentId}] Processing 'arrived' status change.`);
+
+    try {
+      // 1. Fetch Service details FIRST to check the module
+      logger.info(`[onAppointmentArrived - ${appointmentId}] Fetching service details for serviceId: ${serviceId}`);
+      const serviceRef = db.collection('services').doc(serviceId);
+      const serviceSnap = await serviceRef.get();
+
+      if (!serviceSnap.exists) {
+        logger.error(`[onAppointmentArrived - ${appointmentId}] Service with ID ${serviceId} not found! Cannot proceed.`);
+        return null;
+      }
+
+      const serviceData = serviceSnap.data()!;
+      const serviceModule = serviceData.module;
+      const serviceName = serviceData.name;
+      logger.info(`[onAppointmentArrived - ${appointmentId}] Service module: ${serviceModule}, Service name: ${serviceName}`);
+
+      // 2. Process based on Service Module
+      if (serviceModule === 'clinica') {
+        logger.info(`[onAppointmentArrived - ${appointmentId}] Service is clinical. Processing Prontuario and Episode...`);
+
+        // 2a. Get or Create Prontuário (only for clinical services)
+        logger.info(`[onAppointmentArrived - ${appointmentId}] Getting/Creating Prontuario...`);
+        const prontuario = await getOrCreateProntuario(tenantId, petId, tutorId);
+        const prontuarioId = prontuario.id;
+        logger.info(`[onAppointmentArrived - ${appointmentId}] Prontuario ID: ${prontuarioId}`);
+
+        // 2b. Create Clinical Episode
+        logger.info(`[onAppointmentArrived - ${appointmentId}] Creating Clinical Episode...`);
+        await createEpisode(prontuarioId, appointmentId, {
+          tenantId,
+          petId,
+          tutorId,
+          serviceId,
+          serviceName,
+          module: serviceModule,
+          professionalId,
+          professionalName,
+          specialtyId
+        });
+        logger.info(`[onAppointmentArrived - ${appointmentId}] Clinical Episode creation initiated.`);
+
+      } else if (serviceModule === 'petshop') {
+        logger.info(`[onAppointmentArrived - ${appointmentId}] Service is petshop (${serviceName}). Skipping Prontuario/Episode creation.`);
+        // TODO: Add logic here to create OS (Ordem de Serviço) for 'petshop' module.
+        // Example Placeholder:
+        // await createOrdemDeServico(appointmentId, { tenantId, petId, tutorId, serviceId, serviceName, professionalId, professionalName });
+
+      } else {
+        logger.warn(`[onAppointmentArrived - ${appointmentId}] Unknown service module: ${serviceModule}. Skipping Prontuario/Episode/OS creation.`);
+      }
+
+      const functionEndTime = Date.now();
+      logger.info(`[onAppointmentArrived - ${appointmentId}] Successfully processed 'arrived' status. Duration: ${functionEndTime - functionStartTime}ms.`);
+      return null;
+
+    } catch (error: any) {
+      logger.error(`[onAppointmentArrived - ${appointmentId}] CRITICAL ERROR processing 'arrived' status:`, { error: error.message, stack: error.stack });
+      return null;
+    }
+  }
+);
+// --- End of new trigger ---

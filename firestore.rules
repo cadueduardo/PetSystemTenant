@@ -1,302 +1,329 @@
-rules_version = '2';
+  rules_version = '2';
 
-service cloud.firestore {
-  match /databases/{database}/documents {
+  service cloud.firestore {
+    match /databases/{database}/documents {
 
-    // === Funções Auxiliares ===
-    function isTenantMember(tenantId) {
-      return request.auth != null && request.auth.token.tenant_id == tenantId;
-    }
-    
-    function isTenantAdmin(tenantId) {
-      return isTenantMember(tenantId) && request.auth.token.isAdmin == true;
-    }
-    
-    function isAuthenticatedTenant() {
-      return request.auth != null && request.auth.token.tenant_id != null;
-    }
-    
-    function isSuperAdmin() {
-      return request.auth != null && !('tenant_id' in request.auth.token);
-    }
-    
-    // Helper para checar campos permitidos na atualização pelo Tenant Admin
-    function isTenantUpdatingSupportAccessOnly() {
-      // Define os campos que o Tenant Admin PODE modificar
-      let allowedUpdateFields = ['supportAccessGranted', 'supportAccessExpiresAt', 'supportAccessLastUpdated'];
-      // Garante que NENHUM campo FORA da lista permitida está sendo escrito.
-      return request.resource.data.keys().diff(resource.data.keys()).size() <= allowedUpdateFields.size() &&
-             request.resource.data.keys().diff(resource.data.keys()).subsetOf(allowedUpdateFields);
-    }
-
-    // === Coleções Globais/Compartilhadas ===
-
-    match /tenants/{tenantId} {
-      // Super Admin: Acesso total
-      allow read, write, delete: if isSuperAdmin();
+      // === Funções Auxiliares ===
+      function isTenantMember(tenantId) {
+        return request.auth != null && request.auth.token.tenant_id == tenantId;
+      }
       
-      // Tenant Admin: Ler próprio doc
-      allow get: if isTenantMember(tenantId);
+      function isTenantAdmin(tenantId) {
+        return isTenantMember(tenantId) && request.auth.token.isAdmin == true;
+      }
       
-      // Tenant Admin: Atualizar apenas campos de suporte (RESTAURADA)
-      allow update: if isTenantMember(tenantId) && isTenantUpdatingSupportAccessOnly();
-      match /integrations/{integrationDocId} {
-        // Permite que usuários autenticados do mesmo tenant leiam
-        // Usa a função auxiliar já existente
-        allow read: if isTenantMember(tenantId);
-        // Nega escrita do lado do cliente por padrão (só a Cloud Function escreve)
+      function isAuthenticatedTenant() {
+        return request.auth != null && request.auth.token.tenant_id != null;
+      }
+      
+      function isSuperAdmin() {
+        return request.auth != null && !('tenant_id' in request.auth.token);
+      }
+      
+      // Helper para checar campos permitidos na atualização pelo Tenant Admin
+      function isTenantUpdatingSupportAccessOnly() {
+        // Define os campos que o Tenant Admin PODE modificar
+        let allowedUpdateFields = ['supportAccessGranted', 'supportAccessExpiresAt', 'supportAccessLastUpdated'];
+        // Garante que NENHUM campo FORA da lista permitida está sendo escrito.
+        return request.resource.data.keys().diff(resource.data.keys()).size() <= allowedUpdateFields.size() &&
+              request.resource.data.keys().diff(resource.data.keys()).subsetOf(allowedUpdateFields);
+      }
+
+      // === Rule for 'episodes' Collection Group Query ===
+      match /{path=**}/episodes/{episodeId} {
+        // Allow reading documents from the 'episodes' collection group
+        // if the user is a member of the tenant specified in the document's tenantId field.
+        // This enables the collectionGroup query in LiveVetConsulta.jsx.
+        allow read: if resource.data.tenantId == request.auth.token.tenant_id;
+      }
+
+      // === Coleções Globais/Compartilhadas ===
+
+      match /tenants/{tenantId} {
+        // Super Admin: Acesso total
+        allow read, write, delete: if isSuperAdmin();
+        
+        // Tenant Admin: Ler próprio doc
+        allow get: if isTenantMember(tenantId);
+        
+        // Tenant Admin: Atualizar apenas campos de suporte (RESTAURADA)
+        allow update: if isTenantMember(tenantId) && isTenantUpdatingSupportAccessOnly();
+        
+        // --- Subcoleções do Tenant ---
+        match /integrations/{integrationDocId} {
+          // Permite que usuários autenticados do mesmo tenant leiam
+          // Usa a função auxiliar já existente
+          allow read: if isTenantMember(tenantId);
+          // Nega escrita do lado do cliente por padrão (só a Cloud Function escreve)
+          allow write: if false;
+        }
+
+        // +++ INÍCIO: Regras para Prontuários e Episódios +++
+        match /prontuarios/{prontuarioId} {
+          // Leitura permitida para membros do tenant
+          allow read: if isTenantMember(tenantId); 
+          // Criação/Atualização/Exclusão bloqueadas do lado do cliente (feitas pelo backend)
+          allow write: if false; 
+
+          match /episodes/{episodeId} {
+            // Leitura permitida para membros do tenant (Regra de caminho direto)
+            // A regra de collectionGroup acima já permite a query inicial.
+            allow read: if isTenantMember(tenantId); 
+            // Criação AGORA PERMITIDA para membros do tenant
+            allow create: if isTenantMember(tenantId);
+            // Atualização permitida para membros do tenant (ex: adicionar detalhes da consulta)
+            // Garante que o tenantId implícito não muda
+            allow update: if isTenantMember(tenantId); 
+            // Exclusão bloqueada do lado do cliente
+            allow delete: if false;
+          }
+        }
+        // +++ FIM: Regras para Prontuários e Episódios +++
+
+      } // Fim do match /tenants/{tenantId}
+
+      match /cancellationReasons/{reasonId} {
+        allow read: if request.auth != null; // Qualquer autenticado pode ler
+        allow write: if isSuperAdmin(); // Apenas Super Admin pode criar/editar/deletar
+      }
+      // --- Regra para Especialidades Compartilhadas ---
+      match /sharedVetSpecialties/{specialtyId} {
+        allow read: if request.auth != null; // Qualquer usuário autenticado pode ler
+        // Permitir escrita (adição) por Admins do Tenant
+        allow create: if request.auth != null && request.auth.token.isAdmin == true; 
+        // Bloquear update/delete por segurança (gerenciamento manual se necessário)
+        allow update, delete: if false; 
+      }
+      // --------------------------------------------
+
+      // --- NOVAS REGRAS: Coleções Compartilhadas de Prescrição ---
+      match /sharedPrescriptionTypes/{typeId} {
+        allow read: if request.auth != null; // Qualquer autenticado pode ler
+        // Escrita bloqueada por regra (gerenciamento manual/script)
         allow write: if false;
       }
-    }
 
-    match /cancellationReasons/{reasonId} {
-      allow read: if request.auth != null; // Qualquer autenticado pode ler
-      allow write: if isSuperAdmin(); // Apenas Super Admin pode criar/editar/deletar
-    }
-    // --- Regra para Especialidades Compartilhadas ---
-    match /sharedVetSpecialties/{specialtyId} {
-      allow read: if request.auth != null; // Qualquer usuário autenticado pode ler
-      // Permitir escrita (adição) por Admins do Tenant
-      allow create: if request.auth != null && request.auth.token.isAdmin == true; 
-      // Bloquear update/delete por segurança (gerenciamento manual se necessário)
-      allow update, delete: if false; 
-    }
-    // --------------------------------------------
+      match /sharedPrescriptionItems/{itemId} {
+        allow read: if request.auth != null; // Qualquer autenticado pode ler
+        // Escrita bloqueada por regra (gerenciamento manual/script)
+        allow write: if false;
+      }
+      // --- FIM: Coleções Compartilhadas de Prescrição ---
 
-    // --- NOVAS REGRAS: Coleções Compartilhadas de Prescrição ---
-    match /sharedPrescriptionTypes/{typeId} {
-      allow read: if request.auth != null; // Qualquer autenticado pode ler
-      // Escrita bloqueada por regra (gerenciamento manual/script)
-      allow write: if false;
-    }
+      // --- Regra para Coleção de Emails (Trigger Email Extension) ---
+      match /mail/{mailId} {
+        // Permite a criação por qualquer usuário autenticado que pertença a um tenant.
+        // Isso cobre o admin do tenant criando um convite.
+        allow create: if isAuthenticatedTenant();
 
-    match /sharedPrescriptionItems/{itemId} {
-      allow read: if request.auth != null; // Qualquer autenticado pode ler
-      // Escrita bloqueada por regra (gerenciamento manual/script)
-      allow write: if false;
-    }
-    // --- FIM: Coleções Compartilhadas de Prescrição ---
+        // Nega leitura/escrita/exclusão direta pelo cliente para proteger a fila.
+        // Apenas o backend (Cloud Functions) deve gerenciar após a criação.
+        allow read, update, delete: if false; 
+      }
+      // --- FIM: Regra para Coleção de Emails ---
 
-    // --- Regra para Coleção de Emails (Trigger Email Extension) ---
-    match /mail/{mailId} {
-      // Permite a criação por qualquer usuário autenticado que pertença a um tenant.
-      // Isso cobre o admin do tenant criando um convite.
-      allow create: if isAuthenticatedTenant();
+      // === Coleções Específicas do Tenant ===
 
-      // Nega leitura/escrita/exclusão direta pelo cliente para proteger a fila.
-      // Apenas o backend (Cloud Functions) deve gerenciar após a criação.
-      allow read, update, delete: if false; 
-    }
-    // --- FIM: Regra para Coleção de Emails ---
+      match /customers/{customerId} {
+        allow get: if isAuthenticatedTenant() || isSuperAdmin();
+        allow list: if request.auth != null && request.auth.token.tenant_id != null;
+        allow create, update: if isTenantMember(request.resource.data.tenant_id);
+        allow delete: if isTenantMember(resource.data.tenant_id);
+      }
 
-    // === Coleções Específicas do Tenant ===
+      match /pets/{petId} {
+        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+        allow get, read: if isTenantMember(resource.data.tenant_id);
+        allow create: if isTenantMember(request.resource.data.tenant_id)
+                        && exists(/databases/$(database)/documents/customers/$(request.resource.data.owner_id))
+                        && get(/databases/$(database)/documents/customers/$(request.resource.data.owner_id)).data.tenant_id == request.resource.data.tenant_id;
+        allow update: if isTenantMember(resource.data.tenant_id)
+                        && request.resource.data.tenant_id == resource.data.tenant_id 
+                        && request.resource.data.owner_id == resource.data.owner_id;
+        allow delete: if isTenantMember(resource.data.tenant_id);
+      }
 
-    match /customers/{customerId} {
-      allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-      allow get, read: if isTenantMember(resource.data.tenant_id);
-      allow create: if isTenantMember(request.resource.data.tenant_id);
-      allow update: if isTenantMember(resource.data.tenant_id)
-                     && request.resource.data.tenant_id == resource.data.tenant_id;
-      allow delete: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /pets/{petId} {
-       allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-       allow get, read: if isTenantMember(resource.data.tenant_id);
-       allow create: if isTenantMember(request.resource.data.tenant_id)
-                      && exists(/databases/$(database)/documents/customers/$(request.resource.data.owner_id))
-                      && get(/databases/$(database)/documents/customers/$(request.resource.data.owner_id)).data.tenant_id == request.resource.data.tenant_id;
-       allow update: if isTenantMember(resource.data.tenant_id)
-                      && request.resource.data.tenant_id == resource.data.tenant_id 
-                      && request.resource.data.owner_id == resource.data.owner_id;
-       allow delete: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /appointments/{appointmentId} {
-       allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-       allow get, read: if isTenantMember(resource.data.tenant_id);
-       allow create: if isTenantMember(request.resource.data.tenant_id)
-                      // <<< Adicionar validações de customer/pet/service se necessário >>>
-                      ; 
-      
-          // Atualizar: Permitido para membro do tenant OU para chamadas de backend (Cloud Functions)
-          allow update: if (isTenantMember(resource.data.tenant_id) && request.resource.data.tenant_id == resource.data.tenant_id)
-                         || request.auth == null; // <<< ADICIONADO: Permite backend/serviço
-                   
-       allow delete: if isTenantMember(resource.data.tenant_id);
-    }
-    
-     match /services/{serviceId} {
-         allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-         allow get, read: if isTenantMember(resource.data.tenant_id);
-         allow create: if isTenantAdmin(request.resource.data.tenant_id);
-         allow update: if isTenantAdmin(resource.data.tenant_id)
-                       && request.resource.data.tenant_id == resource.data.tenant_id;
-         allow delete: if isTenantAdmin(resource.data.tenant_id);
+      match /appointments/{appointmentId} {
+        allow get: if isAuthenticatedTenant() || isSuperAdmin();
+        allow list: if request.auth != null && request.auth.token.tenant_id != null;
+        allow create, update: if isTenantMember(request.resource.data.tenant_id);
+        allow delete: if isTenantMember(resource.data.tenant_id);
       }
       
-    match /queueEntries/{entryId} { 
-       allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-       allow get, read: if isTenantMember(resource.data.tenant_id);
-       allow create: if isTenantMember(request.resource.data.tenant_id);
-       allow update: if isTenantMember(resource.data.tenant_id) 
-                     && request.resource.data.tenant_id == resource.data.tenant_id; // Tenant não pode mudar
-       allow delete: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /consultations/{consultationId} {
-       allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-       allow get, read: if isTenantMember(resource.data.tenant_id); 
-       allow create: if isTenantMember(request.resource.data.tenant_id);
-       allow update, delete: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /medicalRecords/{recordId} {
-      allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-      allow get, read: if isTenantMember(resource.data.tenant_id);
-      allow create: if isTenantMember(request.resource.data.tenant_id);
-      allow update, delete: if isTenantMember(resource.data.tenant_id);
-    }
-
-    match /medicationTasks/{taskId} {
-       allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null; 
-       allow get, read: if isTenantMember(resource.data.tenant_id);
-       allow create: if isTenantMember(request.resource.data.tenant_id);
-       allow update: if isTenantMember(resource.data.tenant_id)
-                      && request.resource.data.tenant_id == resource.data.tenant_id;
-       allow delete: if isTenantMember(resource.data.tenant_id);
-    }
-    
-    // Coleção 'queue' - REMOVIDA? Usar queueEntries
-    // match /queue/{queueId} { ... }
-    
-    // --- NOVAS REGRAS: Coleções de Prescrição por Tenant ---
-    match /prescriptionTypes/{typeId} {
-      allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-      allow get, read: if isTenantMember(resource.data.tenant_id);
-      allow create: if isTenantAdmin(request.resource.data.tenant_id);
-      allow update: if isTenantAdmin(resource.data.tenant_id)
+      match /services/{serviceId} {
+          allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+          allow get, read: if isTenantMember(resource.data.tenant_id);
+          allow create: if isTenantAdmin(request.resource.data.tenant_id);
+          allow update: if isTenantAdmin(resource.data.tenant_id)
+                        && request.resource.data.tenant_id == resource.data.tenant_id;
+          allow delete: if isTenantAdmin(resource.data.tenant_id);
+        }
+        
+      match /queueEntries/{entryId} { 
+        // Permite listagem/query (list) apenas se filtrar pelo tenant_id do usuário
+        allow list: if request.auth != null &&
+                      request.query.limit <= 100 && // Limite opcional
+                      request.auth.token.tenant_id == request.query.resource.data.tenant_id; // Garante filtro por tenant
+        allow get, read: if isTenantMember(resource.data.tenant_id);
+        allow create: if isTenantMember(request.resource.data.tenant_id);
+        allow update: if isTenantMember(resource.data.tenant_id) 
                       && request.resource.data.tenant_id == resource.data.tenant_id; // Tenant não pode mudar
-      allow delete: if isTenantAdmin(resource.data.tenant_id);
-    }
+        allow delete: if isTenantMember(resource.data.tenant_id);
+      }
 
-    match /prescriptionItems/{itemId} {
-      allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-      allow get, read: if isTenantMember(resource.data.tenant_id);
-      allow create: if isTenantAdmin(request.resource.data.tenant_id)
-                      // Valida se o tipo referenciado existe NA COLEÇÃO DO TENANT e pertence ao mesmo tenant
-                      && exists(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId))
-                      && get(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId)).data.tenant_id == request.resource.data.tenant_id;
-      allow update: if isTenantAdmin(resource.data.tenant_id)
-                      && request.resource.data.tenant_id == resource.data.tenant_id // Tenant não pode mudar
-                      // Impede a mudança do tipo (ou valida o novo tipo se permitir mudança)
-                      && request.resource.data.prescriptionTypeId == resource.data.prescriptionTypeId;
-                      // Alternativa (permitindo mudar tipo, mas validando): 
-                      // && exists(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId))
-                      // && get(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId)).data.tenant_id == resource.data.tenant_id;
-      allow delete: if isTenantAdmin(resource.data.tenant_id);
-    }
-    // --- FIM: Coleções de Prescrição por Tenant ---
+      match /consultations/{consultationId} {
+        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+        allow get, read: if isTenantMember(resource.data.tenant_id); 
+        allow create: if isTenantMember(request.resource.data.tenant_id);
+        allow update, delete: if isTenantMember(resource.data.tenant_id);
+      }
 
-    // === NOVAS REGRAS: Suporte ===
-    match /supportTickets/{ticketId} {
-      // Leitura/Listagem: Membro do tenant pode ler/listar tickets do seu tenant
-      allow get: if isTenantMember(resource.data.tenant_id);
-      allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+      match /medicalRecords/{recordId} {
+        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+        allow get, read: if isTenantMember(resource.data.tenant_id);
+        allow create: if isTenantMember(request.resource.data.tenant_id);
+        allow update, delete: if isTenantMember(resource.data.tenant_id);
+      }
+
+      match /medicationTasks/{taskId} {
+        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null; 
+        allow get, read: if isTenantMember(resource.data.tenant_id);
+        allow create: if isTenantMember(request.resource.data.tenant_id);
+        allow update: if isTenantMember(resource.data.tenant_id)
+                        && request.resource.data.tenant_id == resource.data.tenant_id;
+        allow delete: if isTenantMember(resource.data.tenant_id);
+      }
       
-      // Criação: Membro do tenant pode criar tickets para seu tenant
-      allow create: if isTenantMember(request.resource.data.tenant_id)
-                      && request.resource.data.tenant_id == request.auth.token.tenant_id
-                      && request.resource.data.createdByUid == request.auth.uid; 
-                      
-      // Atualização: Criador OU Super Admin podem atualizar (ajuste se necessário)
-      allow update: if (request.auth.uid == resource.data.createdByUid && isTenantMember(resource.data.tenant_id))
-                      || isSuperAdmin(); 
-                      // Impedir mudança de tenant_id
-                      // && request.resource.data.tenant_id == resource.data.tenant_id;
-                      
-      // Exclusão: Apenas Super Admin (ajuste se necessário)
-      allow delete: if isSuperAdmin(); 
+      // Coleção 'queue' - REMOVIDA? Usar queueEntries
+      // match /queue/{queueId} { ... }
+      
+      // --- NOVAS REGRAS: Coleções de Prescrição por Tenant ---
+      match /prescriptionTypes/{typeId} {
+        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+        allow get, read: if isTenantMember(resource.data.tenant_id);
+        allow create: if isTenantAdmin(request.resource.data.tenant_id);
+        allow update: if isTenantAdmin(resource.data.tenant_id)
+                        && request.resource.data.tenant_id == resource.data.tenant_id; // Tenant não pode mudar
+        allow delete: if isTenantAdmin(resource.data.tenant_id);
+      }
+
+      match /prescriptionItems/{itemId} {
+        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+        allow get, read: if isTenantMember(resource.data.tenant_id);
+        allow create: if isTenantAdmin(request.resource.data.tenant_id)
+                        // Valida se o tipo referenciado existe NA COLEÇÃO DO TENANT e pertence ao mesmo tenant
+                        && exists(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId))
+                        && get(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId)).data.tenant_id == request.resource.data.tenant_id;
+        allow update: if isTenantAdmin(resource.data.tenant_id)
+                        && request.resource.data.tenant_id == resource.data.tenant_id // Tenant não pode mudar
+                        // Impede a mudança do tipo (ou valida o novo tipo se permitir mudança)
+                        && request.resource.data.prescriptionTypeId == resource.data.prescriptionTypeId;
+                        // Alternativa (permitindo mudar tipo, mas validando): 
+                        // && exists(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId))
+                        // && get(/databases/$(database)/documents/prescriptionTypes/$(request.resource.data.prescriptionTypeId)).data.tenant_id == resource.data.tenant_id;
+        allow delete: if isTenantAdmin(resource.data.tenant_id);
+      }
+      // --- FIM: Coleções de Prescrição por Tenant ---
+
+      // === NOVAS REGRAS: Suporte ===
+      match /supportTickets/{ticketId} {
+        // Leitura/Listagem: Membro do tenant pode ler/listar tickets do seu tenant
+        allow get: if isTenantMember(resource.data.tenant_id);
+        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+        
+        // Criação: Membro do tenant pode criar tickets para seu tenant
+        allow create: if isTenantMember(request.resource.data.tenant_id)
+                        && request.resource.data.tenant_id == request.auth.token.tenant_id
+                        && request.resource.data.createdByUid == request.auth.uid; 
+                        
+        // Atualização: Criador OU Super Admin podem atualizar (ajuste se necessário)
+        allow update: if (request.auth.uid == resource.data.createdByUid && isTenantMember(resource.data.tenant_id))
+                        || isSuperAdmin(); 
+                        // Impedir mudança de tenant_id
+                        // && request.resource.data.tenant_id == resource.data.tenant_id;
+                        
+        // Exclusão: Apenas Super Admin (ajuste se necessário)
+        allow delete: if isSuperAdmin(); 
+      }
+    
+      match /knowledgeArticles/{articleId} {
+        // Leitura/Listagem: Membro do tenant OU Super Admin podem ler/listar
+        // Ajuste: usar get explícito e list, permitir Super Admin
+        allow get: if isTenantMember(resource.data.tenantId) || isSuperAdmin();
+        allow list: if (isAuthenticatedTenant() && request.auth.token.tenant_id != null) || isSuperAdmin();
+
+        // Escrita: Apenas Super Admin
+        allow write, delete: if isSuperAdmin();
+      }
+      // === FIM: Suporte ===
+
+      // --- NOVAS REGRAS: Perfis e Colaboradores ---
+      match /perfis/{perfilId} {
+        // Leitura: Qualquer membro autenticado do mesmo tenant pode ler perfis.
+        // Ajuste: get explícito e list baseado em tenantId
+        allow get: if isTenantMember(resource.data.tenantId);
+        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+
+        // Escrita (Criar): Apenas o Admin do Tenant pode criar.
+        allow create: if isTenantAdmin(request.resource.data.tenantId);
+
+        // Escrita (Atualizar): Admin pode atualizar, mas não pode mudar o tenantId.
+        allow update: if isTenantAdmin(resource.data.tenantId)
+                      && request.resource.data.tenantId == resource.data.tenantId;
+
+        // Escrita (Excluir): Admin pode excluir (a checagem do tenantId já está em isTenantAdmin).
+        allow delete: if isTenantAdmin(resource.data.tenantId);
+      }
+      match /colaboradores/{colaboradorId} {
+        // Leitura: Qualquer membro autenticado do mesmo tenant pode ler dados de colaboradores.
+        // Ajuste: get explícito e list baseado em tenantId
+        allow get: if isTenantMember(resource.data.tenantId);
+        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+
+        // Escrita (Criar): Apenas o Admin do Tenant pode criar.
+        allow create: if isTenantAdmin(request.resource.data.tenantId);
+
+        // Escrita (Atualizar): Admin pode atualizar, mas não pode mudar o tenantId.
+        allow update: if isTenantAdmin(resource.data.tenantId)
+                        && request.resource.data.tenantId == resource.data.tenantId; 
+
+        // Escrita (Excluir): Admin pode excluir.
+        allow delete: if isTenantAdmin(resource.data.tenantId);
+
+        // Refinamento futuro: Permitir ao próprio colaborador (não-admin) atualizar campos específicos (ex: telefone).
+        // allow update: if (isTenantAdmin(resource.data.tenantId) && request.resource.data.tenantId == resource.data.tenantId) ||
+        //                  (request.auth.uid == resource.data.authUid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['telefone']));
+      }
+      // --- FIM: Perfis e Colaboradores ---
+
+      // +++ INÍCIO: Regras para Customizações +++
+      match /customizations/{customizationId} {
+        // Leitura: Membro do tenant pode ler a customização do seu tenant.
+        // 'list' requer query com 'where("tenant_id", "==", request.auth.token.tenant_id)'
+        allow get: if isTenantMember(resource.data.tenant_id);
+        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
+
+        // Criação: Membro do tenant pode criar a customização para seu tenant.
+        allow create: if isTenantMember(request.resource.data.tenant_id)
+                        && request.resource.data.tenant_id == request.auth.token.tenant_id; // Garante tenant_id correto
+
+        // Atualização: Membro do tenant pode atualizar sua customização.
+        // Impede a mudança do tenant_id e created_at.
+        // TEMPORARILY SIMPLIFIED FOR DEBUGGING:
+        // allow update: if isTenantMember(resource.data.tenant_id);
+                        // Original conditions removed for testing:
+                        // && !('created_at' in request.resource.data) // Impede mudança de created_at
+                        // && (!('id' in request.resource.data) || request.resource.data.id == resource.data.id); // Impede mudança de id, se presente
+
+        // RESTORED AND IMPROVED RULE using request.writeFields:
+        allow update: if isTenantMember(resource.data.tenant_id)
+                        && !('created_at' in request.writeFields) // Check if 'created_at' is being written
+                        && !('id' in request.writeFields);         // Check if 'id' is being written
+
+        // Exclusão: Bloqueada do lado do cliente por padrão.
+        allow delete: if false;
+      }
+      // +++ FIM: Regras para Customizações +++
+
     }
-  
-    match /knowledgeArticles/{articleId} {
-      // Leitura/Listagem: Membro do tenant OU Super Admin podem ler/listar
-      // Ajuste: usar get explícito e list, permitir Super Admin
-      allow get: if isTenantMember(resource.data.tenantId) || isSuperAdmin();
-      allow list: if (isAuthenticatedTenant() && request.auth.token.tenant_id != null) || isSuperAdmin();
-
-      // Escrita: Apenas Super Admin
-      allow write, delete: if isSuperAdmin();
-    }
-    // === FIM: Suporte ===
-
-    // --- NOVAS REGRAS: Perfis e Colaboradores ---
-    match /perfis/{perfilId} {
-      // Leitura: Qualquer membro autenticado do mesmo tenant pode ler perfis.
-      // Ajuste: get explícito e list baseado em tenantId
-      allow get: if isTenantMember(resource.data.tenantId);
-      allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-
-      // Escrita (Criar): Apenas o Admin do Tenant pode criar.
-      allow create: if isTenantAdmin(request.resource.data.tenantId);
-
-      // Escrita (Atualizar): Admin pode atualizar, mas não pode mudar o tenantId.
-      allow update: if isTenantAdmin(resource.data.tenantId)
-                     && request.resource.data.tenantId == resource.data.tenantId;
-
-      // Escrita (Excluir): Admin pode excluir (a checagem do tenantId já está em isTenantAdmin).
-      allow delete: if isTenantAdmin(resource.data.tenantId);
-    }
-    match /colaboradores/{colaboradorId} {
-       // Leitura: Qualquer membro autenticado do mesmo tenant pode ler dados de colaboradores.
-       // Ajuste: get explícito e list baseado em tenantId
-       allow get: if isTenantMember(resource.data.tenantId);
-       allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-
-       // Escrita (Criar): Apenas o Admin do Tenant pode criar.
-       allow create: if isTenantAdmin(request.resource.data.tenantId);
-
-       // Escrita (Atualizar): Admin pode atualizar, mas não pode mudar o tenantId.
-       allow update: if isTenantAdmin(resource.data.tenantId)
-                      && request.resource.data.tenantId == resource.data.tenantId; 
-
-       // Escrita (Excluir): Admin pode excluir.
-       allow delete: if isTenantAdmin(resource.data.tenantId);
-
-       // Refinamento futuro: Permitir ao próprio colaborador (não-admin) atualizar campos específicos (ex: telefone).
-       // allow update: if (isTenantAdmin(resource.data.tenantId) && request.resource.data.tenantId == resource.data.tenantId) ||
-       //                  (request.auth.uid == resource.data.authUid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['telefone']));
-    }
-    // --- FIM: Perfis e Colaboradores ---
-
-    // +++ INÍCIO: Regras para Customizações +++
-    match /customizations/{customizationId} {
-      // Leitura: Membro do tenant pode ler a customização do seu tenant.
-      // 'list' requer query com 'where("tenant_id", "==", request.auth.token.tenant_id)'
-      allow get: if isTenantMember(resource.data.tenant_id);
-      allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-
-      // Criação: Membro do tenant pode criar a customização para seu tenant.
-      allow create: if isTenantMember(request.resource.data.tenant_id)
-                      && request.resource.data.tenant_id == request.auth.token.tenant_id; // Garante tenant_id correto
-
-      // Atualização: Membro do tenant pode atualizar sua customização.
-      // Impede a mudança do tenant_id e created_at.
-      // TEMPORARILY SIMPLIFIED FOR DEBUGGING:
-      // allow update: if isTenantMember(resource.data.tenant_id);
-                      // Original conditions removed for testing:
-                      // && !('created_at' in request.resource.data) // Impede mudança de created_at
-                      // && (!('id' in request.resource.data) || request.resource.data.id == resource.data.id); // Impede mudança de id, se presente
-
-      // RESTORED AND IMPROVED RULE using request.writeFields:
-      allow update: if isTenantMember(resource.data.tenant_id)
-                      && !('created_at' in request.writeFields) // Check if 'created_at' is being written
-                      && !('id' in request.writeFields);         // Check if 'id' is being written
-
-      // Exclusão: Bloqueada do lado do cliente por padrão.
-      allow delete: if false;
-    }
-    // +++ FIM: Regras para Customizações +++
-
   }
-}

@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 // import { useNavigate } from "react-router-dom"; // Remover
-import { format, /* isBefore, isAfter, addMinutes, */ differenceInMinutes, parseISO } from "date-fns"; // Remover não usados
+import { format, /* isBefore, isAfter, addMinutes, */ differenceInMinutes, parseISO, isSameDay } from "date-fns"; // Remover não usados
 import { ptBR } from "date-fns/locale";
 import { QueueService, Pet, Customer, Service, Appointment, /* CancellationReason */ } from "@/api/entities"; // Remover CancellationReason
+import { db } from '@/lib/firebaseConfig'; // Importar db para onSnapshot
+import { collection, query, where, onSnapshot, Timestamp } from "firebase/firestore"; // Importar funções do Firestore
 // import { useTenant } from "@/components/tenant/TenantContext"; // Remover
 import {
   Card,
@@ -32,13 +34,14 @@ import {
   PlayCircle,
   PauseCircle,
   XCircle,
-  RefreshCw,
   // Filter, // Remover
   // ChevronUp, // Remover
   // ChevronDown, // Remover
   Calendar as CalendarIcon,
   UserCircle,
   ClipboardList,
+  Trophy,
+  UserCheck,
   // Dog, // Remover
   // Cat // Remover
 } from "lucide-react";
@@ -90,8 +93,7 @@ export default function ServiceQueue() {
   const [currentView, setCurrentView] = useState("list");
   const [selectedService, setSelectedService] = useState(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [filterStatus, setFilterStatus] = useState("waiting");
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [notes, setNotes] = useState("");
   const [showAddNotesDialog, setShowAddNotesDialog] = useState(false);
@@ -122,13 +124,13 @@ export default function ServiceQueue() {
           // Pedir explicitamente os status relevantes para esta tela
           status: ['waiting', 'scheduled', 'in_progress', 'paused', 'completed']
         });
-        console.log('[ServiceQueue] Itens brutos da QueueService:', queueItemsFromDB);
+        // console.log('[ServiceQueue] Itens brutos da QueueService:', queueItemsFromDB); // Comentado - Muita informação
 
         // Mapeia e popula os dados corretamente
         const populatedAppointmentsPromises = queueItemsFromDB.map(async (item) => {
             try {
                 if (!item.pet_id || !item.customer_id || !item.service_id) { 
-                    console.warn("Item da fila com IDs faltando:", item);
+                    console.warn("Item da fila com IDs faltando:", item); // Manter - Importante para dados inválidos
                     return { 
                         ...item, 
                         pet: { name: "Pet Inválido" }, 
@@ -137,22 +139,28 @@ export default function ServiceQueue() {
                     };
                  }
                  
-                // Busca os dados relacionados em paralelo
-                const [pet, customer, service] = await Promise.all([
-                    Pet.get(item.pet_id).catch(e => { console.error(`Erro Pet ${item.pet_id}:`, e); return null; }),
-                    Customer.get(item.customer_id).catch(e => { console.error(`Erro Customer ${item.customer_id}:`, e); return null; }),
-                    Service.get(item.service_id).catch(e => { console.error(`Erro Service ${item.service_id}:`, e); return null; })
+                // Busca os dados relacionados em paralelo, incluindo o Appointment
+                const [pet, customer, service, appointment] = await Promise.all([
+                    Pet.get(item.pet_id).catch(e => { console.error(`Erro Pet ${item.pet_id}:`, e); return null; }), // Manter erro
+                    Customer.get(item.customer_id).catch(e => { console.error(`Erro Customer ${item.customer_id}:`, e); return null; }), // Manter erro
+                    Service.get(item.service_id).catch(e => { console.error(`Erro Service ${item.service_id}:`, e); return null; }), // Manter erro
+                    // Adiciona a busca pelo Appointment usando appointment_id
+                    item.appointment_id 
+                        ? Appointment.get(item.appointment_id).catch(e => { console.error(`Erro Appointment ${item.appointment_id}:`, e); return null; }) // Manter erro
+                        : Promise.resolve(null) // Resolve para null se não houver appointment_id
                 ]);
                 
-                // Retorna o item populado
+                // Retorna o item populado, incluindo osNumber do appointment
                 return {
                     ...item,
                     pet: pet || { name: "Pet não encontrado" },
                     customer: customer || { full_name: "Cliente não encontrado" },
-                    service: service || { name: "Serviço não encontrado" }
+                    service: service || { name: "Serviço não encontrado" },
+                    // Adiciona osNumber do appointment, se existir
+                    osNumber: appointment ? appointment.osNumber : null 
                 };
             } catch (error) {
-                console.error("Erro ao popular item da fila:", item.id, error);
+                console.error("Erro ao popular item da fila:", item.id, error); // Manter erro
                 return { 
                     ...item, 
                     pet: { name: "Erro Pet" }, 
@@ -173,15 +181,16 @@ export default function ServiceQueue() {
         });
 
         // Log para verificar as datas antes de setar o estado (usar lista filtrada)
-        filteredPetshopAppointments.forEach(appt => {
-            console.log(`[ServiceQueue Debug] ID: ${appt.id}, appointment_date: ${JSON.stringify(appt.appointment_date)}, typeof: ${typeof appt.appointment_date}`);
-        });
+        // Comentado - Muita informação para debug atual
+        // filteredPetshopAppointments.forEach(appt => {
+        //     console.log(`[ServiceQueue Debug] ID: ${appt.id}, appointment_date: ${JSON.stringify(appt.appointment_date)}, typeof: ${typeof appt.appointment_date}`);
+        // });
 
         // Define o estado com a lista filtrada
         setQueueItems(filteredPetshopAppointments);
 
       } catch (error) {
-           console.error("Erro ao carregar fila:", error);
+           console.error("Erro ao carregar fila:", error); // Manter erro principal
            toast({
              title: "Erro",
              description: "Não foi possível carregar a fila de atendimento.",
@@ -192,21 +201,113 @@ export default function ServiceQueue() {
       }
   };
 
+  // Listener em tempo real para a fila
   useEffect(() => {
-    fetchQueueData(); // Chama a função ao montar e quando selectedDate/autoRefresh mudar
-
-    // Lógica do intervalo de auto-refresh
-    let intervalId = null;
-    if (autoRefresh) {
-      intervalId = setInterval(fetchQueueData, 30000); 
+    setIsLoading(true);
+    const currentTenant = localStorage.getItem('current_tenant');
+    if (!currentTenant) {
+      console.error("[ServiceQueue Realtime] Tenant ID not found.");
+      setIsLoading(false);
+      setQueueItems([]);
+      toast({ title: "Erro", description: "Tenant não identificado.", variant: "destructive" });
+      return () => {}; // Retorna função vazia para cleanup
     }
+
+    console.log(`[ServiceQueue Realtime] Setting up listener for tenant: ${currentTenant}`);
+
+    // Status relevantes para buscar na fila
+    const relevantStatuses = ['waiting', 'scheduled', 'in_progress', 'paused', 'completed', 'cancelled'];
+
+    const q = query(
+      collection(db, "queueEntries"),
+      where("tenant_id", "==", currentTenant),
+      where("status", "in", relevantStatuses) // Busca todos os status relevantes de uma vez
+      // Não filtramos por data aqui, pois a data vem do Appointment relacionado
+    );
+
+    const unsubscribe = onSnapshot(q, async (querySnapshot) => {
+      console.log("[ServiceQueue Realtime] Snapshot received.");
+      const queueItemsFromDB = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      // Lógica de Mapeamento e População (adaptada de fetchQueueData)
+      const populatedAppointmentsPromises = queueItemsFromDB.map(async (item) => {
+          try {
+              if (!item.pet_id || !item.customer_id || !item.service_id) {
+                  console.warn("Item da fila com IDs faltando (Realtime):", item);
+                  return null; // Ignorar itens inválidos completamente
+              }
+
+              const [pet, customer, service, appointment] = await Promise.all([
+                  Pet.get(item.pet_id).catch(e => { console.error(`Erro Pet ${item.pet_id}:`, e); return null; }),
+                  Customer.get(item.customer_id).catch(e => { console.error(`Erro Customer ${item.customer_id}:`, e); return null; }),
+                  Service.get(item.service_id).catch(e => { console.error(`Erro Service ${item.service_id}:`, e); return null; }),
+                  item.appointment_id
+                      ? Appointment.get(item.appointment_id).catch(e => { console.error(`Erro Appointment ${item.appointment_id}:`, e); return null; })
+                      : Promise.resolve(null)
+              ]);
+
+              // Validar se dados essenciais foram carregados
+              if (!pet || !customer || !service) {
+                 console.warn("Dados essenciais (Pet, Customer, Service) não carregados para item:", item.id);
+                 return null; // Ignorar se dados essenciais falharam
+              }
+
+              return {
+                  ...item,
+                  pet: pet,
+                  customer: customer,
+                  service: service,
+                  osNumber: appointment ? appointment.osNumber : null,
+                  // Adiciona a data do agendamento populada para filtro posterior
+                  populated_appointment_date: appointment?.start_time // Guarda o timestamp ou ISO string
+              };
+          } catch (error) {
+              console.error("Erro ao popular item da fila (Realtime):", item.id, error);
+              return null; // Ignorar itens com erro de população
+          }
+      });
+
+      const populatedItemsRaw = (await Promise.all(populatedAppointmentsPromises)).filter(item => item !== null);
+
+      // Filtrar por Módulo Petshop
+      const petshopItems = populatedItemsRaw.filter(item => item.service && item.service.module === 'petshop');
+
+      // Filtrar pela Data Selecionada (usando a data populada do agendamento)
+      const finalFilteredItems = petshopItems.filter(item => {
+         if (!item.populated_appointment_date) return false; // Ignora se não tem data do agendamento
+         try {
+             let appointmentDate;
+             if (item.populated_appointment_date instanceof Timestamp) {
+                 appointmentDate = item.populated_appointment_date.toDate();
+             } else if (typeof item.populated_appointment_date === 'string') {
+                 appointmentDate = parseISO(item.populated_appointment_date);
+             } else {
+                 return false; // Não consegue determinar a data
+             }
+             return isSameDay(appointmentDate, selectedDate);
+         } catch (dateError) {
+             console.error("Erro ao comparar datas (Realtime):", item.id, item.populated_appointment_date, dateError);
+             return false;
+         }
+      });
+
+      console.log(`[ServiceQueue Realtime] Setting ${finalFilteredItems.length} items for date ${selectedDate.toDateString()}`);
+      setQueueItems(finalFilteredItems);
+      setIsLoading(false); // Desativa o loading após o primeiro processamento bem-sucedido
+
+    }, (error) => { // Tratamento de erro do listener
+      console.error("[ServiceQueue Realtime] Listener error:", error);
+      setIsLoading(false);
+      setQueueItems([]);
+      toast({ title: "Erro de Conexão", description: "Falha ao carregar atualizações da fila.", variant: "destructive" });
+    });
+
+    // Função de cleanup para remover o listener
     return () => {
-      if (intervalId) {
-        clearInterval(intervalId);
-      }
+        console.log("[ServiceQueue Realtime] Cleaning up listener.");
+        unsubscribe();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate, autoRefresh]);
+  }, [selectedDate, toast]);
 
   /* // Remover função checkUpcomingServices não usada
   const checkUpcomingServices = () => {
@@ -251,7 +352,7 @@ export default function ServiceQueue() {
   */
 
   const handleStatusChange = async (itemId, newStatus, additionalData = {}) => {
-    console.log(`[handleStatusChange] ID: ${itemId}, Novo Status: ${newStatus}`);
+    // console.log(`[handleStatusChange] ID: ${itemId}, Novo Status: ${newStatus}`); // Comentado - Informativo
     try {
       const now = new Date().toISOString();
       let updateData = {
@@ -259,9 +360,22 @@ export default function ServiceQueue() {
       };
       const currentItem = queueItems.find(item => item.id === itemId);
       if (!currentItem) {
-        console.error("[handleStatusChange] Item da fila não encontrado:", itemId);
+        console.error("[handleStatusChange] Item da fila não encontrado:", itemId); // Manter erro
         throw new Error("Item da fila não encontrado.");
       }
+
+      // <<< INÍCIO: Atualizar Appointment se status for in_progress >>>
+      if (newStatus === 'in_progress' && currentItem.appointment_id) {
+          try {
+              console.log(`[handleStatusChange] Updating corresponding Appointment ${currentItem.appointment_id} status to in_progress.`);
+              await Appointment.update(currentItem.appointment_id, { status: 'in_progress' });
+              console.log(`[handleStatusChange] Appointment ${currentItem.appointment_id} status updated successfully.`);
+          } catch (apptError) {
+              console.error(`[handleStatusChange] Failed to update Appointment ${currentItem.appointment_id} status:`, apptError);
+              toast({ title: "Aviso", description: "Status da fila atualizado, mas houve erro ao sincronizar com o agendamento principal.", variant: "warning" });
+          }
+      }
+      // <<< FIM: Atualizar Appointment se status for in_progress >>>
 
       switch (newStatus) {
         case "in_progress":
@@ -297,12 +411,12 @@ export default function ServiceQueue() {
                end_time: now,
                ...(duration !== null && { duration_minutes: duration })
             };
-            console.log(`[handleStatusChange] Atualizando Appointment ${currentItem.appointment_id} para concluído:`, appointmentUpdateData);
+            // console.log(`[handleStatusChange] Atualizando Appointment ${currentItem.appointment_id} para concluído:`, appointmentUpdateData); // Comentado - Informativo
             try {
                await Appointment.update(currentItem.appointment_id, appointmentUpdateData);
-               console.log(`[handleStatusChange] Appointment ${currentItem.appointment_id} atualizado com sucesso.`);
+               // console.log(`[handleStatusChange] Appointment ${currentItem.appointment_id} atualizado com sucesso.`); // Comentado - Informativo
             } catch (apptError) {
-               console.error("[handleStatusChange] Erro ao atualizar Appointment:", apptError);
+               console.error("[handleStatusChange] Erro ao atualizar Appointment:", apptError); // Manter erro
                toast({ title: "Aviso", description: "Status da fila atualizado, mas houve erro ao finalizar o agendamento principal.", variant: "warning" });
             }
 
@@ -315,22 +429,22 @@ export default function ServiceQueue() {
                  quantity: 1,
                  type: 'service',
                };
-               console.log(`[handleStatusChange] Enviando serviço ${serviceItemToCharge.name} para cobrança (Appointment ID: ${currentItem.appointment_id})`);
+               // console.log(`[handleStatusChange] Enviando serviço ${serviceItemToCharge.name} para cobrança (Appointment ID: ${currentItem.appointment_id})`); // Comentado - Informativo
                try {
                  await addPendingItems(currentItem.appointment_id, [serviceItemToCharge]);
-                 console.log(`[handleStatusChange] Serviço enviado para cobrança com sucesso.`);
+                 // console.log(`[handleStatusChange] Serviço enviado para cobrança com sucesso.`); // Comentado - Informativo
                  // Não precisa de toast aqui, o toast de "Serviço concluído" já informa o usuário
                } catch (billingError) {
-                 console.error("[handleStatusChange] Erro ao enviar para cobrança:", billingError);
+                 console.error("[handleStatusChange] Erro ao enviar para cobrança:", billingError); // Manter erro
                  toast({ title: "Erro de Cobrança", description: "Serviço finalizado, mas houve erro ao enviar para a lista de cobrança.", variant: "destructive" });
                }
             } else {
-               console.warn("[handleStatusChange] Não foi possível enviar para cobrança: ID do agendamento ou detalhes do serviço ausentes.", currentItem);
+               console.warn("[handleStatusChange] Não foi possível enviar para cobrança: ID do agendamento ou detalhes do serviço ausentes.", currentItem); // Manter warn
             }
             // <<< FIM: Enviar para Cobrança >>>
 
           } else {
-             console.warn("[handleStatusChange] appointment_id não encontrado no item da fila para concluir agendamento.");
+             console.warn("[handleStatusChange] appointment_id não encontrado no item da fila para concluir agendamento."); // Manter warn
           }
           break;
         case "paused":
@@ -351,7 +465,7 @@ export default function ServiceQueue() {
         updateData.notes = additionalData.notes;
       }
 
-      console.log("[handleStatusChange] Atualizando QueueService:", itemId, updateData);
+      // console.log("[handleStatusChange] Atualizando QueueService:", itemId, updateData); // Comentado - Informativo
       await QueueService.update(itemId, updateData);
       toast({
         title: "Status atualizado",
@@ -368,7 +482,7 @@ export default function ServiceQueue() {
       
       fetchQueueData();
     } catch (error) {
-      console.error("Erro ao atualizar status:", error);
+      console.error("Erro ao atualizar status:", error); // Manter erro principal
       toast({
         title: "Erro",
         description: `Não foi possível atualizar o status: ${error.message}`,
@@ -401,7 +515,7 @@ export default function ServiceQueue() {
       setShowAddNotesDialog(false);
       fetchQueueData();
     } catch (error) {
-      console.error("Erro ao salvar observações:", error);
+      console.error("Erro ao salvar observações:", error); // Manter erro principal
       toast({
         title: "Erro",
         description: "Não foi possível salvar as observações.",
@@ -422,7 +536,7 @@ export default function ServiceQueue() {
       },
       in_progress: {
         label: "Em Atendimento",
-        className: "bg-yellow-100 text-yellow-800"
+        className: "bg-purple-100 text-purple-800 border border-purple-300"
       },
       paused: {
         label: "Pausado",
@@ -445,7 +559,7 @@ export default function ServiceQueue() {
     
     // Log para depurar o status recebido
     if (!statusConfig[status]) {
-        console.warn(`[getStatusBadge] Status desconhecido recebido: '${status}', aplicando fallback.`);
+        console.warn(`[getStatusBadge] Status desconhecido recebido: '${status}', aplicando fallback.`); // Manter warn
     }
     
     return <Badge className={config.className}>{config.label}</Badge>;
@@ -498,10 +612,10 @@ export default function ServiceQueue() {
       try {
         addRemovalReason(finalReason);
       } catch (error) {
-        console.error("Erro ao salvar novo motivo de remoção:", error);
+        console.error("Erro ao salvar novo motivo de remoção:", error); // Manter erro
       }
     } else if (reason === '__other__' && !newReason) {
-       console.error("Tentativa de remover com 'Outros' sem especificar motivo.");
+       console.error("Tentativa de remover com 'Outros' sem especificar motivo."); // Manter erro
        toast({
           title: "Erro",
           description: "Motivo 'Outros' selecionado, mas nenhum texto foi fornecido.",
@@ -510,7 +624,7 @@ export default function ServiceQueue() {
        return;
     }
 
-    console.log(`Removendo item ${itemToRemove.id} da fila com motivo: ${finalReason}`);
+    // console.log(`Removendo item ${itemToRemove.id} da fila com motivo: ${finalReason}`); // Comentado - Informativo
 
     try {
       await QueueService.update(itemToRemove.id, { 
@@ -524,9 +638,9 @@ export default function ServiceQueue() {
                   status: 'cancelled',
                   removal_reason: finalReason 
               });
-              console.log(`Agendamento ${itemToRemove.appointment_id} atualizado para cancelado com motivo.`);
+              // console.log(`Agendamento ${itemToRemove.appointment_id} atualizado para cancelado com motivo.`); // Comentado - Informativo
           } catch (appointmentError) {
-              console.error("Erro ao atualizar status do agendamento original:", appointmentError);
+              console.error("Erro ao atualizar status do agendamento original:", appointmentError); // Manter erro
               toast({
                   title: "Aviso",
                   description: "Item removido da fila, mas houve um erro ao atualizar o status do agendamento principal.",
@@ -534,7 +648,7 @@ export default function ServiceQueue() {
               });
           }
       } else {
-          console.warn("Não foi possível atualizar o agendamento original: appointment_id não encontrado no item da fila.");
+          console.warn("Não foi possível atualizar o agendamento original: appointment_id não encontrado no item da fila."); // Manter warn
       }
       
       toast({
@@ -546,7 +660,7 @@ export default function ServiceQueue() {
       handleCloseRemoveModal();
       
     } catch (error) {
-      console.error("Erro ao atualizar status para cancelado na fila:", error);
+      console.error("Erro ao atualizar status para cancelado na fila:", error); // Manter erro principal
       toast({
         title: "Erro ao Remover",
         description: "Não foi possível remover o item da fila.",
@@ -610,15 +724,6 @@ export default function ServiceQueue() {
                   />
                 </PopoverContent>
               </Popover>
-              
-              <Button
-                variant={autoRefresh ? "default" : "outline"}
-                size="icon"
-                onClick={() => setAutoRefresh(!autoRefresh)}
-                title={autoRefresh ? "Desativar atualização automática" : "Ativar atualização automática"}
-              >
-                <RefreshCw className={`h-4 w-4 ${autoRefresh ? "animate-spin duration-1000" : ""}`} />
-              </Button>
             </div>
           </div>
 
@@ -639,18 +744,13 @@ export default function ServiceQueue() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos</SelectItem>
-                <SelectItem value="scheduled">Agendados</SelectItem>
+                <SelectItem value="waiting">Aguardando</SelectItem>
                 <SelectItem value="in_progress">Em Atendimento</SelectItem>
                 <SelectItem value="paused">Pausados</SelectItem>
                 <SelectItem value="completed">Concluídos</SelectItem>
                 <SelectItem value="cancelled">Cancelados</SelectItem>
               </SelectContent>
             </Select>
-            
-            <Button onClick={() => fetchQueueData()}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Atualizar
-            </Button>
           </div>
 
           <TabsContent value="list" className="mt-0">
@@ -662,6 +762,7 @@ export default function ServiceQueue() {
                       <TableRow>
                         <TableHead className="w-[100px]">Horário</TableHead>
                         <TableHead>Pet</TableHead>
+                        <TableHead>OS</TableHead>
                         <TableHead>Cliente</TableHead>
                         <TableHead>Serviço</TableHead>
                         <TableHead>Status</TableHead>
@@ -672,14 +773,14 @@ export default function ServiceQueue() {
                     <TableBody>
                       {filteredItems.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={7} className="text-center py-8 text-gray-500">
+                          <TableCell colSpan={8} className="text-center py-8 text-gray-500">
                             Nenhum atendimento encontrado com os filtros selecionados.
                           </TableCell>
                         </TableRow>
                       ) : (
                         filteredItems.map((item) => (
                           <TableRow key={item.id} className={
-                            item.status === "in_progress" ? "bg-yellow-50" :
+                            item.status === "in_progress" ? "bg-purple-50" :
                             item.status === "completed" ? "bg-green-50" :
                             item.status === "paused" ? "bg-amber-50" :
                             ""
@@ -687,20 +788,19 @@ export default function ServiceQueue() {
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <Clock className="h-4 w-4 text-gray-500" />
-                                {item.appointment_date && !isNaN(new Date(item.appointment_date).getTime()) 
-                                  ? format(new Date(item.appointment_date), "HH:mm")
-                                  : '--:--' // Fallback para datas inválidas
+                                {item.entry_time && !isNaN(new Date(item.entry_time).getTime())
+                                  ? format(new Date(item.entry_time), "HH:mm")
+                                  : '--:--'
                                 }
                               </div>
                             </TableCell>
                             <TableCell>
                               <div className="font-medium">{item.pet?.name}</div>
-                              <div className="text-xs text-gray-500">{item.pet?.breed}</div>
                             </TableCell>
                             <TableCell>
-                              <div>{item.customer?.full_name}</div>
-                              <div className="text-xs text-gray-500">{item.customer?.phone}</div>
+                              <div className="text-xs text-gray-500">{item.osNumber || '-'}</div>
                             </TableCell>
+                            <TableCell>{item.customer?.full_name}</TableCell>
                             <TableCell>{item.service?.name}</TableCell>
                             <TableCell>{getStatusBadge(item.status)}</TableCell>
                             <TableCell>
@@ -713,6 +813,16 @@ export default function ServiceQueue() {
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-2">
+                                {item.status === 'waiting' && (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleStatusChange(item.id, "in_progress")}
+                                    className="bg-purple-600 hover:bg-purple-700 text-white"
+                                  >
+                                    <PlayCircle className="h-4 w-4 mr-1" />
+                                    Iniciar
+                                  </Button>
+                                )}
                                 <Button 
                                   variant="ghost" 
                                   size="icon"
@@ -749,14 +859,15 @@ export default function ServiceQueue() {
           <TabsContent value="board" className="mt-0">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <Card>
-                <CardHeader className="pb-2 bg-blue-50">
-                  <CardTitle className="text-center text-blue-800">
-                    Agendados ({sortedQueueItems.filter(i => i.status === "scheduled" || i.status === "waiting").length})
+                <CardHeader className="pb-2 bg-yellow-50">
+                  <CardTitle className="text-center text-yellow-800 flex items-center justify-center gap-2">
+                    <UserCheck className="h-5 w-5" />
+                    Aguardando ({sortedQueueItems.filter(i => i.status === "waiting").length})
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-3 max-h-[600px] overflow-y-auto">
                   {sortedQueueItems
-                    .filter(item => item.status === "scheduled" || item.status === "waiting")
+                    .filter(item => item.status === "waiting")
                     .map(item => (
                       <Card key={item.id} className="mb-3 shadow-sm hover:shadow-md transition-shadow">
                         <CardContent className="p-3">
@@ -765,16 +876,16 @@ export default function ServiceQueue() {
                               <PetAvatar pet={item.pet} size="lg" />
                             </div>
                             <div className="flex-1">
-                              <div className="flex justify-between items-start mb-2">
+                              <div className="flex justify-between items-start mb-1">
                                 <div className="font-medium">{item.pet?.name}</div>
-                                <Badge variant="outline" className="text-xs">
-                                  {item.appointment_date && !isNaN(new Date(item.appointment_date).getTime())
-                                    ? format(new Date(item.appointment_date), "HH:mm") 
-                                    : '--:--'}
-                                </Badge>
+                                {item.entry_time && !isNaN(new Date(item.entry_time).getTime())
+                                  ? <div className="text-xs text-gray-500"><Clock className="h-3 w-3 inline mr-1"/>{format(new Date(item.entry_time), "HH:mm")}</div>
+                                  : <div className="text-xs text-gray-500"><Clock className="h-3 w-3 inline mr-1"/>--:--</div>
+                                }
                               </div>
-                              <div className="text-sm text-gray-600 mb-2">{item.service?.name}</div>
-                              <div className="text-xs text-gray-500 mb-3">{item.customer?.full_name}</div>
+                              {item.osNumber && <div className="text-xs text-gray-500 mb-1">OS: {item.osNumber}</div>}
+                              <div className="text-sm text-gray-600 mb-1">{item.service?.name}</div>
+                              <div className="text-xs text-gray-500 mb-2">{item.customer?.full_name}</div>
                               <div className="flex justify-between items-center">
                                 <Button 
                                   size="sm" 
@@ -790,7 +901,7 @@ export default function ServiceQueue() {
                         </CardContent>
                       </Card>
                     ))}
-                  {sortedQueueItems.filter(i => i.status === "scheduled" || i.status === "waiting").length === 0 && (
+                  {sortedQueueItems.filter(i => i.status === "waiting").length === 0 && (
                     <div className="text-center py-8 text-gray-500">
                       Nenhum serviço agendado
                     </div>
@@ -799,8 +910,9 @@ export default function ServiceQueue() {
               </Card>
 
               <Card>
-                <CardHeader className="pb-2 bg-yellow-50">
-                  <CardTitle className="text-center text-yellow-800">
+                <CardHeader className="pb-2 bg-purple-50">
+                  <CardTitle className="text-center text-purple-800 flex items-center justify-center gap-2">
+                    <PlayCircle className="h-5 w-5" />
                     Em Andamento ({sortedQueueItems.filter(i => i.status === "in_progress" || i.status === "paused").length})
                   </CardTitle>
                 </CardHeader>
@@ -815,14 +927,15 @@ export default function ServiceQueue() {
                               <PetAvatar pet={item.pet} size="lg" />
                             </div>
                             <div className="flex-1">
-                              <div className="flex justify-between items-start mb-2">
+                              <div className="flex justify-between items-start mb-1">
                                 <div className="font-medium">{item.pet?.name}</div>
                                 <Badge variant={item.status === "paused" ? "secondary" : "default"}>
                                   {item.status === "paused" ? "Pausado" : "Em Atendimento"}
                                 </Badge>
                               </div>
-                              <div className="text-sm text-gray-600 mb-2">{item.service?.name}</div>
-                              <div className="text-xs text-gray-500 mb-3">{item.customer?.full_name}</div>
+                              {item.osNumber && <div className="text-xs text-gray-500 mb-1">OS: {item.osNumber}</div>}
+                              <div className="text-sm text-gray-600 mb-1">{item.service?.name}</div>
+                              <div className="text-xs text-gray-500 mb-2">{item.customer?.full_name}</div>
                               <div className="flex gap-2">
                                 {item.status === "in_progress" ? (
                                   <>
@@ -872,8 +985,9 @@ export default function ServiceQueue() {
               </Card>
 
               <Card>
-                <CardHeader className="pb-2 bg-green-50">
-                  <CardTitle className="text-center text-green-800">
+                <CardHeader className="pb-2 bg-gray-100">
+                  <CardTitle className="text-center text-gray-700 flex items-center justify-center gap-2">
+                    <Trophy className="h-5 w-5" />
                     Concluídos ({sortedQueueItems.filter(i => i.status === "completed").length})
                   </CardTitle>
                 </CardHeader>
@@ -894,11 +1008,12 @@ export default function ServiceQueue() {
                               <PetAvatar pet={item.pet} size="lg" />
                             </div>
                             <div className="flex-1">
-                              <div className="flex justify-between items-start mb-2">
+                              <div className="flex justify-between items-start mb-1">
                                 <div className="font-medium">{item.pet?.name}</div>
                                 <Badge className="bg-green-100 text-green-800">Concluído</Badge>
                               </div>
-                              <div className="text-sm text-gray-600 mb-2">{item.service?.name}</div>
+                              {item.osNumber && <div className="text-xs text-gray-500 mb-1">OS: {item.osNumber}</div>}
+                              <div className="text-sm text-gray-600 mb-1">{item.service?.name}</div>
                               <div className="text-xs text-gray-500 mb-1">{item.customer?.full_name}</div>
                               {item.start_time && !isNaN(new Date(item.start_time).getTime()) && item.end_time && !isNaN(new Date(item.end_time).getTime()) && (
                                 <div className="text-xs text-gray-400">

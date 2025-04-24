@@ -13,7 +13,7 @@ import {
     HealthPlanMock,
     HospitalizationMock, 
     MedicalRecordMock,   
-    ConsultationMock,    
+    // ConsultationMock, // <<< REMOVER IMPORT NÃO USADO
     MedicationTaskMock,  
     AllergyMock,         
     VaccineMock,         
@@ -47,6 +47,7 @@ import { queueService } from './firebase/queueService';
 // <-- IMPORT NEW SERVICES -->
 import { tenantService } from './firebase/tenantService';
 import { customizationService } from './firebase/customizationService';
+import { consultationService } from './firebase/consultationService';
 
 // REMOVIDAS outras importações de mockData.js que causavam conflito
 
@@ -64,7 +65,7 @@ export const FinancialTransaction = FinancialTransactionMock;
 export const HealthPlan = HealthPlanMock;
 export const Hospitalization = HospitalizationMock;
 export const MedicalRecord = MedicalRecordMock;
-export const Consultation = ConsultationMock;
+export const Consultation = consultationService;
 export const MedicationTask = MedicationTaskMock;
 export const Allergy = AllergyMock;
 export const Vaccine = VaccineMock;

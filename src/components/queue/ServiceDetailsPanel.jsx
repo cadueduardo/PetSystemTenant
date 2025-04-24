@@ -1,6 +1,6 @@
-import React, { useState } from "react";
-import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
+/* eslint-disable react/prop-types */
+
+import { useState } from "react";
 import {
   Sheet,
   SheetContent,
@@ -16,7 +16,6 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -26,20 +25,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import {
-  Clock,
-  Calendar,
-  User,
-  CheckCircle2,
-  PlayCircle,
-  PauseCircle,
-  Scissors,
-  Clipboard,
-  History,
-  Phone,
-  Dog,
-  Cat
-} from "lucide-react";
+import { User, CheckCircle2, PlayCircle, PauseCircle, Scissors, Clipboard, History, Phone } from "lucide-react";
 import ServiceTimer from "./ServiceTimer";
 import PetAvatar from "@/components/pets/PetAvatar";
 
@@ -87,7 +73,7 @@ export default function ServiceDetailsPanel({ open, onOpenChange, service, onSta
         <SheetHeader className="pb-4">
           <SheetTitle>Detalhes do Atendimento</SheetTitle>
           <SheetDescription>
-            {service?.service?.name} - {format(new Date(service.appointment_date), "dd/MM/yyyy HH:mm")}
+            {service?.service?.name} - {new Date(service.appointment_date).toLocaleString()}
           </SheetDescription>
         </SheetHeader>
 
@@ -137,6 +123,14 @@ export default function ServiceDetailsPanel({ open, onOpenChange, service, onSta
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-500">Sexo:</span>
                     <span>{service.pet?.gender === "male" ? "Macho" : "Fêmea"}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-500">Número do Prontuário:</span>
+                    <span>{service.pet?.id || '-'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-500">Episódios:</span>
+                    <span>{service.pet?.consultationHistory?.length || 0}</span>
                   </div>
                 </div>
               </div>
@@ -231,12 +225,12 @@ export default function ServiceDetailsPanel({ open, onOpenChange, service, onSta
                       <div key={index} className="border rounded-md p-3 text-sm">
                         <div className="flex justify-between mb-1">
                           <span className="text-gray-500">Início:</span>
-                          <span>{format(new Date(pause.start), "dd/MM HH:mm")}</span>
+                          <span>{new Date(pause.start).toLocaleString()}</span>
                         </div>
                         {pause.end && (
                           <div className="flex justify-between mb-1">
                             <span className="text-gray-500">Fim:</span>
-                            <span>{format(new Date(pause.end), "dd/MM HH:mm")}</span>
+                            <span>{new Date(pause.end).toLocaleString()}</span>
                           </div>
                         )}
                         <div className="mt-2">

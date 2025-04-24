@@ -1,16 +1,20 @@
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
-import { ChevronLeft, Loader2, Pencil, Filter, Eye, FileText, Sparkles, ShoppingCart, Stethoscope } from "lucide-react";
+import { ChevronLeft, Loader2, Pencil, Filter, Eye, Sparkles, ShoppingCart, Stethoscope } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { createPageUrl } from "@/utils";
-import { Pet, Customer, QueueService, Appointment, Consultation, Service, PurchaseHistory } from "@/api/entities";
+import { Pet, Customer, QueueService, Service, PurchaseHistory } from "@/api/entities";
 import { useState, useEffect } from "react";
 import PetForm from "@/components/pets/PetForm";
 import PetBasicInfo from "@/components/pets/PetBasicInfo";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { parseISO, differenceInMinutes, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { collection, query, orderBy, getDocs, doc, getDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebaseConfig';
+import { Separator } from "@/components/ui/separator";
+import React from "react";
 
 export default function DetalhesPet() {
   const navigate = useNavigate();
@@ -23,6 +27,9 @@ export default function DetalhesPet() {
   const [historicoPetshop, setHistoricoPetshop] = useState([]);
   const [historicoCompras, setHistoricoCompras] = useState([]);
   const [filtroAtivo, setFiltroAtivo] = useState("consultas");
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [selectedHistoryEpisode, setSelectedHistoryEpisode] = useState(null);
+  const [isLoadingEpisodeDetails, setIsLoadingEpisodeDetails] = useState(false);
   
   // Obter parâmetros da URL
   const urlParams = new URLSearchParams(window.location.search);
@@ -88,82 +95,41 @@ export default function DetalhesPet() {
       }
       // ---------------------------------------------------------------
       
-      // Carregar histórico de Live Vet (atendimentos concluídos)
+      // <<< INÍCIO: Buscar Histórico Clínico (Episódios) >>>
       try {
-        // Buscar todos os agendamentos do pet
-        const agendamentos = await Appointment.filter({
-          pet_id: petId,
-          tenant_id: storeParam
-        });
-        
-        // Filtrar apenas os agendamentos concluídos
-        const agendamentosConcluidos = agendamentos.filter(appt => appt.status === 'completed');
-        
-        // Buscar dados adicionais para cada agendamento
-        const atendimentosCompletos = await Promise.all(
-          agendamentosConcluidos.map(async (appt) => {
-            try {
-              // Buscar dados do serviço
-              const service = await Service.get(appt.service_id).catch(() => ({ name: 'Serviço não encontrado' }));
-              
-              // Buscar dados da consulta (se existir)
-              const consultas = await Consultation.filter({ appointmentId: appt.id });
-              const consulta = consultas.length > 0 ? consultas[0] : null;
-              
-              // Calcular duração
-              let duracao = 'N/A';
-              if (appt.start_time && appt.end_time) {
-                try {
-                  const startDate = parseISO(appt.start_time);
-                  const endDate = parseISO(appt.end_time);
-                  const minutes = differenceInMinutes(endDate, startDate);
-                  
-                  if (!isNaN(minutes) && minutes >= 0) {
-                    if (minutes < 60) {
-                      duracao = `${minutes} min`;
-                    } else {
-                      const hours = Math.floor(minutes / 60);
-                      const remainingMinutes = minutes % 60;
-                      duracao = `${hours}h ${remainingMinutes > 0 ? `${remainingMinutes}min` : ''}`.trim();
-                    }
-                  }
-                } catch (e) {
-                  console.error("Erro ao calcular duração:", e);
-                }
-              }
-              
-              return {
-                id: appt.id,
-                data: appt.date,
-                veterinario: appt.vet_name || 'Veterinário não especificado',
-                motivo: appt.reason || service.name || 'Motivo não especificado',
-                duracao: duracao,
-                status: 'Concluída',
-                consulta: consulta
-              };
-            } catch (err) {
-              console.error(`Erro ao processar agendamento ${appt.id}:`, err);
-              return {
-                id: appt.id,
-                data: appt.date,
-                veterinario: 'Erro ao carregar',
-                motivo: 'Erro ao carregar',
-                duracao: 'N/A',
-                status: 'Concluída',
-                consulta: null
-              };
-            }
-          })
-        );
-        
-        // Ordenar por data (mais recente primeiro)
-        atendimentosCompletos.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
-        
-        setHistoricoLiveVet(atendimentosCompletos);
-        } catch (error) {
-        console.error("Erro ao carregar histórico de Live Vet:", error);
+        if (dadosPet.recordNumber && storeParam) { // Precisa do prontuário ID e tenant ID
+          const prontuarioId = dadosPet.recordNumber;
+          const tenantId = storeParam;
+          const episodesPath = `tenants/${tenantId}/prontuarios/${prontuarioId}/episodes`;
+          console.log(`[PetDetails] Buscando episódios em: ${episodesPath}`);
+          
+          const episodesQuery = query(
+            collection(db, episodesPath),
+            orderBy('createdAt', 'desc') // Ordenar por data de criação, mais recentes primeiro
+          );
+          
+          const querySnapshot = await getDocs(episodesQuery);
+          const episodesData = querySnapshot.docs.map(doc => ({
+            id: doc.id,
+            createdAt: doc.data().createdAt,
+            data: doc.data().createdAt?.toDate ? format(doc.data().createdAt.toDate(), 'dd/MM/yyyy HH:mm', { locale: ptBR }) : 'Data inválida',
+            motivo: doc.data().serviceName || doc.data().reason || 'Consulta Clínica',
+            episodeNumber: doc.data().episodeNumber,
+            diagnosticoResumo: doc.data().diagnosis || doc.data().fullInteraction?.vetNotes?.diagnosis || 'Não registrado',
+            appointmentId: doc.data().appointmentId
+          }));
+          
+          console.log("[PetDetails] Episódios clínicos encontrados:", episodesData);
+          setHistoricoLiveVet(episodesData); // Salva no mesmo estado por enquanto
+        } else {
+          console.warn("[PetDetails] Prontuário (recordNumber) ou Tenant ID não encontrado. Não foi possível buscar histórico de episódios.");
+          setHistoricoLiveVet([]);
+        }
+      } catch (error) {
+        console.error("Erro ao carregar histórico de episódios clínicos:", error);
         setHistoricoLiveVet([]);
       }
+      // <<< FIM: Buscar Histórico Clínico (Episódios) >>>
       
       // Buscar Histórico de Compras (Exemplo, ajuste conforme sua entidade)
       try {
@@ -212,19 +178,39 @@ export default function DetalhesPet() {
     setFiltroAtivo(valor);
   };
 
-  // Função para ver o resumo da consulta
-  const verResumoConsulta = (atendimento) => {
-    if (!atendimento.consulta) {
-      toast({
-        title: "Info",
-        description: "Não há resumo disponível para esta consulta.",
-        variant: "info"
-      });
-      return;
+  const handleOpenHistoryModal = async (episodeSummary) => {
+    console.log("[PetDetails] Abrindo detalhes para:", episodeSummary);
+    setSelectedHistoryEpisode(episodeSummary);
+    setIsHistoryModalOpen(true);
+    setIsLoadingEpisodeDetails(true);
+
+    try {
+      const tenantId = storeParam;
+      const prontuarioId = pet?.recordNumber;
+      if (!tenantId || !prontuarioId) throw new Error("Tenant ID ou Prontuário ID não encontrados.");
+
+      const episodeRef = doc(db, `tenants/${tenantId}/prontuarios/${prontuarioId}/episodes`, episodeSummary.id);
+      const episodeSnap = await getDoc(episodeRef);
+
+      if (episodeSnap.exists()) {
+        const fullEpisodeData = { id: episodeSnap.id, ...episodeSnap.data() };
+        console.log("[PetDetails] Detalhes completos do episódio carregados:", fullEpisodeData);
+        setSelectedHistoryEpisode(fullEpisodeData);
+      } else {
+        throw new Error(`Episódio ${episodeSummary.id} não encontrado para detalhes.`);
+      }
+    } catch (error) {
+      console.error("[PetDetails] Erro ao buscar detalhes do episódio:", error);
+      toast({ title: "Erro", description: "Não foi possível carregar os detalhes completos deste episódio.", variant: "destructive" });
+    } finally {
+      setIsLoadingEpisodeDetails(false);
     }
-    
-    // Navegar para a página de relatório
-    navigate(`/tenant/live-vet/consulta/${atendimento.id}/relatorio`);
+  };
+
+  const handleCloseHistoryModal = () => {
+    setIsHistoryModalOpen(false);
+    setSelectedHistoryEpisode(null);
+    setIsLoadingEpisodeDetails(false);
   };
 
   // Função para renderizar conteúdo baseado no filtro
@@ -233,57 +219,44 @@ export default function DetalhesPet() {
       case 'consultas': {
         return (
           <div>
-            <h3 className="text-lg font-semibold mb-3 flex items-center"><Stethoscope className="h-5 w-5 mr-2" /> Histórico de Consultas (Live Vet)</h3>
+            <h3 className="text-lg font-semibold mb-3 flex items-center"><Stethoscope className="h-5 w-5 mr-2" /> Histórico Clínico (Episódios)</h3>
             {historicoLiveVet.length > 0 ? (
               <ul className="space-y-3">
-                {historicoLiveVet.map(app => (
-                  <li key={app.id} className="border p-3 rounded-md bg-muted/20">
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <h3 className="font-medium">Consulta com {app.veterinario}</h3>
-                        <p className="text-sm text-gray-500">
-                          Data: {new Date(app.data).toLocaleDateString("pt-BR")}
-                        </p>
-                        <p className="text-sm text-gray-500">
-                          Motivo: {app.motivo}
-                        </p>
-                        <p className="text-sm text-gray-500">
-                          Duração: {app.duracao}
-                        </p>
-                      </div>
-                      <div className="text-right flex flex-col items-end">
-                        <span className={`px-2 py-1 rounded-full text-xs mb-2 ${
-                          app.status === "Concluída" ? "bg-green-100 text-green-800" :
-                          app.status === "Cancelada" ? "bg-red-100 text-red-800" :
-                          "bg-yellow-100 text-yellow-800"
-                        }`}>
-                          {app.status}
-                        </span>
-                        <div className="flex gap-2">
-                          <Button 
-                            variant="outline"
-                            size="sm"
-                            onClick={() => verResumoConsulta(app)}
-                          >
-                            <Eye className="mr-1 h-3 w-3" /> Ver Resumo
-                          </Button>
-                          {app.consulta?.fullInteraction && (
-                            <Button
+                {historicoLiveVet.map((ep, index) => (
+                  <React.Fragment key={ep.id}>
+                    <li className="border p-3 rounded-md bg-muted/20">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <p className="font-medium">
+                            <span className="text-primary font-semibold">{ep.episodeNumber || `ID: ${ep.id}`}</span> - 
+                            {ep.data}
+                          </p>
+                          <p className="text-sm text-gray-500">
+                            Motivo: {ep.motivo}
+                          </p>
+                          <p className="text-sm text-gray-500">
+                            Diagnóstico (Resumo): {ep.diagnosticoResumo}
+                          </p>
+                        </div>
+                        <div className="text-right flex flex-col items-end">
+                          <div className="flex gap-2 mt-2">
+                            <Button 
                               variant="outline"
                               size="sm"
-                              onClick={() => navigate(`/tenant/live-vet/consulta/${app.id}/relatorio`)}
+                              onClick={() => handleOpenHistoryModal(ep)}
                             >
-                              <FileText className="mr-1 h-3 w-3" /> Relatório Completo
+                              <Eye className="mr-1 h-3 w-3" /> Ver Detalhes
                             </Button>
-                          )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </li>
+                      {index < historicoLiveVet.length - 1 && <Separator className="my-3" />}
+                    </li>
+                  </React.Fragment>
                 ))}
               </ul>
             ) : (
-              <p className="text-muted-foreground">Nenhum histórico de consulta Live Vet encontrado.</p>
+              <p className="text-muted-foreground">Nenhum histórico clínico (episódio) encontrado.</p>
             )}
           </div>
         );
@@ -450,6 +423,77 @@ export default function DetalhesPet() {
               <Button type="button" variant="outline">Cancelar</Button>
             </DialogClose>
             <Button type="submit" form="pet-form">Salvar Alterações</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isHistoryModalOpen} onOpenChange={handleCloseHistoryModal}>
+        <DialogContent className="max-w-4xl w-[95%] max-h-[90vh]">
+          <DialogHeader>
+            <DialogTitle>Detalhes do Episódio {selectedHistoryEpisode?.episodeNumber ? `(${selectedHistoryEpisode.episodeNumber})` : `(ID: ${selectedHistoryEpisode?.id})`}</DialogTitle>
+            <DialogDescription>
+               Atendimento realizado em {selectedHistoryEpisode?.createdAt?.toDate ? format(selectedHistoryEpisode.createdAt.toDate(), 'dd/MM/yyyy HH:mm', { locale: ptBR }) : 'Data inválida'}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4 px-1 max-h-[calc(90vh-180px)] overflow-y-auto">
+            {isLoadingEpisodeDetails ? (
+               <div className="flex justify-center items-center py-10">
+                 <Loader2 className="h-8 w-8 animate-spin text-primary" /> 
+                 <p className="ml-3 text-muted-foreground">Carregando detalhes completos...</p>
+              </div>
+            ) : selectedHistoryEpisode ? (
+                <>
+                  <p><strong>Serviço/Motivo Principal:</strong> {selectedHistoryEpisode.serviceName || selectedHistoryEpisode.reason || 'N/A'}</p>
+                  
+                  <Separator />
+                  <h4 className="font-semibold text-base pt-2">Resumo Clínico</h4>
+                  <div className="space-y-2 pl-2">
+                    <p><strong>Anamnese / Queixa Principal:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.anamnesis || selectedHistoryEpisode.anamnesis?.notes || 'N/A'}</p>
+                    <p><strong>Exame Clínico:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.clinicalExam || selectedHistoryEpisode.clinicalExam || 'N/A'}</p>
+                    <p><strong>Suspeita / Diagnóstico(s):</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.diagnosis || selectedHistoryEpisode.diagnosis || 'N/A'}</p>
+                    <p><strong>Tratamento / Conduta:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.treatment || selectedHistoryEpisode.treatment || 'N/A'}</p>
+                    <p><strong>Diagnóstico Final Confirmado:</strong> {selectedHistoryEpisode.fullInteraction?.confirmedDiagnosis || 'Não confirmado'}</p>
+                  </div>
+                  
+                  {(selectedHistoryEpisode.prescriptionItems && selectedHistoryEpisode.prescriptionItems.length > 0) && (
+                    <>
+                      <Separator />
+                      <h4 className="font-semibold text-base pt-2">Prescrição</h4>
+                      <ul className="list-disc space-y-1 pl-6 text-sm">
+                        {selectedHistoryEpisode.prescriptionItems.map((item, index) => (
+                          <li key={index}>
+                            {item.itemName} ({item.details}) - Uso: {item.usage || 'N/A'}
+                            {item.observations && <span className="block text-xs text-muted-foreground">Obs: {item.observations}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                       {selectedHistoryEpisode.prescriptionObservations && (
+                         <p className="text-sm mt-2 pl-2"><strong>Observações Gerais Prescrição:</strong> {selectedHistoryEpisode.prescriptionObservations}</p>
+                       )}
+                    </>
+                  )}
+                  
+                  {(selectedHistoryEpisode.consumedItems && selectedHistoryEpisode.consumedItems.length > 0) && (
+                    <>
+                      <Separator />
+                      <h4 className="font-semibold text-base pt-2">Itens Consumidos</h4>
+                      <ul className="list-disc space-y-1 pl-6 text-sm">
+                        {selectedHistoryEpisode.consumedItems.map((item, index) => (
+                          <li key={index || item.id}> 
+                            {item.quantity}x {item.name}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+
+                </>
+              ) : (
+                <p className="text-muted-foreground">Nenhum detalhe de episódio selecionado.</p>
+              )}
+          </div>
+          <DialogFooter className="mt-4">
+            <Button type="button" variant="outline" onClick={handleCloseHistoryModal}>Fechar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

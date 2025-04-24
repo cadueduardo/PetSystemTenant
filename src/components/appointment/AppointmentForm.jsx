@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import { format, isBefore, addMinutes } from "date-fns";
+import { format, addMinutes, isFuture, startOfDay, isBefore } from "date-fns";
 import { ptBR } from 'date-fns/locale';
-import { Pet } from "@/api/entities";
+import { Pet, Service } from "@/api/entities";
 import useCustomerStore from "@/stores/customerStore";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/use-toast";
-import { CalendarIcon, Loader2, X, Clock, CheckCircle, UserCheck, PlayCircle, Ban, AlertTriangle, MessageSquareText, HelpCircle } from "lucide-react";
+import { CalendarIcon, Loader2, X, Clock, CheckCircle, UserCheck, PlayCircle, Ban, AlertTriangle, MessageSquareText, HelpCircle, Briefcase, HeartPulse } from "lucide-react";
 import { useForm } from "react-hook-form";
 import PropTypes from 'prop-types';
 import { Timestamp, collection, query, where, getDocs, doc, updateDoc, addDoc, deleteDoc } from 'firebase/firestore';
@@ -51,6 +51,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { db, functions } from '@/lib/firebaseConfig';
+import { consultationService } from '@/api/firebase/consultationService';
 
 // Funções callable (Mantenha as que você precisa)
 // const getPetByIdCallable = httpsCallable(functions, 'getPetById');
@@ -72,11 +73,23 @@ const statusStyles = {
 // Define which statuses are actionable via buttons
 const actionableStatuses = ['scheduled', 'pending_confirmation', 'confirmed', 'arrived', 'in_progress', 'canceled', 'no_show'];
 
-const getInitialFormValues = (initialData) => {
+const getInitialFormValues = (initialData, tenant) => {
   const startDate = initialData?.start ? new Date(initialData.start) : new Date();
   const defaultEndTime = format(addMinutes(startDate, 60), "HH:mm"); 
 
+  // Determinar módulo inicial padrão
+  let defaultServiceModule = 'clinica'; // Padrão se ambos existirem ou nenhum (?)
+  if (tenant) {
+      if (tenant.hasClinicalModule && !tenant.hasPetshopModule) {
+          defaultServiceModule = 'clinica';
+      } else if (!tenant.hasClinicalModule && tenant.hasPetshopModule) {
+          defaultServiceModule = 'petshop';
+      }
+      // Se ambos existirem, o usuário escolherá, pode manter 'clinica' como default inicial
+  }
+
   return {
+      serviceModule: initialData?.service_type || initialData?.module || defaultServiceModule, 
       pet_id: initialData?.pet_id || "",
       customer_id: initialData?.customer_id || "",
       service_id: initialData?.service_id || "",
@@ -86,7 +99,6 @@ const getInitialFormValues = (initialData) => {
       endTime: initialData?.end ? format(new Date(initialData.end), "HH:mm") : defaultEndTime,
       notes: initialData?.notes || "",
       status: initialData?.status || "scheduled",
-      service_type: initialData?.type || initialData?.service_type || "clinica",
       specialty_id: initialData?.specialty_id || "",
       requester_type: initialData?.requester_type || "Proprietário",
       referring_clinic_name: initialData?.referring_clinic_name || "",
@@ -97,12 +109,11 @@ const getInitialFormValues = (initialData) => {
   };
 };
 
-const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async () => {}, initialData = null, professionals = [] }) => {
-  const [isLoading, setIsLoading] = useState(false);
+const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async () => {}, initialData = null, professionals = [], tenant }) => {
+  const [isLoading, setIsLoading] = useState(true);
   const [pets, setPets] = useState([]);
   const [services, setServices] = useState([]);
   const [isEditing, setIsEditing] = useState(false);
-  const [isInitializing, setIsInitializing] = useState(true);
   const [appointmentDuration, setAppointmentDuration] = useState(60);
   const [currentSpecialties, setCurrentSpecialties] = useState([]);
   const [isCustomerPopoverOpen, setIsCustomerPopoverOpen] = useState(false);
@@ -111,13 +122,23 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
 
   const { customers, fetchCustomers, isLoading: loadingCustomers } = useCustomerStore();
 
+  console.log("--- AppointmentForm RENDER --- Tenant Prop:", tenant, "isLoading:", isLoading);
+  console.log("[AppointmentForm Render] Tenant Data from Prop:", tenant);
+
+  // <<< AJUSTAR LÓGICA para usar tenant.selected_modules >>>
+  const hasClinic = tenant?.selected_modules?.includes('clinic_management');
+  const hasPetshop = tenant?.selected_modules?.includes('petshop');
+  const showServiceTypeSelector = !!(hasClinic && hasPetshop);
+  // <<< ATUALIZAR LOG >>>
+  console.log(`[AppointmentForm Render] Modules: ${JSON.stringify(tenant?.selected_modules)}. HasClinic: ${hasClinic}, HasPetshop: ${hasPetshop}. ShowSelector: ${showServiceTypeSelector}`);
+
   const form = useForm({
-      defaultValues: getInitialFormValues(null) // Define valores iniciais
+      defaultValues: getInitialFormValues(initialData, tenant)
   });
 
-  // Watch the current status field for highlighting buttons
   const currentStatus = form.watch('status'); 
-  const currentProfessionalId = form.watch('professionalId'); // Watch professionalId
+  const currentProfessionalId = form.watch('professionalId');
+  const selectedServiceModule = form.watch('serviceModule');
 
   useEffect(() => {
     if (!currentProfessionalId) {
@@ -151,8 +172,9 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
     }
   }, []);
 
-  const loadServices = useCallback(async (serviceType) => {
-    if (!serviceType) {
+  const loadServices = useCallback(async (moduleToLoad) => {
+    if (!moduleToLoad) {
+        console.warn("[loadServices] Módulo não fornecido. Limpando serviços.");
         setServices([]);
         return;
     }
@@ -163,21 +185,23 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
         setServices([]);
         return;
     }
-    console.log(`[loadServices] Loading services type '${serviceType}' for tenant '${tenantId}'`);
+    console.log(`[loadServices] Loading services for module '${moduleToLoad}' for tenant '${tenantId}'`);
+    setServices([]);
+
     try {
       const servicesCollection = collection(db, 'services');
       const q = query(
         servicesCollection,
         where("tenant_id", "==", tenantId),
-        where("module", "==", serviceType),
+        where("module", "==", moduleToLoad),
         where("is_active", "==", true)
       );
       const querySnapshot = await getDocs(q);
       const servicesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      console.log(`[loadServices] Services loaded for ${serviceType}:`, servicesData);
+      console.log(`[loadServices] Services loaded for ${moduleToLoad}:`, servicesData);
       setServices(servicesData || []);
     } catch (error) {
-      console.error("Erro detalhado ao carregar serviços:", error);
+      console.error(`Erro detalhado ao carregar serviços para o módulo ${moduleToLoad}:`, error);
       toast({ title: "Erro", description: "Não foi possível carregar os serviços.", variant: "destructive" });
       setServices([]);
     } 
@@ -187,9 +211,14 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
       console.log(`[handleCustomerChange] Customer changed to: ${customerId}`);
       form.setValue("pet_id", "");
     setIsLoading(true);
-    await loadPets(customerId);
-    setIsLoading(false);
-  }, [form, loadPets]); 
+    try {
+      await loadPets(customerId);
+    } catch (error) {
+      console.error("[handleCustomerChange] Error during loadPets:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [form, loadPets]);
 
   const recalculateEndTime = useCallback((startTimeString, durationMinutes, selectedDate) => {
     if (!startTimeString || !selectedDate || !durationMinutes || durationMinutes <= 0) {
@@ -221,168 +250,102 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
     }
   }, []);
 
-  // --- useEffect para resetar e carregar dados ao abrir/fechar --- 
   useEffect(() => {
     if (!isOpen) {
-      console.log("[AppointmentForm Close Effect] Resetting state.");
-      form.reset(getInitialFormValues(null));
+      console.log("[AppointmentForm Close Effect] Resetting state and form.");
+      form.reset(getInitialFormValues(null, null));
       setIsEditing(false);
       setPets([]);
       setServices([]);
       setCurrentSpecialties([]);
       setAppointmentDuration(60);
-      setIsInitializing(true);
+      setIsLoading(true);
+    }
+  }, [isOpen, form]);
+
+  useEffect(() => {
+    console.log("[DEBUG Service Field] Main useEffect RUNNING. isOpen:", isOpen, "Tenant ID:", tenant?.id, "InitialData Service ID:", initialData?.service_id, "InitialData Service Module:", initialData?.service_type || initialData?.module);
+
+    if (!isOpen) return;
+    if (!tenant) {
+      console.log("[DEBUG Service Field] Waiting for tenant prop...");
+      setIsLoading(true);
       return;
     }
 
-    console.log("[AppointmentForm Open Effect] Initializing...");
-            setIsLoading(true);
-            setIsInitializing(true);
+    console.log("[DEBUG Service Field] Tenant prop available. Proceeding...");
+    setIsLoading(true);
     const editing = !!initialData?.appointmentId;
     setIsEditing(editing);
 
-            const tenantId = localStorage.getItem('current_tenant');
-            if (!tenantId) {
-                toast({ title: "Erro", description: "ID da loja não encontrado.", variant: "destructive"});
-                setIsLoading(false);
-                setIsInitializing(false);
-                return;
-            }
+    const initialValues = getInitialFormValues(initialData || null, tenant);
+    console.log("[DEBUG Service Field] Values used for form.reset:", initialValues);
+    form.reset(initialValues);
+    console.log("[DEBUG Service Field] Value of service_id AFTER form.reset:", form.getValues('service_id'));
 
     const loadCoreData = async () => {
-        console.log("[AppointmentForm Open Effect] Loading core data...");
-            try {
-                const customerPromise = fetchCustomers({ tenant_id: tenantId });
-                const serviceTypeToLoad = initialData?.service_type || initialData?.type || 'clinica';
-                const servicesPromise = loadServices(serviceTypeToLoad);
-            const petsPromise = editing && initialData?.customer_id
-                ? loadPets(initialData.customer_id)
+        console.log("[DEBUG Service Field] loadCoreData START. Editing:", editing);
+        try {
+            const tenantId = tenant.id;
+            const customerPromise = fetchCustomers({ tenant_id: tenantId });
+
+            let initialModuleToLoad = form.getValues('serviceModule'); 
+            console.log(`[DEBUG Service Field] Initial module from form after reset: ${initialModuleToLoad}`);
+            const shouldShowSelector = !!(tenant?.selected_modules?.includes('clinic_management') && tenant?.selected_modules?.includes('petshop'));
+            if (!shouldShowSelector) { 
+               initialModuleToLoad = tenant?.selected_modules?.includes('clinic_management') ? 'clinica' : 'petshop';
+               console.log(`[DEBUG Service Field] Overriding module based on single tenant module: ${initialModuleToLoad}`);
+               if(form.getValues('serviceModule') !== initialModuleToLoad) {
+                   form.setValue('serviceModule', initialModuleToLoad);
+                   console.log(`[DEBUG Service Field] form.setValue for serviceModule called.`);
+               }
+            }
+            console.log(`[DEBUG Service Field] Final module to load services for: ${initialModuleToLoad}`);
+            const servicesPromise = loadServices(initialModuleToLoad);
+
+            const petsPromise = editing && initialValues.customer_id 
+                ? loadPets(initialValues.customer_id)
                 : Promise.resolve();
 
             await Promise.all([
                     customerPromise,
-                    servicesPromise,
+                    servicesPromise, 
                     petsPromise
                 ]);
-            console.log("[AppointmentForm Open Effect] Core data loading promises resolved."); 
+             // <<< LOG APÓS PROMISES RESOLVEREM >>>
+            console.log("[DEBUG Service Field] loadCoreData Promises resolved. Current services state:", services);
+            console.log("[DEBUG Service Field] Value of service_id AFTER promises:", form.getValues('service_id'));
 
         } catch (error) {
-             console.error("[AppointmentForm Open Effect] Error during data loading:", error);
+             console.error("[DEBUG Service Field] loadCoreData Error:", error);
              toast({ title: "Erro", description: "Falha ao carregar dados necessários.", variant: "destructive" });
-             setIsLoading(false); 
-             setIsInitializing(false); 
         } finally {
-            console.log("[AppointmentForm Open Effect] Finished.");
-            setIsLoading(false);
-            setTimeout(() => {
-                setIsInitializing(false);
-                console.log("[AppointmentForm Open Effect FINALLY] isInitializing set to false.");
-            }, 50); 
+             console.log("[DEBUG Service Field] loadCoreData FINALLY. Current isLoading state:", isLoading);
+             setIsLoading(false);
+             console.log("[DEBUG Service Field] loadCoreData FINALLY - setIsLoading(false) called.");
         }
     };
 
     loadCoreData();
 
-    return () => {
-        setPets([]);
-        setServices([]);
-    }
+  }, [isOpen, tenant?.id, initialData]);
 
-  }, [isOpen, initialData, fetchCustomers, loadServices, loadPets, form, toast]);
-
-  // --- Effect 2: Reset Form When Core Data (excluding specialties) is Ready ---
   useEffect(() => {
-    // Exit if modal is not open or still loading base data
-    if (!isOpen || isLoading) {
-      return;
-    }
+      if (!tenant || isLoading || !showServiceTypeSelector || !isOpen) return;
 
-    // Determine if base data required for reset is ready (Customers, Services, Pets if needed)
-    const customersReady = customers.length > 0 || !isEditing; // Customers always needed or if creating new
-    const servicesReady = services.length > 0 || !isEditing; // Services always needed or if creating new
-    const petsReady = (isEditing && initialData?.customer_id) ? pets.length > 0 : true; // Pets ready if not needed or loaded
+      console.log(`[Service Module Watcher] Module changed to: ${selectedServiceModule}. Reloading services...`);
+      loadServices(selectedServiceModule)
+          .finally(() => setIsLoading(false));
 
-    console.log(`[Form Reset Effect - Part 1] Checking base readiness: isOpen=${isOpen}, isLoading=${isLoading}, customersReady=${customersReady}, servicesReady=${servicesReady}, petsReady=${petsReady}, isEditing=${isEditing}`);
+      // <<< ADICIONAR RESET do service_id AQUI >>>
+      // Quando o módulo muda, o serviço anterior não é mais válido.
+      console.log("[Service Module Watcher] Resetting service_id field.");
+      form.setValue('service_id', ''); 
 
-    // Proceed only if BASE data (without specialties) is ready
-    if (customersReady && servicesReady && petsReady) {
-      console.log("[Form Reset Effect - Part 1] Base data ready. Performing form.reset...");
+  }, [tenant, selectedServiceModule, showServiceTypeSelector, isOpen, loadServices]);
 
-      let calculatedEndTime = null;
-      const baseValues = getInitialFormValues(initialData || null);
-
-      if (baseValues.service_id && services.length > 0) {
-        const selectedService = services.find(s => s.id === baseValues.service_id);
-        const duration = selectedService?.duration || 60;
-        setAppointmentDuration(duration);
-        calculatedEndTime = recalculateEndTime(baseValues.startTime, duration, baseValues.date);
-                    } else {
-        setAppointmentDuration(60);
-        calculatedEndTime = recalculateEndTime(baseValues.startTime, 60, baseValues.date);
-      }
-
-      const finalEndTime = initialData?.end
-        ? format(new Date(initialData.end), "HH:mm")
-        : (calculatedEndTime || baseValues.endTime);
-
-      const finalResetValues = {
-        ...baseValues,
-        endTime: finalEndTime,
-      };
-
-      // Reset the form HERE, without waiting for specialties
-      form.reset(finalResetValues);
-      console.log("[Form Reset Effect - Part 1] form.reset performed with:", finalResetValues);
-
-                        } else {
-      console.log("[Form Reset Effect - Part 1] Waiting for base data...");
-      // Keep initializing true if base data isn't ready, might need reset if reopening?
-      // if (!isInitializing) setIsInitializing(true); // Let the next effect handle initializing flag
-    }
-
-  // Dependencies: React ONLY to modal opening and initialData changes.
-  // The necessary lists (customers, services) should be available from Effect 1 by the time this runs.
-  }, [isOpen, initialData, form, isEditing, services, customers, recalculateEndTime, setAppointmentDuration]);
-
-  // --- Effect 3: Set Initializing Flag when ALL Data (including specialties if required) is Ready ---
   useEffect(() => {
-      // If modal closed, ensure initializing is true
-      if (!isOpen) {
-          if (!isInitializing) setIsInitializing(true);
-          return;
-      }
-
-      // If still loading core data, keep initializing true
-      if (isLoading) {
-          if (!isInitializing) setIsInitializing(true);
-          return;
-      }
-
-      // Check readiness of all required data streams
-      const customersReady = customers.length > 0 || !isEditing;
-      const servicesReady = services.length > 0 || !isEditing;
-      const petsReady = (isEditing && initialData?.customer_id) ? pets.length > 0 : true;
-      const professionalRequiresSpecialties = isEditing && initialData?.professionalId && professionals.find(p => p.id === initialData.professionalId)?.specialties?.length > 0;
-      const specialtiesReady = professionalRequiresSpecialties ? currentSpecialties.length > 0 : true;
-
-      console.log(`[Form Init Effect - Part 2] Checking FINAL readiness: customersReady=${customersReady}, servicesReady=${servicesReady}, petsReady=${petsReady}, professionalRequiresSpecialties=${professionalRequiresSpecialties}, specialtiesReady=${specialtiesReady}`);
-
-      // Set initializing to false ONLY when everything is confirmed ready
-      if (customersReady && servicesReady && petsReady && specialtiesReady) {
-          console.log("[Form Init Effect - Part 2] All data confirmed ready. Setting isInitializing=false.");
-          setIsInitializing(false);
-      } else {
-          console.log("[Form Init Effect - Part 2] Waiting for full data readiness...");
-          // Ensure initializing stays true if anything is still pending
-          if (!isInitializing) setIsInitializing(true);
-      }
-
-  // This effect depends on all data streams and loading/editing states
-  }, [isOpen, isLoading, isEditing, initialData, customers, services, pets, professionals, currentSpecialties, isInitializing]);
-
-  // --- Effect for ESC Key Handling ---
-  useEffect(() => {
-    if (!isOpen) return; // Only run when modal is open
+    if (!isOpen) return;
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
@@ -391,14 +354,13 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
             console.log("[ESC Handler] Form is dirty. Asking for confirmation.");
           if (window.confirm("Você tem alterações não salvas. Deseja fechar mesmo assim?")) {
             console.log("[ESC Handler] User confirmed closing with dirty form.");
-            onClose(); // Close if user confirms
+            onClose();
           } else {
             console.log("[ESC Handler] User cancelled closing with dirty form.");
-            // Do nothing if user cancels
           }
         } else {
           console.log("[ESC Handler] Form is not dirty. Closing directly.");
-          onClose(); // Close directly if form is not dirty
+          onClose();
         }
       }
     };
@@ -406,17 +368,19 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
     document.addEventListener('keydown', handleKeyDown);
     console.log("[ESC Handler] Event listener added.");
 
-    // Cleanup function
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
       console.log("[ESC Handler] Event listener removed.");
     };
-  // Depend on isOpen, onClose, and formState (specifically isDirty)
-  }, [isOpen, onClose, form.formState.isDirty]); // Re-run if isDirty changes while modal is open
+  }, [isOpen, onClose, form.formState.isDirty]);
 
   const onSubmit = async (formData) => {
+    console.log("[onSubmit START] formData received by handleSubmit:", formData);
     console.log("[onSubmit] Form data received:", formData);
     setIsLoading(true);
+
+    const statusAtual = form.getValues('status'); 
+    console.log(`[onSubmit] Current status obtained via getValues: ${statusAtual}`);
 
     const { 
       date, 
@@ -434,7 +398,6 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
       price,
       transport_required,
       secondary_procedures_notes,
-      status: currentStatus 
     } = formData;
 
     if (!customer_id || !pet_id || !service_id || !professionalId || !date || !startTime || !endTime) {
@@ -476,12 +439,14 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
         return;
     }
     
-    const tenantId = localStorage.getItem('current_tenant');
+    const tenantId = tenant?.id;
     if (!tenantId) {
         toast({ title: "Erro", description: "ID da loja não encontrado para salvar.", variant: "destructive" });
       setIsLoading(false);
       return;
     }
+
+    const serviceModuleType = selectedService?.module || formData.serviceModule || (tenant?.hasClinicalModule ? 'clinica' : 'petshop');
 
     const appointmentData = { 
         tenant_id: tenantId,
@@ -491,12 +456,12 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
         pet_name: selectedPet.name || 'Pet Desconhecido',
         service_id: service_id,
         service_name: selectedService.name || 'Serviço Desconhecido',
-        service_type: selectedService.module || 'clinica',
+        service_type: serviceModuleType,
         professionalId: professionalId,
         professionalName: selectedProfessional.title || 'Profissional Desconhecido',
         specialty_id: specialty_id || null,
-      start_time: Timestamp.fromDate(startDateTime),
-      end_time: Timestamp.fromDate(endDateTime),
+        start_time: Timestamp.fromDate(startDateTime),
+        end_time: Timestamp.fromDate(endDateTime),
         notes: notes || "",
         requester_type: requester_type,
         referring_clinic_name: referring_clinic_name || "",
@@ -504,7 +469,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
         price: Number(price) || 0,
         transport_required: transport_required || false,
         secondary_procedures_notes: secondary_procedures_notes || "",
-        status: isEditing ? currentStatus : "scheduled", 
+        status: statusAtual,
         updated_at: Timestamp.now()
      };
 
@@ -521,6 +486,54 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
           const appointmentRef = doc(db, "appointments", initialData.appointmentId);
           await updateDoc(appointmentRef, appointmentData);
           savedAppointmentId = initialData.appointmentId;
+
+          if (appointmentData.status === 'arrived') {
+            try {
+              console.log(`[onSubmit] Fetching service details for ID: ${appointmentData.service_id}`);
+              const serviceDetails = await Service.get(appointmentData.service_id);
+              
+              if (serviceDetails?.module === 'clinica') {
+                console.log(`[onSubmit] Service is Clinica. Checking/creating consultation for appointment ${savedAppointmentId}...`);
+                let existingConsultations = [];
+                try {
+                  existingConsultations = await consultationService.filter({ appointmentId: savedAppointmentId });
+                  console.log(`[onSubmit - Clinica] Found ${existingConsultations.length} existing consultations.`);
+                } catch (filterError) {
+                  console.error(`[onSubmit - Clinica] Error filtering existing consultations:`, filterError);
+                }
+
+                if (existingConsultations.length === 0) {
+                  console.log(`[onSubmit - Clinica] No existing consultation found. Proceeding to create...`);
+                  try {
+                    const consultationData = {
+                      appointmentId: savedAppointmentId,
+                      petId: appointmentData.pet_id,
+                      customerId: appointmentData.customer_id,
+                      tenantId: appointmentData.tenant_id,
+                      status: 'pending', 
+                    };
+                    console.log("[onSubmit - Clinica] Data for consultationService.create:", consultationData);
+                    const createdConsult = await consultationService.create(consultationData);
+                    console.log(`[onSubmit - Clinica] consultationService.create called. Result:`, createdConsult);
+                  } catch (consultError) {
+                    console.error(`[onSubmit - Clinica] consultationService.create FAILED:`, consultError);
+                  }
+                } else {
+                  console.log(`[onSubmit - Clinica] Consultation/Episode already exists. Skipping creation.`);
+                }
+              } else if (serviceDetails?.module === 'petshop') {
+                console.log(`[onSubmit] Service is Petshop. OS creation logic to be added here for appointment ${savedAppointmentId}.`);
+              } else {
+                console.warn(`[onSubmit] Unknown service module '${serviceDetails?.module}' or service details not found for ID ${appointmentData.service_id}. No Consultation or OS created.`);
+              }
+            } catch (serviceError) {
+              console.error(`[onSubmit] Failed to fetch service details for ID ${appointmentData.service_id}:`, serviceError);
+              toast({ title: "Erro Interno", description: "Não foi possível verificar o tipo de serviço para criar o registro associado.", variant: "warning" });
+            }
+          } else {
+            console.log(`[onSubmit] Status is NOT 'arrived' (${appointmentData.status}). No consultation or OS created.`);
+          }
+
           toast({ title: "Sucesso", description: "Agendamento atualizado." });
       } else {
           console.log("[AppointmentForm] Creating new appointment...");
@@ -588,8 +601,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
         await deleteDoc(appointmentRef);
         console.log(`[handleDelete] Appointment ${appointmentIdToDelete} deleted successfully.`);
         toast({ title: "Sucesso", description: "Agendamento removido permanentemente." });
-        onClose(); // Fecha o modal após a exclusão
-        // A AgendaPage deve atualizar automaticamente via onSnapshot
+        onClose();
     } catch (error) {
         console.error(`[handleDelete] Error deleting appointment ${appointmentIdToDelete}:`, error);
         toast({ title: "Erro ao Remover", description: `Não foi possível remover o agendamento: ${error.message}`, variant: "destructive" });
@@ -622,7 +634,6 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
 
-             {/* --- Status Buttons (Only when Editing) --- */}
              {isEditing && (
                 <div className="space-y-2">
                   <FormLabel>Status</FormLabel>
@@ -643,9 +654,21 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                             isCurrent ? "ring-2 ring-offset-1 ring-indigo-500" : "opacity-70 hover:opacity-90"
                           )}
                           onClick={() => {
+                            if (statusKey === 'arrived') {
+                              const appointmentDate = form.getValues('date');
+                              if (appointmentDate && isFuture(startOfDay(new Date(appointmentDate)))) {
+                                toast({
+                                  title: "Ação não permitida",
+                                  description: "Não é possível marcar 'Chegou' para um agendamento futuro. Por favor, reagende para a data/hora atual se necessário.",
+                                  variant: "warning",
+                                });
+                                return;
+                              }
+                            }
                             form.setValue('status', statusKey, { shouldDirty: true, shouldValidate: true });
                           }}
                           aria-pressed={isCurrent}
+                          disabled={isLoading}
                         >
                           {IconComponent && <IconComponent className="w-3 h-3 mr-1 flex-shrink-0" />} 
                           {style.label}
@@ -660,17 +683,47 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                   />
                 </div>
              )}
-             {/* --- End Status Buttons --- */}
 
-              {/* --- Main Fields Grid (adjust cols and spans) --- */}
-              {/* Row 1: Customer(Combobox), Pet, Service, Professional */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* Customer (Combobox lg:col-span-1) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                {showServiceTypeSelector && (
+                   <FormField
+                     control={form.control}
+                     name="serviceModule"
+                     render={({ field }) => (
+                       <FormItem className="lg:col-span-1">
+                         <FormLabel>Módulo *</FormLabel>
+                         <Select
+                           onValueChange={(value) => {
+                             field.onChange(value);
+                           }}
+                           value={field.value}
+                           disabled={!tenant || isLoading}
+                         >
+                           <FormControl>
+                             <SelectTrigger>
+                               <SelectValue placeholder="Selecione o módulo" />
+                             </SelectTrigger>
+                           </FormControl>
+                           <SelectContent>
+                             <SelectItem value="clinica">
+                               <span className="flex items-center"><HeartPulse className="mr-2 h-4 w-4 text-red-500"/> Clínica</span>
+                             </SelectItem>
+                             <SelectItem value="petshop">
+                               <span className="flex items-center"><Briefcase className="mr-2 h-4 w-4 text-blue-500"/> Petshop</span>
+                             </SelectItem>
+                           </SelectContent>
+                         </Select>
+                         <FormMessage />
+                       </FormItem>
+                     )}
+                   />
+                )}
+
                 <FormField
                   control={form.control}
                   name="customer_id"
                   render={({ field }) => (
-                    <FormItem className="lg:col-span-1">
+                    <FormItem className={`lg:col-span-1 ${!showServiceTypeSelector ? 'lg:col-start-1' : ''}`}>
                       <FormLabel>Cliente *</FormLabel>
                       <Popover open={isCustomerPopoverOpen} onOpenChange={setIsCustomerPopoverOpen}>
                         <PopoverTrigger asChild>
@@ -683,7 +736,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                                 "w-full justify-between",
                                 !field.value && "text-muted-foreground"
                               )}
-                              disabled={isInitializing || loadingCustomers}
+                              disabled={!tenant || isLoading || loadingCustomers}
                             >
                               {field.value
                                 ? customers.find(
@@ -695,16 +748,14 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                           </FormControl>
                         </PopoverTrigger>
                         <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[--radix-popover-content-available-height] p-0">
-                          <Command shouldFilter={false}> {/* Disable default filtering, we'll filter manually */}
+                          <Command shouldFilter={false}>
                             <CommandInput 
                               placeholder="Buscar cliente..."
                               onValueChange={(search) => {
-                                // Optional: Implement dynamic fetching/filtering here if needed
-                                // For now, filtering is handled visually by mapping below
                                 console.log("Customer search:", search); 
                               }}
                             />
-                             {/* Display Loading state */}
+                            
                             {loadingCustomers && (
                               <div className="p-2 text-center text-sm text-muted-foreground">Carregando...</div>
                             )}
@@ -712,11 +763,9 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                              <CommandEmpty>Nenhum cliente encontrado.</CommandEmpty>
                               <CommandGroup>
                                 {customers
-                                  // Simple client-side filter (adjust if fetching dynamically)
-                                  // .filter(customer => customer.full_name.toLowerCase().includes(commandInputRef?.current?.value?.toLowerCase() || ''))
                                   .map((customer) => (
                                     <CommandItem
-                                      value={customer.id} // Use ID for value
+                                      value={customer.id}
                                       key={customer.id}
                                       onSelect={(currentValue) => {
                                         field.onChange(currentValue === field.value ? "" : currentValue);
@@ -743,7 +792,6 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                   )}
                 />
 
-                {/* Pet (lg:col-span-1) */}
                 <FormField
                   control={form.control}
                   name="pet_id"
@@ -754,7 +802,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                         <Select 
                             onValueChange={field.onChange} 
                         value={field.value}
-                            disabled={!form.getValues("customer_id") || isLoading || isInitializing}
+                            disabled={!tenant || !form.getValues("customer_id") || isLoading}
                       >
                         <FormControl>
                           <SelectTrigger>
@@ -775,7 +823,6 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                   }}
                 />
 
-                {/* Service (lg:col-span-1) */}
                 <FormField
                   control={form.control}
                   name="service_id"
@@ -800,11 +847,11 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                             }
                         }}
                         value={field.value}
-                               disabled={isInitializing}
+                               disabled={!tenant || isLoading || services.length === 0}
                       >
                         <FormControl>
                           <SelectTrigger>
-                               <SelectValue placeholder="Selecione o serviço" />
+                               <SelectValue placeholder={services.length === 0 ? "Nenhum serviço disponível" : "Selecione o serviço"} />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
@@ -820,7 +867,6 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                      );
                   }}
                 />
-                {/* Professional (lg:col-span-1) - MOVED HERE */}
                 <FormField
                     control={form.control}
                   name="professionalId"
@@ -831,7 +877,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                       <Select
                         onValueChange={field.onChange}
                         value={field.value}
-                             disabled={isInitializing}
+                             disabled={!tenant || isLoading}
                       >
                         <FormControl>
                           <SelectTrigger>
@@ -853,13 +899,9 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                 />
               </div>
               
-              {/* --- Specialty, Date, Time Grid --- */}
-              {/* Row 2: Specialty(1), Date(1), Start Time(1), End Time(1) */}
-              {/* Added items-end for vertical alignment */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                {/* Specialty (lg:col-span-1) */}
-              <FormField
-                control={form.control}
+                <FormField
+                  control={form.control}
                   name="specialty_id"
                   render={({ field }) => {
                      return (
@@ -868,7 +910,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                     <Select
                         onValueChange={field.onChange}
                         value={field.value}
-                               disabled={isInitializing || currentSpecialties.length === 0}
+                               disabled={!tenant || isLoading || currentSpecialties.length === 0}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -888,8 +930,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                        );
                   }}
               />
-                 {/* Date (lg:col-span-1) - MOVED HERE */}
-                  <FormField
+                 <FormField
                     control={form.control}
                     name="date"
                     render={({ field }) => (
@@ -903,7 +944,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                               className={`w-full pl-3 text-left font-normal ${
                                 !field.value && "text-muted-foreground"
                               }`}
-                              disabled={isInitializing}
+                              disabled={!tenant || isLoading}
                             >
                               {field.value ? (
                                 format(field.value, "PPP", { locale: ptBR }) 
@@ -928,7 +969,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                                     form.setValue('endTime', newEndTime);
                                 }
                             }}
-                            disabled={(date) => date < new Date().setHours(0,0,0,0) || isInitializing}
+                            disabled={(date) => !tenant || isLoading || date < new Date().setHours(0,0,0,0)}
                               initialFocus
                             />
                           </PopoverContent>
@@ -937,8 +978,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                       </FormItem>
                     )}
                   />
-                 {/* Start Time (lg:col-span-1) - MOVED HERE */}
-                  <FormField
+                 <FormField
                     control={form.control}
                     name="startTime"
                     render={({ field }) => (
@@ -957,7 +997,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                                    form.setValue('endTime', newEndTime);
                                }
                               }}
-                              disabled={isInitializing} 
+                              disabled={!tenant || isLoading} 
                           />
                         </FormControl>
                         <FormMessage />
@@ -965,8 +1005,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                     )}
                   />
 
-                {/* End Time (lg:col-span-1) - MOVED HERE */}
-                  <FormField
+                <FormField
                     control={form.control}
                     name="endTime"
                   render={({ field }) => (
@@ -977,7 +1016,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                             type="time" 
                             {...field} 
                             readOnly 
-                            disabled={isInitializing} 
+                            disabled={!tenant || isLoading} 
                             className="bg-gray-100" 
                         />
                       </FormControl>
@@ -987,8 +1026,6 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                 />
               </div>
               
-              {/* Additional Details Grid 1 (adjust cols - already lg:grid-cols-4) */}
-              {/* Add some top margin to visually separate from the row above now that h3 is gone */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-6">
                 <FormField
                   control={form.control}
@@ -996,7 +1033,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                     render={({ field }) => (
                       <FormItem>
                       <FormLabel>Tipo Solicitante</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value} disabled={isInitializing}>
+                      <Select onValueChange={field.onChange} value={field.value} disabled={!tenant || isLoading}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Selecione o tipo" />
@@ -1020,7 +1057,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                     <FormItem>
                       <FormLabel>Nome Clínica Indicadora</FormLabel>
                       <FormControl>
-                        <Input placeholder="Nome da clínica (se aplicável)" {...field} disabled={isInitializing} />
+                        <Input placeholder="Nome da clínica (se aplicável)" {...field} disabled={!tenant || isLoading} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -1034,7 +1071,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                     <FormItem>
                       <FormLabel>Tabela de Preço</FormLabel>
                       <FormControl>
-                        <Input placeholder="Nome/ID da tabela" {...field} disabled={isInitializing} />
+                        <Input placeholder="Nome/ID da tabela" {...field} disabled={!tenant || isLoading} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -1056,7 +1093,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                             placeholder="0.00" 
                             {...field} 
                             onChange={e => field.onChange(parseFloat(e.target.value) || 0)}
-                            disabled={isInitializing} 
+                            disabled={!tenant || isLoading} 
                           />
                         </FormControl>
                         <FormMessage />
@@ -1073,7 +1110,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                            <Checkbox
                              checked={field.value}
                              onCheckedChange={field.onChange}
-                             disabled={isInitializing}
+                             disabled={!tenant || isLoading}
                            />
                          </FormControl>
                          <FormLabel className="!mt-0">Necessita Transporte?</FormLabel>
@@ -1093,7 +1130,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                         placeholder="Descreva serviços adicionais ou observações relevantes..."
                         className="resize-y"
                         {...field}
-                        disabled={isInitializing}
+                        disabled={!tenant || isLoading}
                       />
                     </FormControl>
                     <FormMessage />
@@ -1112,7 +1149,7 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                         placeholder="Observações internas sobre o agendamento..."
                         className="resize-y"
                         {...field}
-                        disabled={isInitializing}
+                        disabled={!tenant || isLoading}
                       />
                     </FormControl>
                     <FormMessage />
@@ -1120,15 +1157,14 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                 )}
               />
 
-             {/* --- Botão de Confirmação WhatsApp --- */}
              {isEditing && (currentStatus === 'scheduled' || currentStatus === 'confirmed') && (
-                <div className="mt-6 pt-6 border-t"> {/* Linha divisória e espaçamento */} 
+                <div className="mt-6 pt-6 border-t">
                   <Button
-                    type="button" // Importante: não submeter o form
+                    type="button"
                     variant="outline"
-                    onClick={handleSendWahaClick} // Função que definimos antes
-                    disabled={isSendingWaha || isInitializing} // Estados que definimos antes
-                    className="text-green-700 border-green-500 hover:bg-green-50" // Estilo sugerido
+                    onClick={handleSendWahaClick}
+                    disabled={isSendingWaha || isLoading}
+                    className="text-green-700 border-green-500 hover:bg-green-50"
                   >
                     {isSendingWaha ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MessageSquareText className="mr-2 h-4 w-4" />} 
                     {isSendingWaha ? "Enviando..." : "Confirmar por WhatsApp"}
@@ -1136,18 +1172,16 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                   <p className="text-xs text-muted-foreground mt-1">Envia uma mensagem de confirmação para o cliente via WAHA.</p>
                 </div>
              )}
-             {/* --- Fim Botão WhatsApp --- */} 
 
-              {/* Botões de Ação Finais */}
               <div className="flex justify-end space-x-4 pt-4 border-t mt-6">
-                <Button type="button" variant="outline" onClick={handleDelete} disabled={isLoading || isInitializing || isDeleting || isSendingWaha} className="w-full sm:w-auto">
+                <Button type="button" variant="outline" onClick={handleDelete} disabled={isLoading || isDeleting || isSendingWaha} className="w-full sm:w-auto">
                   {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Remover
                 </Button>
-                <Button type="button" variant="outline" onClick={onClose} disabled={isLoading || isInitializing}>
+                <Button type="button" variant="outline" onClick={onClose} disabled={isLoading}>
                   Cancelar
                 </Button>
-                <Button type="submit" disabled={isLoading || isInitializing}>
+                <Button type="submit" disabled={isLoading}>
                   {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   {isEditing ? "Salvar Alterações" : "Criar Agendamento"}
                 </Button>
@@ -1185,6 +1219,7 @@ AppointmentForm.propTypes = {
     secondary_procedures_notes: PropTypes.string,
   }),
   professionals: PropTypes.array,
+  tenant: PropTypes.object
 };
 
 export default AppointmentForm;

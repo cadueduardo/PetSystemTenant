@@ -2,7 +2,6 @@ import { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import PropTypes from 'prop-types';
 import { getFirestore, collection, query, where, getDocs, limit, doc, getDoc } from 'firebase/firestore';
 import { useAuth } from '@/context/AuthContext';
-import { getAuth } from 'firebase/auth';
 
 // Criar contexto do tenant
 const TenantContext = createContext(null);
@@ -120,6 +119,9 @@ export function TenantProvider({ children }) {
     error,
     setCurrentTenant
   }), [currentTenant, isLoading, error]);
+
+  // Log para verificar o valor exato sendo passado ao Provider
+  console.log("[TenantProvider Value Check] Value being provided:", { tenant: value.currentTenant?.id, isLoading: value.isLoading, error: value.error });
 
   return (
     <TenantContext.Provider value={value}>
