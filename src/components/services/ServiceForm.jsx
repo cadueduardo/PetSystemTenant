@@ -22,45 +22,94 @@ import {
 import { toast } from "@/components/ui/use-toast";
 import { Loader2 } from "lucide-react";
 import { UploadFile } from "@/api/integrations";
+import { collection, query, onSnapshot } from "firebase/firestore";
+import { db } from "@/lib/firebaseConfig";
+
+const NO_SPECIALTY_VALUE = "__NONE__";
 
 const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     description: "",
-    category: "banho",
+    category: "grooming",
     price: "",
     duration: "",
     points: "",
     image_url: "",
     tenant_id: localStorage.getItem('current_tenant'),
     module: "petshop",
-    is_active: true
+    is_active: true,
+    required_specialty: NO_SPECIALTY_VALUE,
   });
 
+  const [availableSpecialties, setAvailableSpecialties] = useState([]);
+  const [loadingSpecialties, setLoadingSpecialties] = useState(false);
+
   useEffect(() => {
-    if (service) {
-      setFormData({
-        ...service,
+    console.log("[ServiceForm Edit Effect] Running. Service:", service, "Open:", open);
+
+    if (service && open) {
+      const initialEditData = {
+        name: service.name || "",
+        description: service.description || "",
+        module: service.module || "petshop",
+        category: service.category || (service.module === 'clinica' ? 'consultation' : 'grooming'),
         price: service.price?.toString() || "",
         duration: service.duration?.toString() || "",
         points: service.points?.toString() || "",
-      });
-    } else {
-      setFormData({
+        image_url: service.image_url || "",
+        tenant_id: service.tenant_id || localStorage.getItem('current_tenant'),
+        is_active: service.is_active !== undefined ? service.is_active : true,
+        required_specialty: service.required_specialty || NO_SPECIALTY_VALUE,
+      };
+      console.log("[ServiceForm Edit Effect] Setting form data for EDIT:", initialEditData);
+      setFormData(initialEditData);
+    } else if (!service && open) {
+      const initialCreateData = {
         name: "",
         description: "",
-        category: "banho",
+        module: "petshop",
+        category: "grooming",
         price: "",
         duration: "",
         points: "",
         image_url: "",
         tenant_id: localStorage.getItem('current_tenant'),
-        module: "petshop",
-        is_active: true
-      });
+        is_active: true,
+        required_specialty: NO_SPECIALTY_VALUE,
+      };
+      console.log("[ServiceForm Edit Effect] Setting form data for CREATE:", initialCreateData);
+      setFormData(initialCreateData);
+    } else {
+      console.log("[ServiceForm Edit Effect] Not open or no service defined when expected. Skipping setFormData.");
     }
+
   }, [service, open]);
+
+  useEffect(() => {
+    if (!open) {
+      setAvailableSpecialties([]);
+      return;
+    }
+
+    setLoadingSpecialties(true);
+    const specialtiesCollection = collection(db, 'sharedVetSpecialties');
+    const q = query(specialtiesCollection);
+
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const specialtiesData = querySnapshot.docs.map(doc => doc.data().name);
+      setAvailableSpecialties(specialtiesData.sort());
+      setLoadingSpecialties(false);
+    }, (err) => {
+      console.error("Erro ao buscar especialidades no ServiceForm: ", err);
+      toast({ variant: "destructive", title: "Erro", description: "Falha ao carregar especialidades." });
+      setLoadingSpecialties(false);
+    });
+
+    return () => unsubscribe();
+
+  }, [open, db]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -95,11 +144,18 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
   };
 
   const handleModuleChange = (value) => {
-    setFormData(prev => ({
+    console.log(`[ServiceForm handleModuleChange] Module changed by user to: ${value}`);
+    
+    setFormData(prev => {
+      const newState = {
       ...prev,
       module: value,
-      category: value === "clinica" ? "consultation" : "grooming"
-    }));
+        category: value === "clinica" ? "consultation" : "grooming",
+        required_specialty: value === "clinica" ? prev.required_specialty : NO_SPECIALTY_VALUE,
+      };
+      console.log("[ServiceForm handleModuleChange] New state calculated:", newState);
+      return newState;
+    });
   };
 
   const handleSubmit = async (e) => {
@@ -113,8 +169,15 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
         price: parseFloat(formData.price),
         duration: parseInt(formData.duration),
         points: parseInt(formData.points),
-        tenant_id: tenantId
+        tenant_id: tenantId,
+        required_specialty: formData.module === 'clinica' && formData.required_specialty !== NO_SPECIALTY_VALUE 
+                          ? formData.required_specialty 
+                          : null,
       };
+
+      if (serviceData.required_specialty === null) {
+        delete serviceData.required_specialty;
+      }
 
       if (service?.id) {
         await Service.update(service.id, serviceData);
@@ -198,6 +261,7 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
               <Select
                 value={formData.category}
                 onValueChange={(value) => setFormData(prev => ({ ...prev, category: value }))}
+                required
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Selecione uma categoria" />
@@ -288,6 +352,38 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
               </div>
             </div>
           </div>
+
+          {formData.module === 'clinica' && (
+            <div className="space-y-2">
+              <Label htmlFor="required_specialty">Especialidade Requerida*</Label>
+              
+              {loadingSpecialties ? (
+                <div className="h-10 px-3 py-2 border border-input bg-background rounded-md text-sm text-muted-foreground flex items-center">
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Carregando especialidades...
+                </div>
+              ) : (
+                <Select
+                  name="required_specialty"
+                  value={formData.required_specialty}
+                  onValueChange={(value) => setFormData(prev => ({ ...prev, required_specialty: value }))}
+                  required
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={"Selecione a especialidade..."} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_SPECIALTY_VALUE}>Nenhuma (Atendimento Clínico Geral)</SelectItem>
+                    {availableSpecialties.map((spec) => (
+                      <SelectItem key={spec} value={spec}>
+                        {spec}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+          )}
 
           <DialogFooter>
             <Button

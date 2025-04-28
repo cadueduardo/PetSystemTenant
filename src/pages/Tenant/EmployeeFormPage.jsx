@@ -12,7 +12,8 @@ import { AlertCircle, Loader2 } from 'lucide-react';
 import { Switch } from "@/components/ui/switch";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { useToast } from "@/components/ui/use-toast";
-import { db, auth, functions } from '@/lib/firebaseConfig';
+import { db, functions } from '@/lib/firebaseConfig';
+import { Checkbox } from "@/components/ui/checkbox";
 // TODO: Adicionar import para componente MultiSelect/Checkbox para especialidades
 // TODO: Adicionar import para Switch/Checkbox para status
 
@@ -27,6 +28,10 @@ console.log("--- MODULE LOAD: src/pages/Tenant/EmployeeFormPage.jsx ---");
 const sendEmployeeInviteCallable = httpsCallable(functions, 'sendEmployeeInvite');
 // Função para resetar senha (se aplicável)
 // const resetEmployeePasswordCallable = httpsCallable(functions, 'resetEmployeePassword');
+
+// Definir constante para a opção "Outros"
+const OTHER_SPECIALTY_VALUE = '__OTHER__';
+const OTHER_SPECIALTY_LABEL = 'Outros (Especificar)';
 
 function EmployeeFormPage() {
   // --- Log para depurar renderização do componente ---
@@ -46,7 +51,10 @@ function EmployeeFormPage() {
     telefone: '',
     perfilId: '',       // ID do perfil selecionado
     especialidades: [],
+    crmv: '', // <-- Adicionar CRMV ao estado inicial
     status: true,        // Default para ativo
+    is_clinico_geral: false,
+    is_especialista: false,
   });
 
   // Estado para armazenar a lista de perfis disponíveis (com id, nome, tipo)
@@ -180,7 +188,10 @@ function EmployeeFormPage() {
                 telefone: employeeData.telefone || '',
                 perfilId: employeeData.perfilId || '',
                 especialidades: employeeData.especialidades || [],
+                crmv: employeeData.crmv || '', // <-- Popular CRMV na edição
                 status: employeeData.status !== undefined ? employeeData.status : true,
+                is_clinico_geral: employeeData.is_clinico_geral || false,
+                is_especialista: employeeData.is_especialista || false,
             });
             if (employeeData.perfilId) {
                 // Tenta encontrar no estado local primeiro (pode ter carregado no outro useEffect)
@@ -239,11 +250,19 @@ function EmployeeFormPage() {
     // Encontra o objeto completo do perfil selecionado na lista `profiles`
     const profileData = profiles.find(p => p.id === profileId) || null;
     setSelectedProfile(profileData); // Atualiza o estado do perfil selecionado
+    
+    const isVeterinario = profileData?.tipo === 'medico_veterinario'; // <-- Usar novo tipo
+    
     setFormData(prev => ({ 
         ...prev, 
         perfilId: profileId, 
-        // Limpa especialidades se o novo perfil não for veterinário
-        especialidades: profileData?.tipo === 'veterinario' ? prev.especialidades : []
+        // Limpa especialidades e crmv se o novo perfil não for Médico Veterinário
+        especialidades: isVeterinario ? prev.especialidades : [],
+        crmv: isVeterinario ? prev.crmv : '', // <-- Limpar CRMV também
+        // Limpa também as flags de tipo de atendimento
+        is_clinico_geral: isVeterinario ? prev.is_clinico_geral : false,
+        is_especialista: isVeterinario ? prev.is_especialista : false,
+        status: profileData?.tipo === 'veterinario' ? prev.status : true,
     })); 
   };
   
@@ -359,11 +378,23 @@ function EmployeeFormPage() {
       email: formData.email.trim().toLowerCase(),
       telefone: formData.telefone.trim(),
       perfilId: formData.perfilId,
-      especialidades: selectedProfile?.tipo === 'veterinario' ? formData.especialidades : [],
+      especialidades: selectedProfile?.tipo === 'medico_veterinario' ? formData.especialidades : [],
+      crmv: selectedProfile?.tipo === 'medico_veterinario' ? formData.crmv.trim() : '',
       status: formData.status,
       tenantId: currentTenantId,
       updated_at: serverTimestamp()
     };
+
+    // Adicionar flags apenas se for médico veterinário
+    if (selectedProfile?.tipo === 'medico_veterinario') {
+      dataToSave.is_clinico_geral = formData.is_clinico_geral;
+      dataToSave.is_especialista = formData.is_especialista;
+    } else {
+      // Garantir que as flags não sejam enviadas se não for vet
+      delete dataToSave.is_clinico_geral;
+      delete dataToSave.is_especialista;
+    }
+
     console.log("[EmployeeFormPage] Data prepared for saving:", dataToSave);
 
     try {
@@ -431,7 +462,7 @@ function EmployeeFormPage() {
 
   // Renderização principal do formulário (quando TenantContext está ok)
   return (
-    <div className="container mx-auto p-4 max-w-3xl">
+    <div className="container mx-auto p-4">
       <Card>
         <CardHeader>
           <CardTitle>{isEditing ? "Editar Colaborador" : "Adicionar Novo Colaborador"}</CardTitle>
@@ -493,15 +524,35 @@ function EmployeeFormPage() {
                       </Select>
                     </div>
 
-                    {/* Especialidades - Condicional baseado no tipo do perfil SELECIONADO */}
-                    {selectedProfile?.tipo === 'veterinario' && (
+                    {/* Agrupar campos específicos de Veterinário */}
+                    {selectedProfile?.tipo === 'medico_veterinario' && ( // <-- Usar novo tipo aqui
+                      <>
+                        {/* CRMV */}
+                        <div className="space-y-2">
+                            <Label htmlFor="crmv">CRMV</Label>
+                            <Input 
+                                id="crmv" 
+                                name="crmv" 
+                                value={formData.crmv} 
+                                onChange={handleInputChange} 
+                                placeholder="Ex: CRMV-SP 12345"
+                                required
+                            />
+                        </div>
+                        {/* Especialidades */}
                       <div className="space-y-2">
-                        <Label htmlFor="especialidades">Especialidades (Veterinário)</Label>
+                            <Label htmlFor="especialidades">Especialidades</Label>
                         <MultiSelect
-                           options={availableSpecialties}
-                           selected={formData.especialidades || []}
-                           onChange={handleSpecialtyChange}
-                           onOtherToggle={handleOtherSpecialtyToggle}
+                               // Combinar especialidades do DB com a opção "Outros"
+                               options={[
+                                   ...availableSpecialties.map(spec => ({ label: spec, value: spec })), // Mapear para {label, value}
+                                   { label: OTHER_SPECIALTY_LABEL, value: OTHER_SPECIALTY_VALUE } // Adicionar opção "Outros"
+                               ]}
+                               // Garantir que o valor '__OTHER__' não seja passado como selecionado
+                               selected={formData.especialidades?.filter(s => s !== OTHER_SPECIALTY_VALUE) || []} 
+                               onChange={handleSpecialtyChange} // Mantém o handler atual
+                               onOtherToggle={handleOtherSpecialtyToggle} // Mantém o handler atual
+                               otherOptionValue={OTHER_SPECIALTY_VALUE} // <-- INFORMAR AO COMPONENTE QUAL É O VALOR "OUTROS"
                            placeholder="Selecionar especialidades..."
                            disabled={loading || submitting || loadingProfiles || loadingSpecialties || loadingEditData}
                            className="mb-4"
@@ -521,6 +572,34 @@ function EmployeeFormPage() {
                           </div>
                         )}
                       </div>
+
+                        {/* <<< NOVOS CHECKBOXES para Tipo de Atendimento >>> */}
+                        <div className="space-y-3 pt-2">
+                           <Label>Tipo de Atendimento Realizado</Label>
+                           <div className="flex items-center space-x-2">
+                             <Checkbox
+                               id="is_clinico_geral"
+                               checked={formData.is_clinico_geral}
+                               onCheckedChange={(checked) => setFormData(prev => ({ ...prev, is_clinico_geral: checked }))}
+                             />
+                             <Label htmlFor="is_clinico_geral" className="font-normal cursor-pointer">
+                               Atende como Clínico Geral
+                             </Label>
+                           </div>
+                           <div className="flex items-center space-x-2">
+                             <Checkbox
+                               id="is_especialista"
+                               checked={formData.is_especialista}
+                               onCheckedChange={(checked) => setFormData(prev => ({ ...prev, is_especialista: checked }))}
+                             />
+                             <Label htmlFor="is_especialista" className="font-normal cursor-pointer">
+                               Atende como Especialista
+                             </Label>
+                           </div>
+                         </div>
+                         {/* <<< FIM NOVOS CHECKBOXES >>> */}
+
+                      </>
                     )}
 
                     {/* Status - Sempre visível */}

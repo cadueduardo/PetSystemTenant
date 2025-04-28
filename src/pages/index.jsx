@@ -34,7 +34,8 @@ import Hospitalization from "./Hospitalization";
 
 import Services from "./Services";
 
-import Sales from "./Sales";
+// import Sales from "./Sales"; // Comentar import antigo
+import Cashier from "./Cashier"; // <<< Adicionar import novo
 
 import EditCustomer from "./EditCustomer";
 
@@ -63,7 +64,7 @@ import TenantSettings from "./TenantSettings";
 
 import AdminTools from "./AdminTools";
 
-import SalesHistory from "./SalesHistory";
+import ChargeHistoryPage from './ChargeHistory'; // <<< ADICIONAR IMPORT NOVO
 
 import AdminDashboard from "./AdminDashboard";
 
@@ -250,8 +251,8 @@ function PagesContent() {
                 <Route path="financeiro" element={<Financial />} />
                 <Route path="internacao" element={<Hospitalization />} />
                 <Route path="servicos" element={<Services />} />
-                <Route path="vendas" element={<Sales />} />
-                <Route path="vendas/historico" element={<SalesHistory />} />
+                <Route path="caixa" element={<Cashier />} />
+                <Route path="caixa/historico" element={<ChargeHistoryPage />} />
                 <Route path="agendamento/editar/:id" element={<EditAppointment />} />
                 <Route path="agendamento/novo" element={<AppointmentForm />} />
                 <Route path="prontuario/novo" element={<MedicalRecordForm />} />

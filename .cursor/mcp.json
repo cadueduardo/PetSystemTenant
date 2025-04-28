@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "remote-project-memory": {
+      "url": "http://168.75.101.234:3001/sse",
+      "description": "Servidor para memória e contexto entre projetos na VM"
+    }
+  }
+}

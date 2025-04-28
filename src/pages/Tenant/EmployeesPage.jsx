@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getFirestore, collection, query, where, onSnapshot, doc, getDoc, deleteDoc, updateDoc, documentId, getDocs } from 'firebase/firestore';
+import { getFirestore, collection, query, where, onSnapshot, doc, getDocs, deleteDoc, updateDoc } from 'firebase/firestore';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -62,6 +62,7 @@ function EmployeesPage() {
     const employeesCollection = collection(db, 'colaboradores');
     const q = query(employeesCollection, where("tenantId", "==", tenantId));
 
+    // --- RESTAURAR onSnapshot ---
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       console.log('[EmployeesPage] Collaborators snapshot received.');
       const employeesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -78,7 +79,28 @@ function EmployeesPage() {
       console.log('[EmployeesPage] Unsubscribing from collaborators snapshot.');
       unsubscribe(); // Limpa o listener ao desmontar ou antes de re-executar
     };
-    // --- FIM FIRESTORE QUERY ---
+    // --- FIM RESTAURAÇÃO ---
+
+    // const fetchWithGetDocs = async () => {
+    //   try {
+    //     console.log('[EmployeesPage] Fetching collaborators with getDocs...');
+    //     const querySnapshot = await getDocs(q);
+    //     console.log('[EmployeesPage] Collaborators getDocs successful.');
+    //     const employeesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    //     setEmployees(employeesData);
+    //     fetchProfileNames(employeesData);
+    //     setLoading(false);
+    //   } catch (err) {
+    //     console.error("[EmployeesPage] Error fetching collaborators with getDocs: ", err);
+    //     setError("Falha ao carregar colaboradores (getDocs). Tente novamente mais tarde.");
+    //     setLoading(false);
+    //   }
+    // };
+
+    // fetchWithGetDocs(); // Chama a função assíncrona
+
+    // // Como não há mais listener, não precisamos retornar uma função de limpeza
+
 
   }, [tenantContext.isLoading, tenantContext.currentTenant, tenantContext.error, db]); // Dependências corretas
 
@@ -103,19 +125,26 @@ function EmployeesPage() {
         console.log("[fetchProfileNames] Fetching missing profiles:", profilesToFetch);
         // Busca apenas os documentos de perfis pertencentes ao tenant atual
         const profilesRef = collection(db, 'perfis');
-        const q = query(profilesRef, where(documentId(), 'in', profilesToFetch), where('tenantId', '==', currentTenantId));
+        // Simplificação: Buscar todos os perfis do tenant e filtrar depois
+        // const q = query(profilesRef, where(documentId(), 'in', profilesToFetch), where('tenantId', '==', currentTenantId)); 
+        const q_all_tenant_profiles = query(profilesRef, where('tenantId', '==', currentTenantId));
         
         try {
-            const querySnapshot = await getDocs(q);
-            querySnapshot.forEach(docSnap => {
+            // const querySnapshot = await getDocs(q);
+            const allProfilesSnapshot = await getDocs(q_all_tenant_profiles);
+
+            // Filtra e mapeia os perfis necessários no lado do cliente
+            allProfilesSnapshot.forEach(docSnap => {
+                if (profilesToFetch.includes(docSnap.id)) { // Verifica se o ID está na lista que precisamos
                 if (docSnap.exists()) {
                     newProfilesMap[docSnap.id] = docSnap.data().nome; 
                 } else {
-                    // Este caso não deveria ocorrer com a query acima, mas por segurança:
+                        // Este caso é menos provável aqui, mas mantém por segurança
                     newProfilesMap[docSnap.id] = 'Perfil não encontrado'; 
+                    }
                 }
             });
-            // Preenche IDs não encontrados (caso a query não retorne por algum motivo)
+            // Preenche IDs não encontrados (caso a query não retorne ou não esteja na lista inicial)
             profilesToFetch.forEach(id => {
                 if (!newProfilesMap[id]) {
                      newProfilesMap[id] = 'Perfil inválido/não pertence';

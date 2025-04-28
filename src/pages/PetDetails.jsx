@@ -125,7 +125,7 @@ export default function DetalhesPet() {
           console.warn("[PetDetails] Prontuário (recordNumber) ou Tenant ID não encontrado. Não foi possível buscar histórico de episódios.");
           setHistoricoLiveVet([]);
         }
-      } catch (error) {
+        } catch (error) {
         console.error("Erro ao carregar histórico de episódios clínicos:", error);
         setHistoricoLiveVet([]);
       }
@@ -158,7 +158,12 @@ export default function DetalhesPet() {
   }, [petId, storeParam, navigate]);
 
   const voltar = () => {
-    navigate(createPageUrl(`Customers?store=${storeParam}`));
+    if (dono?.id) {
+      navigate(`/tenant/cliente/${dono.id}`);
+    } else {
+      console.warn("[PetDetails] Dono não encontrado, voltando para a lista de clientes.");
+      navigate(createPageUrl(`Customers?store=${storeParam}`));
+    }
   };
 
   const editar = () => {
@@ -225,22 +230,22 @@ export default function DetalhesPet() {
                 {historicoLiveVet.map((ep, index) => (
                   <React.Fragment key={ep.id}>
                     <li className="border p-3 rounded-md bg-muted/20">
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
                           <p className="font-medium">
                             <span className="text-primary font-semibold">{ep.episodeNumber || `ID: ${ep.id}`}</span> - 
                             {ep.data}
-                          </p>
-                          <p className="text-sm text-gray-500">
+                        </p>
+                        <p className="text-sm text-gray-500">
                             Motivo: {ep.motivo}
-                          </p>
-                          <p className="text-sm text-gray-500">
+                        </p>
+                        <p className="text-sm text-gray-500">
                             Diagnóstico (Resumo): {ep.diagnosticoResumo}
-                          </p>
-                        </div>
-                        <div className="text-right flex flex-col items-end">
+                        </p>
+                      </div>
+                      <div className="text-right flex flex-col items-end">
                           <div className="flex gap-2 mt-2">
-                            <Button 
+                            <Button
                               variant="outline"
                               size="sm"
                               onClick={() => handleOpenHistoryModal(ep)}
@@ -251,7 +256,7 @@ export default function DetalhesPet() {
                         </div>
                       </div>
                       {index < historicoLiveVet.length - 1 && <Separator className="my-3" />}
-                    </li>
+                  </li>
                   </React.Fragment>
                 ))}
               </ul>

@@ -5,7 +5,7 @@ import {
     // PetMock,             // <<< Não usado mais
     // ServiceMock,         // <<< Removido - Usaremos Serviço Firebase
     // QueueServiceMock,    // <<< Removido - Usaremos Serviço Firebase
-    ProductMock,        
+    // ProductMock, // <<< REMOVER IMPORT DO MOCK >>>
     // TenantMock, // <-- REMOVE MOCK
     // CustomizationMock, // <-- REMOVE MOCK
     FinancialConfigMock,
@@ -44,7 +44,7 @@ import { cancellationReasonService } from './firebase/cancellationReasonService'
 // <<< Adiciona imports dos novos serviços >>>
 import { serviceService } from './firebase/serviceService';
 import { queueService } from './firebase/queueService'; 
-// <-- IMPORT NEW SERVICES -->
+import { productService } from './firebase/productService'; // <<< ADICIONAR IMPORT DO NOVO SERVIÇO >>>
 import { tenantService } from './firebase/tenantService';
 import { customizationService } from './firebase/customizationService';
 import { consultationService } from './firebase/consultationService';
@@ -57,7 +57,7 @@ export const Pet = petService;
 export const Service = serviceService; // <<< Usa Serviço Firebase
 export const Appointment = appointmentService;
 export const QueueService = queueService; // <<< Usa Serviço Firebase
-export const Product = ProductMock;
+export const Product = productService; // <<< USAR O SERVIÇO FIREBASE >>>
 export const Tenant = tenantService; // <-- USE REAL SERVICE
 export const Customization = customizationService; // <-- USE REAL SERVICE
 export const FinancialConfig = FinancialConfigMock;

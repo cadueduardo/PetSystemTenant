@@ -1,12 +1,11 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Tenant } from "@/api/entities";
-import { User } from "@/api/entities";
+import { useTenant } from "@/components/tenant/TenantContext";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Loader2, Plus, X } from "lucide-react";
+import { Loader2, Plus, X, Construction } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -17,32 +16,12 @@ import AccountsPayable from "../components/financial/AccountsPayable";
 import AccountsReceivable from "../components/financial/AccountsReceivable";
 import CashFlow from "../components/financial/CashFlow";
 
-// Função segura para verificar e executar chamadas
-const safeApiCall = async (entity, method, params = null, fallback = null) => {
-  try {
-    if (!entity || typeof entity[method] !== 'function') {
-      console.error(`Entity or method ${method} is not defined`);
-      return fallback;
-    }
-    
-    if (params !== null) {
-      return await entity[method](params);
-    } else {
-      return await entity[method]();
-    }
-  } catch (error) {
-    console.error(`Error in API call ${method}:`, error);
-    return fallback;
-  }
-};
-
 export default function FinancialPage() {
   const navigate = useNavigate();
-  const [isLoading, setIsLoading] = useState(true);
-  const [tenant, setTenant] = useState(null);
+  const { currentTenant, isLoading: isTenantLoading, error: tenantError } = useTenant();
   const [activeTab, setActiveTab] = useState("cashflow");
   const [showTransactionModal, setShowTransactionModal] = useState(false);
-  const [storeParam, setStoreParam] = useState("");
+  const [hasAccess, setHasAccess] = useState(true);
   const [transactionForm, setTransactionForm] = useState({
     description: "",
     amount: "",
@@ -55,65 +34,18 @@ export default function FinancialPage() {
   });
 
   useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
-    setIsLoading(true);
-    try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const storeParam = urlParams.get('store');
-      setStoreParam(storeParam);
-      
-      if (storeParam === 'demo') {
-        const demoTenant = {
-          id: "demo-tenant",
-          company_name: "PetManager Demo",
-          selected_modules: ["clinic_management", "petshop", "financial", "transport"],
-          status: "active",
-          access_url: 'demo'
-        };
-        
-        setTenant(demoTenant);
-        
-        if (!demoTenant.selected_modules.includes("financial")) {
-          navigate(createPageUrl("Dashboard?store=demo"));
-          return;
-        }
-        
-        setIsLoading(false);
-        return;
-      } else if (storeParam) {
-        try {
-          const tenants = await safeApiCall(Tenant, "filter", { access_url: storeParam }, []);
-          if (tenants && tenants.length > 0) {
-            const currentTenant = tenants[0];
-            setTenant(currentTenant);
-            
-            if (!currentTenant.selected_modules.includes("financial")) {
-              navigate(createPageUrl(`Dashboard?store=${storeParam}`));
-              return;
-            }
-          } else {
-            navigate(createPageUrl("Landing"));
-            return;
-          }
-        } catch (error) {
-          console.error("Erro ao buscar tenant:", error);
-          navigate(createPageUrl("Landing"));
-          return;
-        }
+    if (!isTenantLoading && currentTenant) {
+      if (!currentTenant.selected_modules?.includes("financial")) {
+        console.warn("[FinancialPage] Acesso negado: Módulo financeiro não habilitado.");
+        setHasAccess(false);
       } else {
-        navigate(createPageUrl("Landing"));
-        return;
+        setHasAccess(true);
       }
-    } catch (error) {
-      console.error("Erro ao carregar dados:", error);
+    } else if (!isTenantLoading && !currentTenant) {
+      console.error("[FinancialPage] Tenant não encontrado no contexto.");
       navigate(createPageUrl("Landing"));
-    } finally {
-      setIsLoading(false);
     }
-  };
+  }, [currentTenant, isTenantLoading, navigate]);
 
   const handleNewTransaction = () => {
     setShowTransactionModal(true);
@@ -162,9 +94,11 @@ export default function FinancialPage() {
   const handleTransactionSubmit = (e) => {
     e.preventDefault();
     
+    console.log("Salvando transação:", transactionForm);
+    
     toast({
-      title: "Transação registrada",
-      description: "A transação foi registrada com sucesso."
+      title: "Transação registrada (Simulação)",
+      description: "A funcionalidade de salvar ainda não está implementada."
     });
     
     setShowTransactionModal(false);
@@ -180,10 +114,36 @@ export default function FinancialPage() {
     });
   };
 
-  if (isLoading) {
+  if (isTenantLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  if (tenantError) {
+    return (
+      <div className="container mx-auto py-6 text-center text-red-600">
+        Erro ao carregar dados do tenant: {tenantError}
+      </div>
+    );
+  }
+
+  if (!currentTenant) {
+    return (
+      <div className="container mx-auto py-6 text-center text-gray-500">
+        Redirecionando...
+      </div>
+    );
+  }
+
+  if (!hasAccess) {
+    return (
+      <div className="container mx-auto py-10 flex flex-col items-center justify-center text-center">
+        <Construction className="h-16 w-16 text-yellow-500 mb-4" />
+        <h1 className="text-2xl font-bold mb-2">Módulo em Desenvolvimento</h1>
+        <p className="text-gray-600">O módulo financeiro está sendo preparado e estará disponível em breve.</p>
       </div>
     );
   }
@@ -209,15 +169,15 @@ export default function FinancialPage() {
         </TabsList>
         
         <TabsContent value="cashflow" className="mt-0">
-          <CashFlow />
+          <CashFlow tenantId={currentTenant.id} />
         </TabsContent>
         
         <TabsContent value="receivable" className="mt-0">
-          <AccountsReceivable />
+          <AccountsReceivable tenantId={currentTenant.id} />
         </TabsContent>
         
         <TabsContent value="payable" className="mt-0">
-          <AccountsPayable />
+          <AccountsPayable tenantId={currentTenant.id} />
         </TabsContent>
       </Tabs>
 

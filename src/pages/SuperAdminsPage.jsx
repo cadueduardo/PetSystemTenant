@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { httpsCallable } from 'firebase/functions';
-import { auth, functions } from '@/lib/firebaseConfig';
+import { functions } from '@/lib/firebaseConfig';
 import {
   Box, TextField, Button, Typography, Paper, CircularProgress, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton
@@ -31,14 +31,19 @@ function SuperAdminsPage() {
     setListError(null);
     try {
       const result = await listSuperAdminsFunction();
-      if (result.data.status === 'success' && Array.isArray(result.data.admins)) {
-        console.log("Admin list fetched successfully:", result.data.admins);
+
+      // Check if admins is a proper array within result.data
+      if (result.data && Array.isArray(result.data.admins)) {
+        console.log("Admin list array received successfully:", result.data.admins);
         setAdminList(result.data.admins);
       } else {
-        throw new Error(result.data.message || 'Falha ao buscar lista de administradores.');
+        // Log the actual structure received if the check fails
+        console.error("[fetchAdmins] Check failed. Expected 'result.data.admins' to be an array. Received result:", result);
+        throw new Error('Falha ao buscar ou formato inesperado da lista de administradores.');
       }
     } catch (err) {
       console.error("Erro ao buscar lista de Super Admins:", err);
+      // Use the specific error message if available, otherwise use the generic one
       setListError(err.message || "Não foi possível carregar a lista de administradores.");
       setAdminList([]);
     } finally {

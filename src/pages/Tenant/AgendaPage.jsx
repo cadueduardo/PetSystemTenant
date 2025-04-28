@@ -616,6 +616,21 @@ export default function AgendaPage() {
               const newEpisodeRef = await addDoc(episodesCollectionRef, episodeData);
               console.log(`[handleUpdateStatusFromMenu] Episode created successfully with ID ${newEpisodeRef.id} in path ${episodesPath}.`);
               
+              // <<< INÍCIO: ATUALIZAR AGENDAMENTO COM O ID DO EPISÓDIO >>>
+              try {
+                  console.log(`[handleUpdateStatusFromMenu] Updating appointment ${eventId} with episodeId: ${newEpisodeRef.id}`);
+                  await updateDoc(appointmentRef, { // Reusa appointmentRef que já temos
+                      currentEpisodeId: newEpisodeRef.id,
+                      prontuarioId: prontuarioId // Garante que prontuarioId também está no appointment
+                  });
+                   console.log(`[handleUpdateStatusFromMenu] Appointment ${eventId} updated successfully with episodeId.`);
+              } catch (updateError) {
+                  console.error(`[handleUpdateStatusFromMenu] Failed to update appointment ${eventId} with episodeId:`, updateError);
+                  // Não reverter a criação do episódio, mas logar o erro.
+                  toast({ title: "Aviso", description: "Falha ao vincular episódio ao agendamento.", variant: "warning" });
+              }
+              // <<< FIM: ATUALIZAR AGENDAMENTO COM O ID DO EPISÓDIO >>>
+
               // <<< INÍCIO: ADICIONAR ITEM À FILA DE ATENDIMENTO (CONDICIONAL) >>>
               try {
                   // 1. Buscar detalhes do Serviço para checar o módulo
@@ -826,14 +841,14 @@ export default function AgendaPage() {
 
       {/* Appointment Form Modal */} 
       {isAppointmentModalOpen && (
-        <AppointmentForm 
-          isOpen={isAppointmentModalOpen}
-          onClose={handleCloseModal}
-          onSave={handleSaveAppointment}
-          initialData={modalInitialData}
-          professionals={professionals} // <-- From Zustand store
+      <AppointmentForm 
+        isOpen={isAppointmentModalOpen}
+        onClose={handleCloseModal}
+        onSave={handleSaveAppointment}
+        initialData={modalInitialData}
+        professionals={professionals} // <-- From Zustand store
           tenant={tenantContext.currentTenant} // <<< PASS TENANT AS PROP >>>
-        />
+      />
       )}
 
       {/* --- Menu de Contexto --- */}
@@ -856,4 +871,4 @@ export default function AgendaPage() {
       {/* --- Fim Menu de Contexto --- */}
     </div>
   );
-}
+} 

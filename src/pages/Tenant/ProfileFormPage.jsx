@@ -10,6 +10,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { useTenant } from '@/components/tenant/TenantContext';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+// Importar Accordion
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 // Importar do arquivo de configuração
 import { PERMISSION_RESOURCES, PERMISSION_ACTIONS, formatPermission, parsePermission, AVAILABLE_MODULES } from '@/config/permissions';
 
@@ -38,13 +40,30 @@ console.log("--- MODULE LOAD: src/pages/Tenant/ProfileFormPage.jsx ---");
 // --------------------------------------------------------
 
 // --- Adicionar Tipos de Perfil Predefinidos ---
+// Organizar por Módulo para clareza
 const PROFILE_TYPES = [
-  { value: 'veterinario', label: 'Veterinário' },
-  { value: 'recepcionista', label: 'Recepcionista' },
-  { value: 'gerente', label: 'Gerente' },
-  { value: 'financeiro', label: 'Financeiro' },
-  { value: 'banho_tosa', label: 'Banho & Tosa' },
-  { value: 'outro', label: 'Outro' },
+  // --- Clínica ---
+  { value: 'medico_veterinario', label: 'Médico Veterinário', module: 'clinica' },
+  { value: 'enfermeiro_veterinario', label: 'Enfermeiro Veterinário', module: 'clinica' },
+  { value: 'auxiliar_tecnico_veterinario', label: 'Auxiliar Técnico Veterinário', module: 'clinica' },
+
+  // --- Petshop ---
+  { value: 'banhista_tosador', label: 'Banhista/Tosador', module: 'petshop' }, // Renomeado de 'banho_tosa'
+  { value: 'auxiliar_petshop', label: 'Auxiliar de Pet Shop', module: 'petshop' },
+  { value: 'groomer', label: 'Groomer', module: 'petshop' },
+  { value: 'dog_walker', label: 'Dog Walker', module: 'petshop' },
+  { value: 'pet_sitter', label: 'Pet Sitter', module: 'petshop' },
+  { value: 'treinador_animais', label: 'Treinador de Animais', module: 'petshop' },
+  { value: 'adestrador', label: 'Adestrador', module: 'petshop' },
+
+  // --- Ambos / Administrativo ---
+  { value: 'recepcionista', label: 'Recepcionista', module: 'ambos' },
+  { value: 'vendedor', label: 'Vendedor', module: 'ambos' },
+  { value: 'gerente', label: 'Gerente', module: 'admin' },
+  { value: 'financeiro', label: 'Financeiro', module: 'admin' },
+  { value: 'contador', label: 'Contador', module: 'admin' },
+  { value: 'administrador', label: 'Administrador', module: 'admin' },
+  { value: 'outro', label: 'Outro', module: 'admin' }, // Mantido para flexibilidade
 ];
 // ------------------------------------------
 
@@ -184,22 +203,40 @@ function ProfileFormPage() {
   };
 
    // Handler para checkboxes de permissões
-   const handlePermissionChange = (resourceId, actionId) => {
+   const handlePermissionChange = (resourceId, actionId, specificValue = null) => {
         setPermissionSelections(prev => {
             const newSelections = { ...prev };
             if (!newSelections[resourceId]) newSelections[resourceId] = {};
-            // Se estiver desmarcando 'ler', desmarca 'escrever' também (opcional)
-            // if (actionId === 'ler' && !newSelections[resourceId]?.[actionId]) {
-            //    if (newSelections[resourceId]) newSelections[resourceId]['escrever'] = false;
-            // }
-            // Se estiver marcando 'escrever', marca 'ler' também (opcional)
-            // if (actionId === 'escrever' && !newSelections[resourceId]?.[actionId]) {
-            //     if (!newSelections[resourceId]) newSelections[resourceId] = {};
-            //     newSelections[resourceId]['ler'] = true;
-            // }
-            newSelections[resourceId][actionId] = !newSelections[resourceId]?.[actionId]; // Toggle
+
+            // Se specificValue for passado (do clique em "Ambos"), usa ele. Senão, faz o toggle.
+            const newValue = specificValue !== null ? specificValue : !newSelections[resourceId]?.[actionId];
+            newSelections[resourceId][actionId] = newValue; 
+
+            // Lógica removida de forçar ler/escrever juntos, pois "Ambos" cuidará disso.
+            // // Se estiver desmarcando 'ler', desmarca 'escrever' também (opcional)
+            // // if (actionId === 'ler' && !newSelections[resourceId]?.[actionId]) {
+            // //    if (newSelections[resourceId]) newSelections[resourceId]['escrever'] = false;
+            // // }
+            // // Se estiver marcando 'escrever', marca 'ler' também (opcional)
+            // // if (actionId === 'escrever' && !newSelections[resourceId]?.[actionId]) {
+            // //     if (!newSelections[resourceId]) newSelections[resourceId] = {};
+            // //     newSelections[resourceId]['ler'] = true;
+            // // }
+            // newSelections[resourceId][actionId] = !newSelections[resourceId]?.[actionId]; // Toggle
+
             return newSelections;
         });
+   };
+
+   // Handler específico para a checkbox "Ambos"
+   const handleAmbosChange = (resourceId) => {
+        const currentSelections = permissionSelections[resourceId] || {};
+        const currentlyBothChecked = currentSelections.ler && currentSelections.escrever;
+        const targetState = !currentlyBothChecked; // Se ambos estão marcados, desmarca ambos; senão, marca ambos.
+        
+        // Chama handlePermissionChange para Ler e Escrever com o novo estado desejado
+        handlePermissionChange(resourceId, 'ler', targetState);
+        handlePermissionChange(resourceId, 'escrever', targetState);
    };
 
   // Função para converter seleções em array de strings de permissão
@@ -232,7 +269,7 @@ function ProfileFormPage() {
 
     const currentTenantId = tenantContext.currentTenant?.id;
     if (!currentTenantId) {
-      console.error("[ProfileFormPage] Submit Error: Tenant ID missing from context.");
+      console.error("[handleSubmit - ProfileForm] Submit Error: Tenant ID missing from context.");
       setError("Erro crítico: ID da Loja não encontrado. Não é possível salvar.");
       return;
     }
@@ -377,27 +414,52 @@ function ProfileFormPage() {
                <div className="space-y-4">
                 <Label>Permissões Detalhadas</Label>
                 {formData.modulos.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Selecione um módulo para ver as permissões.</p>
+                  <p className="text-sm text-muted-foreground">Selecione um módulo acima para definir as permissões.</p>
                 ) : (
-                  PERMISSION_RESOURCES
-                    .filter(resource => resource.modules.some(rm => formData.modulos.includes(rm))) // Filtra por módulo selecionado
+                  <Accordion type="multiple" className="w-full space-y-2">
+                    {AVAILABLE_MODULES
+                      .filter(module => formData.modulos.includes(module.id)) // Filtra apenas módulos selecionados
+                      .map(module => (
+                        <AccordionItem key={module.id} value={module.id} className="border rounded-md px-3">
+                          <AccordionTrigger className="text-base font-medium capitalize hover:no-underline py-3">{module.label}</AccordionTrigger>
+                          <AccordionContent className="pt-2 pb-3 space-y-3">
+                            {PERMISSION_RESOURCES
+                              .filter(resource => resource.modules.includes(module.id)) // Filtra recursos para ESTE módulo
                     .map(resource => (
-                      <div key={resource.id} className="space-y-2 p-3 border rounded-md">
+                                <div key={resource.id} className="space-y-2 p-3 border rounded-md bg-muted/50">
                         <Label className="font-semibold capitalize">{resource.label}</Label>
-                        <div className="flex space-x-4">
+                                  <div className="flex space-x-4 items-center">
+                                    {/* Checkbox Ambos */}
+                                    <div className="flex items-center space-x-2">
+                                      <Checkbox
+                                        id={`perm-${module.id}-${resource.id}-ambos`}
+                                        checked={!!(permissionSelections[resource.id]?.ler && permissionSelections[resource.id]?.escrever)}
+                                        onCheckedChange={() => handleAmbosChange(resource.id)} 
+                                      />
+                                      <Label htmlFor={`perm-${module.id}-${resource.id}-ambos`} className="font-normal font-medium">Ambos</Label>
+                                    </div>
+                                    <span className="text-muted-foreground">|</span>
+                                    {/* Checkboxes Ler/Escrever */}
                           {PERMISSION_ACTIONS.map(action => (
                             <div key={action} className="flex items-center space-x-2">
                               <Checkbox
-                                id={`perm-${resource.id}-${action}`}
+                                          id={`perm-${module.id}-${resource.id}-${action}`}
                                 checked={!!permissionSelections[resource.id]?.[action]}
-                                onCheckedChange={() => handlePermissionChange(resource.id, action)}
+                                          onCheckedChange={() => handlePermissionChange(resource.id, action, null)}
                               />
-                              <Label htmlFor={`perm-${resource.id}-${action}`} className="font-normal capitalize">{action}</Label>
+                                        <Label htmlFor={`perm-${module.id}-${resource.id}-${action}`} className="font-normal capitalize">{action}</Label>
                             </div>
                           ))}
                         </div>
                       </div>
-                    ))
+                              ))}
+                            {PERMISSION_RESOURCES.filter(resource => resource.modules.includes(module.id)).length === 0 && (
+                               <p className="text-sm text-muted-foreground italic">Nenhuma permissão específica encontrada para este módulo.</p>
+                            )}
+                          </AccordionContent>
+                        </AccordionItem>
+                      ))}
+                  </Accordion>
                 )}
                </div>
             </div>

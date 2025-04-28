@@ -146,11 +146,11 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
       return;
     }
     const selectedProf = professionals.find(p => p.id === currentProfessionalId);
-    if (selectedProf && selectedProf.tipo === 'veterinario' && selectedProf.specialties && selectedProf.specialties.length > 0) {
-      console.log(`[Specialty Effect Simplified] Setting specialties for ${selectedProf.title}:`, selectedProf.specialties);
+    if (selectedProf && selectedProf.tipo === 'medico_veterinario' && Array.isArray(selectedProf.specialties) && selectedProf.specialties.length > 0) {
+      console.log(`[Specialty Effect Corrected] Setting specialties for ${selectedProf.title}:`, selectedProf.specialties);
       setCurrentSpecialties(selectedProf.specialties);
     } else {
-      console.log(`[Specialty Effect Simplified] Clearing specialties for ${selectedProf?.title}`);
+      console.log(`[Specialty Effect Corrected] Clearing specialties for ${selectedProf?.title} (Type: ${selectedProf?.tipo})`);
       setCurrentSpecialties([]);
     }
   }, [currentProfessionalId, professionals]);
@@ -400,19 +400,39 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
       secondary_procedures_notes,
     } = formData;
 
-    if (!customer_id || !pet_id || !service_id || !professionalId || !date || !startTime || !endTime) {
-        toast({ title: "Campos Obrigatórios", description: "Preencha Cliente, Pet, Serviço, Profissional, Data e Horários.", variant: "destructive" });
-        setIsLoading(false);
-        return;
-    }
-
     const selectedCustomer = customers.find(c => c.id === customer_id);
     const selectedPet = pets.find(p => p.id === pet_id);
     const selectedService = services.find(s => s.id === service_id);
     const selectedProfessional = professionals.find(prof => prof.id === professionalId);
 
-    if (!selectedCustomer || !selectedPet || !selectedService || !selectedProfessional) {
-        toast({ title: "Erro de Seleção", description: "Não foi possível encontrar os dados selecionados (Cliente, Pet, Serviço ou Profissional). Tente recarregar.", variant: "destructive" });
+    if (!selectedService) {
+      toast({ title: "Erro de Seleção", description: "Serviço selecionado não encontrado. Recarregue a página.", variant: "destructive" });
+      setIsLoading(false);
+      return;
+    }
+    const requiresSpecialist = selectedService.required_specialty && selectedService.required_specialty !== '__NONE__';
+
+    let missingFields = [];
+    if (!customer_id) missingFields.push("Cliente");
+    if (!pet_id) missingFields.push("Pet");
+    if (!service_id) missingFields.push("Serviço");
+    if (requiresSpecialist && !professionalId) missingFields.push("Profissional (Especialista)");
+    if (!date) missingFields.push("Data");
+    if (!startTime) missingFields.push("Hora Início");
+    if (!endTime) missingFields.push("Hora Fim");
+
+    if (missingFields.length > 0) {
+      toast({ 
+        title: "Campos Obrigatórios", 
+        description: `Preencha: ${missingFields.join(", ")}.`, 
+        variant: "destructive" 
+      });
+      setIsLoading(false);
+      return;
+    }
+
+    if (professionalId && !selectedProfessional) { 
+        toast({ title: "Erro de Seleção", description: "Não foi possível encontrar o profissional selecionado. Tente recarregar.", variant: "destructive" });
         setIsLoading(false);
         return;
     }
@@ -457,8 +477,8 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
         service_id: service_id,
         service_name: selectedService.name || 'Serviço Desconhecido',
         service_type: serviceModuleType,
-        professionalId: professionalId,
-        professionalName: selectedProfessional.title || 'Profissional Desconhecido',
+        professionalId: professionalId || null,
+        professionalName: professionalId ? (selectedProfessional?.title || 'Profissional Inválido/Não Encontrado') : 'Nenhum Selecionado',
         specialty_id: specialty_id || null,
         start_time: Timestamp.fromDate(startDateTime),
         end_time: Timestamp.fromDate(endDateTime),
@@ -831,19 +851,42 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                        <FormItem className="lg:col-span-1">
                          <FormLabel>Serviço *</FormLabel>
                       <Select
-                        onValueChange={(value) => {
+                        onValueChange={async (value) => {
                             field.onChange(value);
-                            const selectedService = services.find(s => s.id === value);
-                                   const duration = selectedService?.duration || 60;
-                                   console.log(`[Service Change Handler] Service changed to ${value}. Found duration: ${duration}`);
-                                   setAppointmentDuration(duration);
+                            const selectedServiceData = services.find(s => s.id === value);
+                            const duration = selectedServiceData?.duration || 60;
+                            console.log(`[Service Change Handler] Service changed to ${value}. Found duration: ${duration}`);
+                            setAppointmentDuration(duration);
 
-                                   const currentStartTime = form.getValues('startTime');
-                                   const currentDate = form.getValues('date');
-                                   const newEndTime = recalculateEndTime(currentStartTime, duration, currentDate);
+                            const currentStartTime = form.getValues('startTime');
+                            const currentDate = form.getValues('date');
+                            const newEndTime = recalculateEndTime(currentStartTime, duration, currentDate);
                             if (newEndTime) {
                                  console.log(`[Service Change Handler] Set endTime to: ${newEndTime}`);
                                        form.setValue('endTime', newEndTime);
+                            }
+
+                            if (value) {
+                                try {
+                                    console.log(`[Service Change Handler] Fetching price for service ID: ${value}`);
+                                    const serviceDetails = await Service.get(value); 
+                                    if (serviceDetails && typeof serviceDetails.price === 'number') {
+                                        console.log(`[Service Change Handler] Service price found: ${serviceDetails.price}. Setting form value.`);
+                                        form.setValue('price', serviceDetails.price, {
+                                            shouldValidate: true, 
+                                            shouldDirty: true
+                                        });
+                                    } else {
+                                        console.warn(`[Service Change Handler] Service ${value} found, but price is missing or invalid.`);
+                                        form.setValue('price', 0);
+                                    }
+                                } catch (error) {
+                                    console.error(`[Service Change Handler] Error fetching service details for ID ${value}:`, error);
+                                    toast({ title: "Erro", description: "Não foi possível buscar o preço do serviço.", variant: "destructive" });
+                                    form.setValue('price', 0);
+                                }
+                            } else {
+                                form.setValue('price', 0); 
                             }
                         }}
                         value={field.value}
@@ -871,24 +914,38 @@ const AppointmentForm = ({ isOpen = false, onClose = () => {}, onSave = async ()
                     control={form.control}
                   name="professionalId"
                   render={({ field }) => {
+                     // Calculate requiresSpecialist based on the currently selected service_id
+                     const selectedServiceId = form.watch('service_id');
+                     const selectedService = services.find(s => s.id === selectedServiceId);
+                     const requiresSpecialist = !!(selectedService?.required_specialty && selectedService.required_specialty !== '__NONE__');
+
                      return (
                        <FormItem className="lg:col-span-1">
-                         <FormLabel>Profissional *</FormLabel>
-                      <Select
-                        onValueChange={field.onChange}
-                        value={field.value}
-                             disabled={!tenant || isLoading}
-                      >
-                        <FormControl>
-                          <SelectTrigger>
-                               <SelectValue placeholder="Selecione o profissional" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                             {professionals.map((prof) => (
-                               <SelectItem key={prof.id} value={prof.id}>
-                                 {prof.title} {prof.tipo ? `(${prof.tipo})` : ''}
-                               </SelectItem>
+                         <FormLabel>Profissional {requiresSpecialist ? '*' : ''}</FormLabel>
+                         <Select
+                           onValueChange={(selectedValue) => {
+                             // If the special "None" value is selected, set the form field to empty string
+                             // Otherwise, set it to the actual professional ID
+                             if (selectedValue === "__NONE__") {
+                               field.onChange(""); 
+                             } else {
+                               field.onChange(selectedValue);
+                             }
+                           }}
+                           value={field.value || ""}
+                           disabled={!tenant || isLoading}
+                         >
+                           <FormControl>
+                             <SelectTrigger>
+                               <SelectValue placeholder="Selecione (ou deixe em branco se não aplicável)" />
+                             </SelectTrigger>
+                           </FormControl>
+                           <SelectContent>
+                              <SelectItem value="__NONE__">Nenhum (Geral / Recepção)</SelectItem>
+                              {professionals.map((prof) => (
+                                <SelectItem key={prof.id} value={prof.id}>
+                                  {prof.title} {prof.tipo ? `(${prof.tipo})` : ''}
+                                </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>

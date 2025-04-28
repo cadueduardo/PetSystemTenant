@@ -288,7 +288,7 @@ export default function ServiceQueue() {
          } catch (dateError) {
              console.error("Erro ao comparar datas (Realtime):", item.id, item.populated_appointment_date, dateError);
              return false;
-         }
+      }
       });
 
       console.log(`[ServiceQueue Realtime] Setting ${finalFilteredItems.length} items for date ${selectedDate.toDateString()}`);

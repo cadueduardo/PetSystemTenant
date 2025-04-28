@@ -482,7 +482,7 @@ export default function LiveVetDashboard() {
                                 onClick={() => handleOpenRemoveModal(item)}
                               >
                                 <XCircle className="h-4 w-4" />
-                              </Button>
+                                  </Button>
                             </div>
                           </TableCell>
                         </TableRow>

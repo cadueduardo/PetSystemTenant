@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { collection, query, where, getDocs, orderBy } from "firebase/firestore";
+import { db } from "@/lib/firebaseConfig";
 import { Customer, Pet, CancellationReason } from "@/api/entities";
 import { createPageUrl } from "@/utils";
 import { toast } from "@/components/ui/use-toast";
@@ -16,6 +18,7 @@ import PetForm from "@/components/pets/PetForm";
 import CustomerForm from "@/components/customers/CustomerForm";
 import PetAvatar from "@/components/pets/PetAvatar";
 import { format, parseISO } from "date-fns";
+import { ptBR } from 'date-fns/locale';
 
 export default function CustomerDetailsPage() {
   console.log('[CustomerDetailsPage] Componente montado/renderizado.');
@@ -33,6 +36,9 @@ export default function CustomerDetailsPage() {
   const [otherReason, setOtherReason] = useState('');
   const [showOtherInput, setShowOtherInput] = useState(false);
   const [inactivationReasonName, setInactivationReasonName] = useState('Carregando motivo...');
+
+  const [financialHistory, setFinancialHistory] = useState([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 
   useEffect(() => {
     loadData();
@@ -94,6 +100,55 @@ export default function CustomerDetailsPage() {
     };
 
     fetchInactivationReason();
+
+  }, [customer]);
+
+  useEffect(() => {
+    const loadFinancialHistory = async () => {
+      if (!customer?.id) return;
+
+      console.log(`[CustomerDetailsPage] Carregando histórico financeiro para cliente: ${customer.id}`);
+      setIsLoadingHistory(true);
+      setFinancialHistory([]);
+
+      try {
+        const tenantId = localStorage.getItem('current_tenant');
+        if (!tenantId) {
+          console.error("[CustomerDetailsPage] Tenant ID não encontrado para buscar histórico financeiro.");
+          throw new Error("Tenant não identificado.");
+        }
+
+        const chargesRef = collection(db, "tenants", tenantId, "charges");
+        const q = query(
+          chargesRef, 
+          where("tutorId", "==", customer.id), 
+          where("status", "==", "paid"),
+          orderBy("paidAt", "desc")
+        );
+
+        const querySnapshot = await getDocs(q);
+        const history = [];
+        querySnapshot.forEach((doc) => {
+          history.push({ id: doc.id, ...doc.data() });
+        });
+        
+        console.log("[CustomerDetailsPage] Histórico financeiro carregado:", history);
+        setFinancialHistory(history);
+
+      } catch (error) {
+        console.error("Erro ao carregar histórico financeiro:", error);
+        toast({
+          title: "Erro",
+          description: "Não foi possível carregar o histórico financeiro.",
+          variant: "destructive"
+        });
+        setFinancialHistory([]);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
+
+    loadFinancialHistory();
 
   }, [customer]);
 
@@ -234,33 +289,27 @@ export default function CustomerDetailsPage() {
     }
   };
 
-  // <<< Função auxiliar para formatar Timestamp do Firebase >>>
-  const formatDateSafe = (timestamp) => {
-    // Tenta usar o timestamp diretamente se for válido
+  const formatDateSafe = (timestamp, includeTime = false) => {
     if (timestamp && typeof timestamp.toDate === 'function') { 
       try {
-        // <<< Adiciona HH:mm para mostrar horário >>>
-        return format(timestamp.toDate(), 'dd/MM/yyyy HH:mm'); 
+        const formatString = includeTime ? 'dd/MM/yyyy HH:mm' : 'dd/MM/yyyy';
+        return format(timestamp.toDate(), formatString, { locale: ptBR });
       } catch (e) {
-        console.error("Erro ao formatar data (Timestamp inválido?):", timestamp, e);
+        console.error("Erro ao formatar Timestamp:", timestamp, e);
         return "Data inválida";
       }
     } 
-    // Fallback se o timestamp não for um objeto Timestamp válido
-    // Isso pode acontecer se for string ou número, ou se o campo não existir
-    console.warn("[formatDateSafe] Recebido valor não-Timestamp ou nulo:", timestamp);
-    // Tentativa de converter se for uma string/número que possa ser data (menos ideal)
-    try {
-       const date = new Date(timestamp); 
-       if (!isNaN(date.getTime())) { 
-            return format(date, 'dd/MM/yyyy HH:mm');
-       }
-    } catch (e) {
-        // Ignora o erro se a conversão falhar, prossegue para o retorno padrão
-        console.log("Ignorando erro ao tentar converter data não-timestamp:", e); 
+    if (typeof timestamp === 'string') {
+      try {
+        const parsedDate = parseISO(timestamp);
+        const formatString = includeTime ? 'dd/MM/yyyy HH:mm' : 'dd/MM/yyyy';
+        return format(parsedDate, formatString, { locale: ptBR });
+      } catch /* (parseError) */ {
+         // Ignora erro se a string não for ISO válida. O retorno padrão abaixo será usado.
+         // console.warn("Erro ao fazer parse de string ISO em formatDateSafe:", timestamp);
+      }
     }
-    
-    return "Data não informada"; // Retorno padrão
+    return "-";
   };
 
   if (isLoading && !customer) {
@@ -440,16 +489,8 @@ export default function CustomerDetailsPage() {
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>Pets</CardTitle>
-              <CardDescription>Gerencie os pets deste cliente</CardDescription>
-            </div>
-            <Button onClick={() => setShowNewPetDialog(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Novo Pet
-            </Button>
-          </div>
+          <CardTitle>Pets</CardTitle>
+          <CardDescription>Gerencie os pets deste cliente</CardDescription>
         </CardHeader>
         <CardContent>
           {pets.length === 0 ? (
@@ -506,6 +547,45 @@ export default function CustomerDetailsPage() {
                 )
               })}
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Histórico Financeiro</CardTitle>
+          <CardDescription>Cobranças pagas e transações associadas.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoadingHistory ? (
+            <div className="flex items-center justify-center p-4">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-muted-foreground">Carregando histórico...</span>
+            </div>
+          ) : financialHistory.length > 0 ? (
+            <ul className="space-y-3">
+              {financialHistory.map((charge) => (
+                <li key={charge.id} className="flex items-center justify-between p-3 border rounded-md bg-gray-50/50">
+                  <div>
+                    <p className="text-sm font-medium">
+                      Data: {formatDateSafe(charge.paidAt, true)} 
+                    </p>
+                  </div>
+                  <div className="text-right">
+                     <p className="text-sm font-semibold">
+                      {charge.totalAmount?.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                     </p>
+                     <Badge variant={charge.status === 'paid' ? 'success' : 'secondary'}>
+                        {charge.status === 'paid' ? 'Pago' : charge.status} 
+                     </Badge>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center p-4">
+              Nenhum histórico financeiro encontrado para este cliente.
+            </p>
           )}
         </CardContent>
       </Card>

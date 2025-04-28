@@ -1,6 +1,6 @@
-import React, { useState } from "react";
-import { PurchaseHistory } from "@/api/entities";
-import { generateUniqueId } from "@/api/mockData";
+import { useState, useEffect } from "react";
+import { httpsCallable } from "firebase/functions";
+import { functions } from "@/lib/firebaseConfig";
 import {
   Dialog,
   DialogContent,
@@ -15,26 +15,19 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { toast } from "@/components/ui/use-toast";
 import { 
   CreditCard, 
   Banknote, 
   QrCode, 
   Loader2, 
-  Receipt,
   Check
 } from "lucide-react";
+import PropTypes from 'prop-types';
 
-export default function PaymentDialog({ open, onOpenChange, cart, customer, onSuccess }) {
+export default function PaymentDialog({ open, onOpenChange, cart, customer = null, chargeId = null, totalAmount, onSuccess }) {
   const [isProcessing, setIsProcessing] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState("money");
+  const [paymentMethod, setPaymentMethod] = useState("pix");
   const [changeAmount, setChangeAmount] = useState(0);
   const [receivedAmount, setReceivedAmount] = useState("");
   const [cardInfo, setCardInfo] = useState({
@@ -44,21 +37,37 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer, onSu
     cvv: ""
   });
 
-  const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const total = totalAmount || 0;
 
-  const calculateChange = () => {
-    const received = parseFloat(receivedAmount) || 0;
+  useEffect(() => {
+    if (open) {
+      setPaymentMethod("pix");
+      setReceivedAmount("");
+      setChangeAmount(0);
+      setCardInfo({ number: "", holder: "", expiry: "", cvv: "" });
+      setIsProcessing(false);
+    } else {
+       // Reset pode ser feito ao fechar também, se preferir
+       // setPaymentMethod("pix"); ...
+    }
+  }, [open, total]);
+
+  const calculateChange = (receivedValue) => {
+    const received = parseFloat(receivedValue) || 0;
     return received > total ? received - total : 0;
   };
 
   const handlePaymentMethodChange = (value) => {
     setPaymentMethod(value);
+    setReceivedAmount(""); 
+    setChangeAmount(0);
+    setCardInfo({ number: "", holder: "", expiry: "", cvv: "" });
   };
 
   const handleReceivedAmountChange = (e) => {
     const value = e.target.value;
     setReceivedAmount(value);
-    setChangeAmount(calculateChange());
+    setChangeAmount(calculateChange(value));
   };
 
   const handleCardInfoChange = (e) => {
@@ -79,60 +88,76 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer, onSu
       return;
     }
 
-    if (paymentMethod === "money" && parseFloat(receivedAmount) < total) {
+    if (!chargeId && total <= 0 && cart.length > 0) {
       toast({
-        title: "Valor insuficiente",
-        description: "O valor recebido é menor que o total da compra.",
+        title: "Valor inválido",
+        description: "O total do carrinho não pode ser zero para venda direta.",
         variant: "destructive"
       });
       return;
     }
 
-    if (paymentMethod === "credit_card" || paymentMethod === "debit_card") {
-      if (!cardInfo.number || !cardInfo.holder || !cardInfo.expiry || !cardInfo.cvv) {
-        toast({
-          title: "Dados do cartão incompletos",
-          description: "Preencha todos os dados do cartão.",
-          variant: "destructive"
-        });
-        return;
-      }
+    if (paymentMethod === "cash" && parseFloat(receivedAmount || "0") < total) {
+      toast({
+        title: "Valor insuficiente",
+        description: "O valor recebido em dinheiro é menor que o total.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    if ((paymentMethod === "credit_card" || paymentMethod === "debit_card") && 
+        (!cardInfo.number || !cardInfo.holder || !cardInfo.expiry || !cardInfo.cvv)) {
+      toast({
+        title: "Dados do cartão incompletos",
+        description: "Preencha todos os dados do cartão.",
+        variant: "destructive"
+      });
+      return;
     }
 
     setIsProcessing(true);
 
-    try {
-      const purchaseData = {
-        id: generateUniqueId(),
-        customer_id: customer.id,
-        purchase_date: new Date().toISOString(),
-        total_amount: total,
-        payment_method: paymentMethod,
-        payment_status: "paid",
-        items: cart.map(item => ({
-          id: generateUniqueId(),
-          product_id: item.id,
-          product_name: item.name,
-          quantity: item.quantity,
-          unit_price: item.price,
-          total_price: item.price * item.quantity,
+    const paymentPayload = {
+        chargeId: chargeId || null,
+        cartItems: chargeId ? null : cart.map(item => ({
+            itemId: item.id,
+            description: item.name,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice || item.price,
+            totalPrice: item.totalPrice || (item.price * item.quantity),
+            itemType: item.type === 'service' ? 'service' : 'product'
         })),
-        tenant_id: localStorage.getItem('current_tenant')
-      };
+        paymentMethod: paymentMethod, 
+        amountPaid: total,
+        customerId: customer.id,
+        cardInfo: (paymentMethod === "credit_card" || paymentMethod === "debit_card") ? cardInfo : null,
+    };
 
-      await PurchaseHistory.create(purchaseData);
+    console.log("[PaymentDialog] Chamando função 'processPayment' com payload:", paymentPayload);
 
-      toast({
-        title: "Venda finalizada",
-        description: "Pagamento processado com sucesso!",
-      });
+    try {
+      const processPaymentFunction = httpsCallable(functions, 'processPayment');
+      const result = await processPaymentFunction(paymentPayload);
+      
+      console.log("[PaymentDialog] Resultado da função 'processPayment':", result.data);
 
-      onSuccess();
+      if (result.data && result.data.success === true) { 
+          toast({
+            title: "Pagamento Processado",
+            description: result.data.message || "Venda finalizada com sucesso!",
+          });
+          onSuccess();
+      } else {
+          throw new Error(result.data?.message || "Falha ao processar pagamento no backend.");
+      }
+
     } catch (error) {
-      console.error("Erro ao processar pagamento:", error);
+      console.error("[PaymentDialog] Erro ao chamar função processPayment:", error);
+      const errorMessage = error.details?.originalError || error.message || "Não foi possível processar o pagamento.";
       toast({
-        title: "Erro",
-        description: "Não foi possível processar o pagamento.",
+        title: "Erro no Pagamento",
+        description: errorMessage,
         variant: "destructive"
       });
     } finally {
@@ -144,7 +169,7 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer, onSu
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>Finalizar Venda</DialogTitle>
+          <DialogTitle>Finalizar Pagamento</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -163,36 +188,27 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer, onSu
           </div>
 
           <div>
-            <h3 className="font-medium mb-2">Resumo da compra</h3>
+            <h3 className="font-medium mb-2">Resumo</h3>
             <div className="border rounded-lg overflow-hidden">
               <div className="max-h-[200px] overflow-y-auto">
-                {cart.map(item => (
-                  <div key={`${item.type}-${item.id}`} className="p-3 flex items-center justify-between border-b last:border-b-0">
+                {cart.map((item, index) => (
+                  <div key={`${item.type}-${item.id}-${index}`} className="p-3 flex items-center justify-between border-b last:border-b-0">
                     <div>
                       <p className="font-medium">{item.name}</p>
                       <p className="text-sm text-gray-500">
-                        {item.quantity} x {item.price.toLocaleString('pt-BR', {
-                          style: 'currency',
-                          currency: 'BRL'
-                        })}
+                        {item.quantity} x {item.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                       </p>
                     </div>
                     <p className="font-medium">
-                      {(item.price * item.quantity).toLocaleString('pt-BR', {
-                        style: 'currency',
-                        currency: 'BRL'
-                      })}
+                      {(item.totalPrice || item.price * item.quantity).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                     </p>
                   </div>
                 ))}
               </div>
               <div className="p-3 bg-gray-50 font-bold flex items-center justify-between">
-                <span>Total</span>
+                <span>Total a Pagar</span>
                 <span>
-                  {total.toLocaleString('pt-BR', {
-                    style: 'currency',
-                    currency: 'BRL'
-                  })}
+                  {total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                 </span>
               </div>
             </div>
@@ -202,11 +218,11 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer, onSu
             <Label>Forma de pagamento</Label>
             <div className="grid grid-cols-4 gap-2">
               <Card 
-                className={`cursor-pointer ${paymentMethod === 'money' ? 'border-blue-500 bg-blue-50' : ''}`}
-                onClick={() => handlePaymentMethodChange('money')}
+                className={`cursor-pointer ${paymentMethod === 'cash' ? 'border-blue-500 bg-blue-50' : ''}`}
+                onClick={() => handlePaymentMethodChange('cash')}
               >
                 <CardContent className="p-3 flex flex-col items-center justify-center text-center">
-                  <Banknote className={`h-6 w-6 mb-1 ${paymentMethod === 'money' ? 'text-blue-500' : 'text-gray-500'}`} />
+                  <Banknote className={`h-6 w-6 mb-1 ${paymentMethod === 'cash' ? 'text-blue-500' : 'text-gray-500'}`} />
                   <span className="text-sm">Dinheiro</span>
                 </CardContent>
               </Card>
@@ -240,80 +256,93 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer, onSu
                   <span className="text-sm">PIX</span>
                 </CardContent>
               </Card>
+
+              {/* --- Renderização Condicional para Pagamento em Dinheiro --- */}
+              {paymentMethod === "cash" && (
+                <div className="col-span-4 space-y-2 mt-4 border-t pt-4">
+                  <div>
+                    <Label htmlFor="receivedAmount">Valor Recebido</Label>
+                    <Input 
+                      id="receivedAmount"
+                      name="receivedAmount"
+                      type="number" 
+                      placeholder="0,00"
+                      value={receivedAmount}
+                      onChange={handleReceivedAmountChange}
+                      className="mt-1"
+                      step="0.01"
+                      min={total.toFixed(2)} // Opcional: Mínimo é o total
+                    />
+                  </div>
+                  <div>
+                    <Label>Troco</Label>
+                    <p className="text-lg font-medium mt-1">
+                      {changeAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {/* --- Fim da Renderização Condicional --- */}
+
+              {/* --- Renderização Condicional para Pagamento com Cartão --- */}
+              {(paymentMethod === 'credit_card' || paymentMethod === 'debit_card') && (
+                <div className="col-span-4 space-y-3 mt-4 border-t pt-4">
+                  <div>
+                    <Label htmlFor="card-number">Número do cartão</Label>
+                    <Input
+                      id="card-number"
+                      name="number"
+                      value={cardInfo.number}
+                      onChange={handleCardInfoChange}
+                      placeholder="0000 0000 0000 0000"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="card-holder">Nome do titular</Label>
+                    <Input
+                      id="card-holder"
+                      name="holder"
+                      value={cardInfo.holder}
+                      onChange={handleCardInfoChange}
+                      placeholder="NOME COMO ESTÁ NO CARTÃO"
+                      className="mt-1"
+                      style={{ textTransform: 'uppercase' }} // Para facilitar a digitação
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label htmlFor="card-expiry">Validade (MM/AA)</Label>
+                      <Input
+                        id="card-expiry"
+                        name="expiry"
+                        value={cardInfo.expiry}
+                        onChange={handleCardInfoChange}
+                        placeholder="MM/AA"
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="card-cvv">CVV</Label>
+                      <Input
+                        id="card-cvv"
+                        name="cvv"
+                        type="password" // Mascarar CVV
+                        value={cardInfo.cvv}
+                        onChange={handleCardInfoChange}
+                        placeholder="123"
+                        className="mt-1"
+                        maxLength={4} // CVV pode ter 3 ou 4 dígitos
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {/* --- Fim da Renderização Condicional --- */}
             </div>
           </div>
 
-          {paymentMethod === 'money' && (
-            <div className="space-y-2">
-              <Label htmlFor="received">Valor recebido</Label>
-              <Input
-                id="received"
-                type="number"
-                min={total}
-                step="0.01"
-                value={receivedAmount}
-                onChange={handleReceivedAmountChange}
-                placeholder="0,00"
-              />
-              {parseFloat(receivedAmount) > total && (
-                <div className="p-2 bg-green-50 text-green-700 rounded flex items-center">
-                  <Receipt className="h-4 w-4 mr-2" />
-                  <span>Troco: {changeAmount.toLocaleString('pt-BR', {
-                    style: 'currency',
-                    currency: 'BRL'
-                  })}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {(paymentMethod === 'credit_card' || paymentMethod === 'debit_card') && (
-            <div className="space-y-3">
-              <div>
-                <Label htmlFor="card-number">Número do cartão</Label>
-                <Input
-                  id="card-number"
-                  name="number"
-                  value={cardInfo.number}
-                  onChange={handleCardInfoChange}
-                  placeholder="0000 0000 0000 0000"
-                />
-              </div>
-              <div>
-                <Label htmlFor="card-holder">Nome do titular</Label>
-                <Input
-                  id="card-holder"
-                  name="holder"
-                  value={cardInfo.holder}
-                  onChange={handleCardInfoChange}
-                  placeholder="NOME COMO ESTÁ NO CARTÃO"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label htmlFor="card-expiry">Validade</Label>
-                  <Input
-                    id="card-expiry"
-                    name="expiry"
-                    value={cardInfo.expiry}
-                    onChange={handleCardInfoChange}
-                    placeholder="MM/AA"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="card-cvv">CVV</Label>
-                  <Input
-                    id="card-cvv"
-                    name="cvv"
-                    value={cardInfo.cvv}
-                    onChange={handleCardInfoChange}
-                    placeholder="123"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
+          {/* Conditional rendering for PIX payment */}
           {paymentMethod === 'pix' && (
             <div className="p-4 bg-gray-50 rounded-lg flex flex-col items-center">
               <QrCode className="h-24 w-24 text-blue-500 mb-2" />
@@ -355,3 +384,13 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer, onSu
     </Dialog>
   );
 }
+
+PaymentDialog.propTypes = {
+  open: PropTypes.bool.isRequired,
+  onOpenChange: PropTypes.func.isRequired,
+  cart: PropTypes.array.isRequired,
+  customer: PropTypes.object,
+  chargeId: PropTypes.string, 
+  totalAmount: PropTypes.number.isRequired, 
+  onSuccess: PropTypes.func.isRequired,
+};

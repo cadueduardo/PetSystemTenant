@@ -14,12 +14,11 @@ import { PrescriptionModal } from '@/modules/live-vet/components/PrescriptionMod
 import PrintablePrescriptionContent from '@/components/medical/PrintablePrescription';
 import { useTenant } from '@/components/tenant/TenantContext';
 import PetAvatar from '@/components/pets/PetAvatar';
-import { format, parseISO, differenceInMinutes } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { medicationTaskService } from '@/api/firebase/medicationTaskService';
-import { queueService } from '@/api/firebase/queueService';
 import { addPendingItems } from '@/api/mock/chargeableItemService';
-import { collectionGroup, query, where, getDocs, orderBy, limit, collection } from "firebase/firestore";
+import { collectionGroup, query, where, getDocs, orderBy, limit, collection, doc, getDoc, updateDoc, Timestamp, setDoc, serverTimestamp, addDoc } from "firebase/firestore";
 import { db } from '@/lib/firebaseConfig';
 // <<< ADICIONAR IMPORTS PARA COMBOBOX >>>
 import { ChevronsUpDown } from "lucide-react";
@@ -27,6 +26,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import React from 'react';
+import { ScrollArea } from "@/components/ui/scroll-area";
+// import chargeService from "@/api/services/chargeService"; // <<< LINHA REMOVIDA
 
 // <<< ATUALIZAR URLs para Cloud Run >>>
 // const AUDIO_SERVICE_BASE_URL = 'http://localhost:8001'; // URL Antiga
@@ -88,7 +89,7 @@ export default function LiveVetConsulta() {
   const [currentPrescriptionItems, setCurrentPrescriptionItems] = useState([]);
   const [currentPrescriptionObservations, setCurrentPrescriptionObservations] = useState('');
   const [currentRequiresFollowUp, setCurrentRequiresFollowUp] = useState(false);
-  const { tenant } = useTenant();
+  const { currentTenant: tenant, isLoading: isLoadingTenant, error: tenantError } = useTenant(); // <<< CORRIGIR DESESTRUTURAÇÃO AQUI
   const [isPrinting, setIsPrinting] = useState(false);
 
   // <<< Ref para o componente de impressão >>>
@@ -741,103 +742,72 @@ export default function LiveVetConsulta() {
       }
   };
 
-  // <<< NOVA FUNÇÃO: Apenas completa o AGENDAMENTO >>>
-  const handleCompleteAppointment = async (appointmentIdToComplete, consultationNotes) => {
-    console.log("[handleCompleteAppointment] Iniciando conclusão para appointment:", appointmentIdToComplete);
-    try {
-      const appointmentToUpdate = await Appointment.get(appointmentIdToComplete);
-      if (!appointmentToUpdate) {
-         throw new Error("Agendamento original não encontrado para concluir.");
-      }
-      
-      // <<< USA start_time que DEVE ter sido definido no useEffect >>>
-      const startTime = appointmentToUpdate.start_time || appointmentToUpdate.date; 
-      const endTime = new Date();
-      let duration = 0; // Default para 0
-      try {
-          const startDate = parseISO(startTime);
-          const endDate = endTime; // Já é objeto Date
-          const minutes = differenceInMinutes(endDate, startDate);
-          if (!isNaN(minutes) && minutes >= 0) { // <<< Garante que seja >= 0 >>>
-              duration = minutes;
-          } else {
-              console.warn(`[handleCompleteAppointment] Duração calculada inválida ou negativa (${minutes}). Salvando como 0.`);
-          }
-      } catch (e) { 
-          console.error("Erro calculando duração para Appointment:", e); 
-      }
-            
-      const updateData = {
-        status: 'completed',
-        end_time: endTime.toISOString(), // Salva como ISO string
-        duration_minutes: duration, // Salva a duração calculada (ou 0)
-        consultation_notes: consultationNotes
-      };
-      console.log("[handleCompleteAppointment] Atualizando agendamento com:", updateData);
-      await Appointment.update(appointmentIdToComplete, updateData);
-      console.log("[handleCompleteAppointment] Agendamento concluído com sucesso.");
-    } catch (error) {
-      console.error("[handleCompleteAppointment] Erro ao concluir agendamento:", error);
-      // Relança o erro para ser tratado por quem chamou (saveConsultationDataAndComplete)
-      throw new Error(`Não foi possível marcar o agendamento como concluído: ${error.message}`);
-    }
-  };
-
   // <<< NOVA FUNÇÃO: Salva consulta, completa agendamento e navega >>>
   const saveConsultationDataAndComplete = async () => {
-    console.log("[saveConsultationDataAndComplete] Iniciando...");
-    setIsSaving(true);
+    console.log('[saveConsultationDataAndComplete] Iniciando...');
+    
+    // <<< REVERTER: Remover chamada direta de useTenant daqui >>>
+    // const { tenant: currentTenantFromContext, isLoading: isTenantLoadingNow, error: tenantContextError } = useTenant();
+    console.log('[saveConsultationDataAndComplete] Verificando valor de tenant (do escopo do componente):', tenant); 
+
+    // <<< VERIFICAÇÃO INICIAL (usando tenant do escopo do componente) >>>
+    if (!appointment?.id || !tenant?.id || !customer?.id) {
+        console.error("[saveConsultationDataAndComplete] Erro: Dados essenciais (agendamento, tenant ou cliente) não estão carregados.", {
+            appointmentId: appointment?.id,
+            tenantId: tenant?.id, 
+            customerId: customer?.id
+        });
+        toast({ title: "Erro Crítico", description: "Não foi possível iniciar a finalização. Dados do agendamento, loja ou cliente ausentes.", variant: "destructive"});
+        setIsSaving(false); 
+        return; 
+    }
+
+    setIsSaving(true); 
+
     try {
-      // 1. Salva o progresso da consulta e atualiza histórico
-      await saveProgressAndUpdateHistory();
+      // 1. Salvar dados da consulta
+      await saveProgressAndUpdateHistory(); 
 
-      // 2. Prepara notas resumidas (opcional)
-      const summaryNotes = `Anamnese: ${anamnesisNotes?.substring(0,50)}... | Exame: ${clinicalExamNotes?.substring(0,50)}... | Diag: ${diagnosisNotes?.substring(0,50)}... | Trat: ${treatmentNotes?.substring(0,50)}...`;
-
-      // 3. Marca o agendamento como concluído
-      if (appointment?.id) {
-        await handleCompleteAppointment(appointment.id, summaryNotes);
-      } else {
-         throw new Error("ID do agendamento não disponível para conclusão.");
-      }
+      // 2. Concluir o agendamento
+      console.log("[saveConsultationDataAndComplete] Concluindo agendamento:", appointment.id); 
       
-      // <<< 4. (NOVO) Se for um retorno, marca o item da fila como concluído >>>
-      if (followUpQueueId) {
-        console.log(`[saveConsultationDataAndComplete] Marcando item da fila de retorno ${followUpQueueId} como concluído.`);
-        try {
-          await queueService.update(followUpQueueId, {
-            status: 'completed',
-            end_time: new Date().toISOString()
-          });
-          console.log(`[saveConsultationDataAndComplete] Item da fila ${followUpQueueId} concluído com sucesso.`);
-
-          // <<< Adicionar atualização do Agendamento original >>>
-          try {
-            console.log(`[saveConsultationDataAndComplete] Marcando Agendamento ${appointment.id} com follow_up_completed.`);
-            await Appointment.update(appointment.id, { follow_up_completed: true });
-            console.log(`[saveConsultationDataAndComplete] Agendamento ${appointment.id} marcado com sucesso.`);
-          } catch (apptUpdateError) {
-            console.error(`[saveConsultationDataAndComplete] Erro ao marcar follow_up_completed no Agendamento ${appointment.id}:`, apptUpdateError);
-            toast({ variant: "warning", title: "Aviso", description: "Não foi possível marcar o agendamento original como tendo retorno concluído." });
-          }
-          // <<< Fim da atualização do Agendamento >>>
-
-        } catch (queueError) {
-          console.error(`[saveConsultationDataAndComplete] Erro ao concluir item da fila ${followUpQueueId}:`, queueError);
-          // Não lançar erro aqui, apenas logar. A conclusão principal já ocorreu.
-          toast({ variant: "warning", title: "Aviso", description: "Atendimento concluído, mas houve um erro ao finalizar o item na fila de retorno." });
-        }
+      const appointmentRef = doc(db, "appointments", appointment.id);
+      const appointmentToUpdate = await getDoc(appointmentRef);
+      if (!appointmentToUpdate.exists()) {
+           throw new Error(`Agendamento ${appointment.id} não encontrado para conclusão.`);
       }
-      // <<< Fim do passo 4 >>>
 
-      // 5. Exibe toast e Navega para a fila (COM o prefixo /tenant)
-      toast({ title: "Sucesso", description: "Atendimento salvo e concluído!" });
+      const startTime = appointment.start_time instanceof Timestamp 
+                        ? appointment.start_time.toMillis() 
+                        : (appointment.start_time ? new Date(appointment.start_time).getTime() : Date.now());
+      const endTimeMillis = Date.now();
+      const durationMillis = endTimeMillis - startTime;
+      let durationMinutes = Math.round(durationMillis / (1000 * 60));
+      if (durationMinutes < 0) {
+          console.warn(`[saveConsultationDataAndComplete] Duração calculada inválida ou negativa (${durationMinutes}). Salvando como 0.`);
+          durationMinutes = 0;
+      }
+
+      const updateData = {
+          status: 'completed',
+          end_time: Timestamp.fromMillis(endTimeMillis),
+          duration_minutes: durationMinutes,
+          consultation_notes: `Anamnese: ${anamnesisNotes || ''} | Exame: ${clinicalExamNotes || ''} | Diag: ${diagnosisNotes || ''} | Trat: ${treatmentNotes || ''}`
+      };
+      await updateDoc(appointmentRef, updateData);
+      console.log("[saveConsultationDataAndComplete] Agendamento atualizado para completed.");
+
+      // 3. Criação de Cobrança delegada ao gatilho
+      console.log("[saveConsultationDataAndComplete] Criação de cobrança pendente delegada ao gatilho Firestore.");
+      toast({ title: "Consulta Concluída", description: "Dados salvos. A cobrança será gerada automaticamente para o caixa." });
+
+      // 4. Navegar
       console.log("[saveConsultationDataAndComplete] Navegando para /tenant/live-vet...");
-      navigate('/tenant/live-vet');
+      navigate("/tenant/live-vet");
 
     } catch (error) {
       console.error("[saveConsultationDataAndComplete] Erro geral:", error);
-      toast({ variant: "destructive", title: "Erro", description: `Falha ao salvar/concluir: ${error.message}` });
+      toast({ title: "Erro ao Finalizar", description: `Não foi possível concluir o atendimento: ${error.message}`, variant: "destructive" });
     } finally {
       setIsSaving(false);
     }
@@ -1545,11 +1515,13 @@ export default function LiveVetConsulta() {
                      <Button 
                         variant="primary"
                         onClick={saveConsultationDataAndComplete} 
-                        disabled={isSaving}
+                        // <<< ADICIONAR VERIFICAÇÃO !tenant AQUI >>>
+                        disabled={isSaving || isLoadingTenant || !!tenantError || !tenant} 
                         size="lg" // Botão maior para destaque
                      >
                         {isSaving ? <Loader2 className="h-5 w-5 mr-2 animate-spin"/> : <ClipboardList className="h-5 w-5 mr-2" />}
-                        Salvar e Concluir Atendimento
+                        {/* Ajustar texto para refletir o loading do tenant também */} 
+                        {(isLoadingTenant || isSaving) ? 'Processando...' : (!tenant ? 'Aguardando Loja...' : 'Salvar e Concluir Atendimento')}
                      </Button>
                   </div>
             </div>

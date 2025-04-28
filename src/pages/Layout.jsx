@@ -319,18 +319,18 @@ export default function Layout() {
                 </Link>
             )}
             
-            {/* Vendas (PDV - Shop) */} 
-            {hasPermission('vendas_pdv', 'ler') && (
+            {/* Caixa (Antigo Vendas) */} 
+            {hasPermission('caixa', 'ler') && (
                 <Link
-                  to="/tenant/vendas" // Ajustar ROTA se for diferente
-                  onClick={(e) => handleNavigation(e, "/tenant/vendas")}
+                  to="/tenant/caixa"
+                  onClick={(e) => handleNavigation(e, "/tenant/caixa")}
                   className={classNames(
                     `flex items-center gap-3 rounded-md px-3 py-2 hover:bg-accent`,
-                    isActive("/tenant/vendas") ? "bg-accent font-medium" : ""
+                    isActive("/tenant/caixa") ? "bg-accent font-medium" : ""
                   )}
                 >
                   <ShoppingBag className="h-5 w-5" />
-                  <span>Vendas</span>
+                  <span>Caixa</span>
                 </Link>
             )}
 
