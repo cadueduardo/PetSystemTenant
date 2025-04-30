@@ -144,6 +144,7 @@ Sistema de gerenciamento para clínicas veterinárias, focando em agendamentos, 
 *   Área de importação de clientes, ter a possibilidade de ler um excel, csv, etc, para cadastrar clientes automaticamente
 *   Internação - trabalhar o fluxo de internação do Pet
 *   Leva e Traz - trabalhar um sistema simples de controle de Leva e Traz dos pets, como módulo
+*   Refatorar `functions/src/index.ts` para uma estrutura modular (múltiplos arquivos) para melhor organização e manutenção
 
 
 ## 7. Links Úteis (Opcional)

@@ -13,6 +13,8 @@ import {
   DollarSign,
   X,
   User,
+  ShoppingBag, // Adicionar ícone para continuar comprando
+  Badge
 } from "lucide-react";
 import CustomerDialog from "../components/sales/CustomerDialog"; 
 import ProductForm from "../components/products/ProductForm"; 
@@ -22,12 +24,21 @@ import PaymentDialog from "../components/sales/PaymentDialog";
 
 // TODO: Importar funções e tipos do Firestore quando implementar a busca real de 'charges'
 // import { collection, query, where, onSnapshot, Timestamp, doc, getDoc } from 'firebase/firestore'; // <<< DESCOMENTAR IMPORTS FIRESTORE
-import { collection, query, where, onSnapshot } from 'firebase/firestore'; // <<< MANTER APENAS OS USADOS AQUI
+import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore'; // <<< MANTER APENAS OS USADOS AQUI
 import { db } from '@/lib/firebaseConfig'; // <<< DESCOMENTAR IMPORT DB
 import { useTenant } from '@/components/tenant/TenantContext'; // <<< DESCOMENTAR IMPORT
 // <<< Remover imports de Dialog se não usados diretamente aqui (estão nos componentes filhos?) >>>
 // import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import QuickSaleModal from "../components/sales/QuickSaleModal";
+// <<< IMPORTAR MODAL DE CANCELAMENTO >>>
+import CancellationReasonModal from '@/components/modal/CancellationReasonModal'; 
+// Importar httpsCallable e functions
+import { httpsCallable } from "firebase/functions";
+import { functions } from "@/lib/firebaseConfig"; 
+// <<< IMPORTAR doc, getDoc do Firestore SDK >>>
+import { doc, getDoc } from 'firebase/firestore'; 
+// <<< IMPORTAR UUID >>>
+import { v4 as uuidv4 } from 'uuid'; 
 
 export default function CashierPage() { 
   const navigate = useNavigate();
@@ -43,9 +54,9 @@ export default function CashierPage() {
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
 
-  // Estado para 'charges' pendentes (será populado pelo listener)
-  const [pendingCharges, setPendingCharges] = useState([]); // <<< NOVO ESTADO (inicialmente vazio)
-  const [isLoadingPendingCharges, setIsLoadingPendingCharges] = useState(true); // <<< NOVO ESTADO
+  // <<< RENOMEADO: Estado para itens pendentes (charges + OS) >>>
+  const [pendingItems, setPendingItems] = useState([]); 
+  const [isLoadingPendingItems, setIsLoadingPendingItems] = useState(true); 
 
   // Estado para saber qual 'charge' está carregada no carrinho (singular, manter para compatibilidade ou remover depois)
   const [currentLoadedChargeId, setCurrentLoadedChargeId] = useState(null);
@@ -57,6 +68,16 @@ export default function CashierPage() {
 
   // <<< NOVO ESTADO para controlar o modal de venda rápida >>>
   const [showQuickSaleModal, setShowQuickSaleModal] = useState(false);
+
+  // <<< NOVOS ESTADOS para "Continuar Comprando" >>>
+  const [activeContinuedOsId, setActiveContinuedOsId] = useState(null);
+  const [isCreatingOs, setIsCreatingOs] = useState(false); 
+  // <<< FIM NOVOS ESTADOS >>>
+
+  // <<< ESTADOS PARA MODAL DE CANCELAMENTO >>>
+  const [cancellationModalOpen, setCancellationModalOpen] = useState(false);
+  const [itemToCancel, setItemToCancel] = useState(null);
+  // <<< FIM ESTADOS MODAL >>>
 
   useEffect(() => {
     // <<< Só carregar produtos/serviços se o tenant estiver carregado e existir >>>
@@ -72,97 +93,128 @@ export default function CashierPage() {
 
   useEffect(() => {
     let unsubscribeCharges = () => {};
+    let unsubscribeOrderServices = () => {}; // <<< Novo unsub para OS >>>
 
-    // <<< Só configurar listener se o tenant estiver carregado e existir >>>
     if (!isLoadingTenant && currentTenant?.id) {
-      console.log(`[CashierPage] Tenant carregado. Configurando listener para charges pendentes do tenant: ${currentTenant.id}`);
-      setIsLoadingPendingCharges(true);
+      const tenantId = currentTenant.id;
+      console.log(`[CashierPage] Tenant ${tenantId} carregado. Configurando listeners para itens pendentes...`);
+      setIsLoadingPendingItems(true);
       
-      const tenantIdForQuery = currentTenant.id;
-      console.log(`[CashierPage] ID do Tenant a ser usado na query de charges: ->${tenantIdForQuery}<-`);
-      
-      const q = query(
-        collection(db, 'tenants', tenantIdForQuery, 'charges'), 
-        where('status', 'in', ['pending', 'partially_paid'])
+      // --- Listener 1: Charges Pendentes --- 
+      const chargesQuery = query(
+        collection(db, 'tenants', tenantId, 'charges'), 
+        where('status', 'in', ['pending', 'partially_paid']),
+        orderBy('createdAt', 'asc') // <<< ORDENAR POR CRIAÇÃO >>>
       );
 
-      unsubscribeCharges = onSnapshot(q, async (snapshot) => {
-        console.log("[CashierPage] Snapshot recebido para charges pendentes.");
-        console.log(`[CashierPage] Snapshot size: ${snapshot.size}, empty: ${snapshot.empty}`); 
+      // --- Listener 2: Order Services Pendentes no Caixa --- 
+      const osQuery = query(
+        collection(db, 'tenants', tenantId, 'order_services'),
+        where('status', '==', 'pending_cashier'), // <<< FILTRAR PELO STATUS CORRETO >>>
+        orderBy('createdAt', 'asc')
+      );
 
-        if (snapshot.empty) {
-            console.log("[CashierPage] Nenhuma charge pendente encontrada (verificação snapshot.empty).");
-            setPendingCharges([]);
-            setIsLoadingPendingCharges(false);
+      let chargesData = [];
+      let osData = [];
+      let combinedError = null;
+
+      const processCombinedData = () => {
+        if (combinedError) {
+            console.error("[CashierPage] Erro em um dos listeners:", combinedError);
+            toast({ title: "Erro", description: "Falha ao buscar alguns itens pendentes.", variant: "destructive" });
+            setPendingItems([]);
+            setIsLoadingPendingItems(false);
             return;
         }
         
-        // Mapeia os documentos e busca dados do cliente
-        const chargesDataPromises = snapshot.docs.map(async (docSnapshot) => {
-          const charge = { id: docSnapshot.id, ...docSnapshot.data() };
-          let customer = null;
-          let pet = null; // Adicionar busca de pet se necessário depois
-          try {
-            if (charge.tutorId) {
-               console.log(`[CashierPage] Buscando cliente ${charge.tutorId} para charge ${charge.id}`);
-               customer = await Customer.get(charge.tutorId);
-            } else {
-               console.warn(`[CashierPage] Charge ${charge.id} sem tutorId.`);
-            }
-            if (charge.petId) {
-               console.log(`[CashierPage] Buscando pet ${charge.petId} para charge ${charge.id}`);
-               pet = await Pet.get(charge.petId); // Assume que existe Pet.get(petId)
-            } else {
-                console.log(`[CashierPage] Charge ${charge.id} sem petId.`);
-            }
-          } catch (err) {
-            console.error(`Erro ao buscar detalhes (cliente/pet) para charge ${charge.id}`, err);
-          }
-          // Retorna a charge original com os dados agregados
-          return { ...charge, customer, pet }; // <<< 'pet' será null se não encontrado ou sem ID >>>
-        });
-
-        // Aguarda todas as buscas de clientes finalizarem
-        const chargesData = await Promise.all(chargesDataPromises);
+        // Mapear charges para formato comum
+        const formattedCharges = chargesData.map(charge => ({
+            ...charge,
+            itemType: 'charge', 
+            customerId: charge.tutorId, // Padronizar para customerId
+            totalAmount: charge.totalAmount || 0, // Garantir valor
+        }));
         
-        // <<< ORDENAR chargesData por createdAt (mais antigo primeiro) >>>
-        chargesData.sort((a, b) => {
-            const timeA = a.createdAt?.seconds ?? 0; // Usa 0 se createdAt ou seconds for nulo/undefined
+        // Mapear OS para formato comum
+        const formattedOs = osData.map(os => ({
+            ...os, 
+            itemType: 'order_service',
+            tutorId: os.customerId, // Mapear customerId para tutorId se necessário no agrupamento?
+            totalAmount: os.totalValue || 0, // Padronizar para totalAmount
+            // Adicionar outros campos se necessário (pet, etc)
+        }));
+        
+        // Combinar e ordenar (já ordenado pelas queries, mas pode re-ordenar se necessário)
+        const combinedItems = [...formattedCharges, ...formattedOs];
+        combinedItems.sort((a, b) => {
+            const timeA = a.createdAt?.seconds ?? 0;
             const timeB = b.createdAt?.seconds ?? 0;
-            return timeA - timeB;
+            return timeA - timeB; // Mais antigo primeiro
         });
-        // <<< FIM DA ORDENAÇÃO >>>
         
-        console.log("[CashierPage] Charges pendentes PROCESSADAS E ORDENADAS:", chargesData);
-        setPendingCharges(chargesData);
-        setIsLoadingPendingCharges(false);
-        
+        console.log("[CashierPage] Itens pendentes COMBINADOS e ORDENADOS:", combinedItems);
+        setPendingItems(combinedItems);
+        setIsLoadingPendingItems(false);
+      };
+
+      // Iniciar listener de Charges
+      unsubscribeCharges = onSnapshot(chargesQuery, async (snapshot) => {
+        console.log(`[CashierPage / Charges Listener] Snapshot recebido (size: ${snapshot.size}).`);
+        const fetchedCharges = await Promise.all(snapshot.docs.map(async (docSnapshot) => {
+          const charge = { id: docSnapshot.id, ...docSnapshot.data() };
+          let customer = null, pet = null;
+          try {
+            if (charge.tutorId) customer = await Customer.get(charge.tutorId);
+            if (charge.petId) pet = await Pet.get(charge.petId);
+          } catch (err) { console.error(`Erro ao buscar cliente/pet para charge ${charge.id}`, err); }
+          return { ...charge, customer, pet };
+        }));
+        chargesData = fetchedCharges; // Atualiza dados das charges
+        processCombinedData(); // Processa e atualiza estado combinado
       }, (error) => {
-        // Tratamento de erro do listener
-        console.error("[CashierPage] Erro no listener de charges:", error);
-        toast({ title: "Erro", description: "Falha ao buscar cobranças pendentes em tempo real.", variant: "destructive" });
-        setPendingCharges([]);
-        setIsLoadingPendingCharges(false);
+        console.error("[CashierPage / Charges Listener] Erro:", error);
+        combinedError = error; // Guarda o erro
+        processCombinedData(); // Processa mesmo com erro para mostrar o que conseguiu
+      });
+
+      // Iniciar listener de Order Services
+      unsubscribeOrderServices = onSnapshot(osQuery, async (snapshot) => {
+        console.log(`[CashierPage / OS Listener] Snapshot recebido (size: ${snapshot.size}).`);
+        const fetchedOs = await Promise.all(snapshot.docs.map(async (docSnapshot) => {
+          const os = { id: docSnapshot.id, ...docSnapshot.data() };
+          let customer = null, pet = null;
+          try {
+            if (os.customerId) customer = await Customer.get(os.customerId);
+            if (os.petId) pet = await Pet.get(os.petId);
+          } catch (err) { console.error(`Erro ao buscar cliente/pet para OS ${os.id}`, err); }
+          return { ...os, customer, pet };
+        }));
+        osData = fetchedOs; // Atualiza dados das OS
+        processCombinedData(); // Processa e atualiza estado combinado
+      }, (error) => {
+        console.error("[CashierPage / OS Listener] Erro:", error);
+        combinedError = error; // Guarda o erro
+        processCombinedData(); // Processa mesmo com erro para mostrar o que conseguiu
       });
 
     } else if (!isLoadingTenant && !currentTenant) {
-       // <<< Mensagem de aviso se terminou de carregar e NÃO HÁ tenant >>>
-       console.warn("[CashierPage] Tenant não carregado ou inexistente após carregamento do contexto. Não é possível buscar charges.");
-       setIsLoadingPendingCharges(false); 
-       setPendingCharges([]); 
+       console.warn("[CashierPage] Tenant não carregado. Não é possível buscar itens pendentes.");
+       setIsLoadingPendingItems(false); 
+       setPendingItems([]); 
     } else if (isLoadingTenant) {
-        // <<< Se AINDA está carregando o tenant, limpa e indica loading >>>
         console.log("[CashierPage] Aguardando TenantContext carregar...");
-        setIsLoadingPendingCharges(true);
-        setPendingCharges([]);
+        setIsLoadingPendingItems(true);
+        setPendingItems([]);
     }
     
+    // Função de limpeza: desinscrever ambos os listeners
     return () => {
-        console.log("[CashierPage] Limpando listener de charges (se existir). Unsubscribe chamado.");
+        console.log("[CashierPage] Limpando listeners de charges e OS.");
         unsubscribeCharges();
+        unsubscribeOrderServices();
     };
 
-  }, [isLoadingTenant, currentTenant]); // <<< Depender de isLoadingTenant também >>>
+  }, [isLoadingTenant, currentTenant]);
 
   // <<< DEBUG: Adicionar useEffect para monitorar isAnonymousSaleActive >>>
   useEffect(() => {
@@ -239,14 +291,15 @@ export default function CashierPage() {
   };
   */
 
-  const removeFromCart = (itemId, type) => {
-    // MODIFICADO: Usa currentLoadedChargeIds
-    if (currentLoadedChargeIds.length > 0) {
-       toast({ title: "Aviso", description: "Não é possível remover itens enquanto cobranças pendentes estão carregadas.", variant: "warning"});
-       return;
-     }
-     console.log(`[CashierPage] Removendo ${type} ${itemId} do carrinho.`);
-     setCart(prevCart => prevCart.filter(i => !(i.id === itemId && i.type === type)));
+  const removeFromCart = (cartItemIdToRemove) => {
+     console.log(`[removeFromCart] Tentando remover item com cartItemId: ${cartItemIdToRemove}`);
+     setCart(prevCart => {
+        console.log("[removeFromCart] Carrinho ANTES do filtro:", JSON.stringify(prevCart));
+        // <<< FILTRAR POR cartItemId >>>
+        const filteredCart = prevCart.filter(i => i.cartItemId !== cartItemIdToRemove);
+        console.log("[removeFromCart] Carrinho DEPOIS do filtro:", JSON.stringify(filteredCart));
+        return filteredCart;
+     });
   };
 
   const updateQuantity = (itemId, type, quantity) => {
@@ -313,12 +366,13 @@ export default function CashierPage() {
   */
 
   const handleDeselectCustomerOrCharge = () => {
-      console.log("[CashierPage] Limpando cliente selecionado, carrinho, IDs carregados e modo anônimo.");
+      console.log("[CashierPage] Limpando cliente selecionado, carrinho, IDs carregados e modo anônimo/continuação.");
       setSelectedCustomer(null);
       setCart([]);
       setCurrentLoadedChargeId(null); // Limpa singular
       setCurrentLoadedChargeIds([]); // Limpa plural
       setIsAnonymousSaleActive(false); // <<< DESATIVA modo anônimo >>>
+      setActiveContinuedOsId(null); // <<< Limpar OS ativa >>>
   };
 
   const handlePaymentSuccess = (/* paymentDetails */) => {
@@ -328,6 +382,7 @@ export default function CashierPage() {
       setCurrentLoadedChargeId(null);
     setCurrentLoadedChargeIds([]);
     setIsAnonymousSaleActive(false); // <<< DESATIVA modo anônimo após pagamento >>>
+    setActiveContinuedOsId(null); // <<< Limpar OS ativa >>>
     setShowPaymentDialog(false);
     toast({ title: "Sucesso", description: "Pagamento registrado." });
   };
@@ -345,11 +400,10 @@ export default function CashierPage() {
   const handleConfirmQuickSale = (itemsFromModal) => {
     console.log("[CashierPage] Confirmando itens do QuickSaleModal:", itemsFromModal);
     if (itemsFromModal && itemsFromModal.length > 0) {
-      // Transforma os itens do carrinho local do modal para o formato do carrinho principal
-      // (Neste caso, o formato parece ser o mesmo, mas é bom ter a transformação se precisar)
       const mainCartItems = itemsFromModal.map(item => ({
-         ...item, // Mantém id, name, quantity, unitPrice, totalPrice
-         type: 'product' // Assumindo que QuickSale só adiciona produtos por enquanto
+         ...item, 
+         cartItemId: uuidv4(), // <<< GERAR UUID ÚNICO >>>
+         type: 'product' 
       }));
       setCart(mainCartItems);
       setIsAnonymousSaleActive(true); // <<< ATIVA modo anônimo AGORA >>>
@@ -358,6 +412,7 @@ export default function CashierPage() {
       setSelectedCustomer(null); // Garante que não há cliente selecionado
       setCurrentLoadedChargeId(null); // Garante que nenhuma charge está carregada
       setShowQuickSaleModal(false); // Fecha o modal
+      setActiveContinuedOsId(null); // <<< Limpar OS ativa >>>
       toast({ title: "Itens Adicionados", description: "Itens da venda rápida carregados no caixa." });
     } else {
       console.warn("[CashierPage] QuickSaleModal confirmado sem itens.");
@@ -365,171 +420,253 @@ export default function CashierPage() {
     }
   };
 
-  // <<< NOVA FUNÇÃO PARA CARREGAR MÚLTIPLAS CHARGES >>>
-  const handleLoadCustomerChargesToCart = (chargesToLoad) => {
-    if (!chargesToLoad || chargesToLoad.length === 0) {
-      console.warn("[CashierPage] Tentativa de carregar charges vazias.");
+  // <<< RENOMEADO E ADAPTADO: Função para carregar itens PENDENTES (charges e OS) no carrinho >>>
+  const handleLoadCustomerItemsToCart = (itemsToLoad) => {
+    if (!itemsToLoad || itemsToLoad.length === 0) {
+      console.warn("[CashierPage] Tentativa de carregar itens vazios.");
       return;
     }
-    console.log(`[CashierPage] Carregando ${chargesToLoad.length} charges para o carrinho...`, chargesToLoad.map(c => c.id));
+    console.log(`[CashierPage] Carregando ${itemsToLoad.length} itens pendentes para o carrinho...`, itemsToLoad.map(i => `${i.itemType}:${i.id}`));
 
-    // 1. Limpar estado anterior
+    // 1. Limpar estado anterior (igual antes)
     setCart([]);
     setSelectedCustomer(null);
-    setCurrentLoadedChargeId(null); // Limpa o ID único antigo
-    setCurrentLoadedChargeIds([]); // Limpa o array de IDs novo
+    setCurrentLoadedChargeId(null); // Ainda limpar o singular?
+    setCurrentLoadedChargeIds([]); // Limpar o array de IDs
     setIsAnonymousSaleActive(false);
+    setActiveContinuedOsId(null); // Garantir que nenhuma OS de caixa está ativa
 
     try {
-      // 2. Obter cliente (da primeira charge)
-      const firstCharge = chargesToLoad[0];
-      const customer = firstCharge?.customer; // Assume que o listener já populou
+      // 2. Obter cliente (da primeira charge, igual antes)
+      const firstItem = itemsToLoad[0];
+      const customer = firstItem?.customer;
 
-      if (!customer && firstCharge?.tutorId) {
-          console.warn(`[CashierPage] Cliente não pré-carregado para ${firstCharge.tutorId}.`);
-          // Poderia tentar um Customer.get aqui, mas idealmente o listener resolve
+      if (!customer && (firstItem?.customerId || firstItem?.tutorId)) {
+          console.warn(`[CashierPage] Cliente não pré-carregado para ${firstItem?.customerId || firstItem?.tutorId}.`);
       }
 
-      // 3. Mapear e achatar todos os itens de todas as charges
-      const allCartItems = chargesToLoad.flatMap(charge => 
-        (charge.items || []).map(item => ({
-          id: item.itemId || item.sourceId || `item-${Math.random()}`, // Garante um ID
+      // 3. Mapear e achatar TODOS os itens de TODOS os documentos (charges e OS)
+      const allCartItems = itemsToLoad.flatMap(doc => {
+        const docType = doc.itemType; // 'charge' or 'order_service'
+        const docId = doc.id;
+        const itemsArray = doc.items || []; // Pegar array de itens do documento
+        
+        // Mapear cada item DENTRO do documento para o formato do carrinho
+        return itemsArray.map(item => ({
+          cartItemId: uuidv4(), // <<< GERAR UUID ÚNICO PARA CADA ITEM NO CARRINHO >>>
+          id: item.itemId || item.sourceId || `item-${Math.random()}`, 
           name: item.description || 'Item sem descrição',
-          price: item.unitPrice, // Usado para cálculo se necessário
+          price: item.unitPrice, 
           unitPrice: item.unitPrice,
           quantity: item.quantity || 1,
-          totalPrice: item.totalPrice, // Usa o total já calculado
-          type: item.itemType === 'clinic' ? 'service' : (item.itemType === 'petshop' ? 'service' : 'product'), // Mapeia tipo
-          originalChargeId: charge.id, // Guarda a charge original
-          // <<< ADICIONAR IDs RELEVANTES >>>
-          episodeId: charge.episodeId, 
-          osNumber: charge.osNumber,
-          prontuarioId: charge.prontuarioId
-        }))
-      );
+          totalPrice: item.totalPrice,
+          type: item.itemType === 'clinic' ? 'service' : (item.itemType === 'petshop' ? 'service' : 'product'),
+          originalDocumentId: docId,
+          originalDocumentType: docType, 
+          episodeId: docType === 'charge' ? doc.episodeId : null, 
+          osNumber: doc.osNumber,
+          prontuarioId: docType === 'charge' ? doc.prontuarioId : null 
+        }));
+      });
       
       console.log("[CashierPage] Itens consolidados para o carrinho:", allCartItems);
 
-      // 4. Atualizar estados
-      setCart(allCartItems);
-      setSelectedCustomer(customer);
-      setCurrentLoadedChargeIds(chargesToLoad.map(c => c.id)); // Guarda TODOS os IDs
+      // 4. Identificar os IDs dos DOCUMENTOS (charges E OS) a serem pagos
+      const documentIdsToPay = itemsToLoad.map(doc => doc.id);
+      console.log("[CashierPage] IDs dos documentos a serem pagos:", documentIdsToPay);
+      
+      // <<< SEPARAR IDs por tipo para passar ao PaymentDialog (se necessário) >>>
+      const chargeIdsToPay = itemsToLoad.filter(i => i.itemType === 'charge').map(i => i.id);
+      const osIdsToPay = itemsToLoad.filter(i => i.itemType === 'order_service').map(i => i.id);
+      console.log("[CashierPage] Charge IDs:", chargeIdsToPay, "OS IDs:", osIdsToPay);
+      // <<< FIM SEPARAÇÃO >>>
 
-      toast({ title: "Cobranças Carregadas", description: `Itens de ${customer?.full_name || 'Cliente'} carregados para pagamento.` });
+      // 5. Atualizar estados
+      setCart(allCartItems); 
+      setSelectedCustomer(customer);
+      // <<< ATUALIZAR currentLoadedChargeIds com TODOS os IDs de documentos >>>
+      setCurrentLoadedChargeIds(documentIdsToPay);
+      // O PaymentDialog precisará ser ajustado para receber os osIds também
+
+      toast({ title: "Itens Carregados", description: `Itens de ${customer?.full_name || 'Cliente'} carregados para pagamento.` });
 
     } catch (error) {
-      console.error(`[CashierPage] Erro ao carregar múltiplas charges para o carrinho:`, error);
-      toast({ title: "Erro", description: "Não foi possível carregar todas as cobranças.", variant: "destructive" });
+      console.error(`[CashierPage] Erro ao carregar itens pendentes para o carrinho:`, error);
+      toast({ title: "Erro", description: "Não foi possível carregar todos os itens pendentes.", variant: "destructive" });
       handleDeselectCustomerOrCharge(); // Limpa tudo em caso de erro
     }
   };
-  // <<< FIM NOVA FUNÇÃO >>>
+  // <<< FIM FUNÇÃO RENOMEADA E ADAPTADA >>>
 
-  // <<< FUNÇÃO PARA RENDERIZAR A COLUNA ESQUERDA (PENDENTES) >>>
-  const renderPendingChargesColumn = () => {
-    if (isLoadingPendingCharges || isLoadingTenant) {
+  // <<< AJUSTADO: Função para lidar com 'Continuar Comprando' >>>
+  const handleContinueShopping = async (customerId, customerPendingItems) => { // <<< Recebe itens pendentes do cliente >>>
+    if (!customerId) {
+      toast({ title: "Erro", description: "ID do cliente não encontrado para iniciar a OS.", variant: "destructive" });
+      return;
+    }
+    if (isCreatingOs) return; // Prevenir cliques múltiplos
+
+    console.log(`[CashierPage] Iniciando fluxo 'Continuar Comprando' para cliente ${customerId}`);
+    
+    // <<< VERIFICAR SE JÁ EXISTE OS PENDENTE >>>
+    const existingPendingOs = customerPendingItems?.find(item => 
+        item.itemType === 'order_service' && item.status === 'pending_cashier'
+    );
+
+    if (existingPendingOs) {
+        console.log(`[CashierPage] Encontrada OS de caixa pendente existente: ${existingPendingOs.id}. Reabrindo modal.`);
+        setActiveContinuedOsId(existingPendingOs.id); // Usa o ID existente
+        setShowQuickSaleModal(true); // Abre o modal
+        // Não chama o backend para criar nova OS
+    } else {
+        console.log(`[CashierPage] Nenhuma OS de caixa pendente encontrada para ${customerId}. Criando nova...`);
+        setIsCreatingOs(true);
+        try {
+          const createOsFunction = httpsCallable(functions, 'createContinuedOrderService');
+          const result = await createOsFunction({ customerId: customerId });
+          
+          console.log("[CashierPage] Resultado da função 'createContinuedOrderService':", result.data);
+    
+          if (result.data && result.data.success === true && result.data.osId) { 
+              setActiveContinuedOsId(result.data.osId); // Guarda o ID da OS criada
+              toast({ title: "OS Criada", description: `OS ${result.data.osNumber} criada. Adicione itens.` });
+              setShowQuickSaleModal(true); // Abre o modal de seleção de produtos/serviços
+          } else {
+              throw new Error(result.data?.message || "Falha ao criar OS no backend.");
+          }
+    
+        } catch (error) {
+          console.error("[CashierPage] Erro ao chamar função createContinuedOrderService:", error);
+          const errorMessage = error.details?.originalError || error.message || "Não foi possível criar a OS.";
+          toast({
+            title: "Erro ao Continuar",
+            description: errorMessage,
+            variant: "destructive"
+          });
+          setActiveContinuedOsId(null); // Limpa em caso de erro
+        } finally {
+          setIsCreatingOs(false);
+        }
+    }
+  };
+  // <<< FIM FUNÇÃO AJUSTADA >>>
+
+  // <<< RENOMEADO: FUNÇÃO PARA RENDERIZAR A COLUNA ESQUERDA (PENDENTES) >>>
+  const renderPendingItemsColumn = () => {
+    // <<< RENOMEADO: Usar isLoadingPendingItems >>>
+    if (isLoadingPendingItems || isLoadingTenant) {
     return (
         <div className="flex justify-center items-center h-full p-4">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-          <span className="ml-2 text-muted-foreground">Carregando cobranças...</span>
+          {/* <<< Mensagem ajustada >>> */}
+          <span className="ml-2 text-muted-foreground">Carregando itens pendentes...</span>
       </div>
     );
   }
 
     if (!currentTenant && !isLoadingTenant) {
-       return <p className="text-center text-muted-foreground p-4">Tenant não carregado. Não é possível exibir cobranças.</p>;
+       return <p className="text-center text-muted-foreground p-4">Tenant não carregado. Não é possível exibir itens pendentes.</p>;
   }
 
-    if (pendingCharges.length === 0) {
-      return <p className="text-center text-muted-foreground p-4">Nenhuma cobrança pendente.</p>;
+    // <<< RENOMEADO: Usar pendingItems >>>
+    if (pendingItems.length === 0) {
+      return <p className="text-center text-muted-foreground p-4">Nenhum item pendente.</p>;
     }
 
-    const groupedCharges = groupChargesByCustomer(pendingCharges);
+    // <<< RENOMEADO: Usar groupPendingItemsByCustomer >>>
+    const groupedItems = groupPendingItemsByCustomer(pendingItems);
 
     return (
       <div className="p-4 flex flex-col h-full">
-        <h2 className="text-xl font-semibold mb-4 flex-shrink-0">Cobranças Pendentes</h2>
-        <ScrollArea className="flex-grow"> 
-          <div className="space-y-4"> 
-            {Object.entries(groupedCharges).map(([tutorId, charges]) => {
-              // Pega dados do primeiro charge para info do cliente/pet (supõe consistência)
-              const firstCharge = charges[0]; 
-              const customer = firstCharge?.customer;
-              const pet = firstCharge?.pet;
+        <h2 className="text-xl font-semibold mb-4 flex-shrink-0">Itens Pendentes</h2>
+        <ScrollArea className="flex-grow">
+          <div className="space-y-4">
+            {/* A lógica interna de renderização do card precisará ser ajustada depois */}
+            {Object.entries(groupedItems).map(([customerId, items]) => {
+              const firstItem = items[0];
+              const customer = firstItem?.customer;
+              const pet = firstItem?.pet;
               const customerName = customer?.name || customer?.full_name || 'Cliente Desconhecido';
               const petName = pet?.name || 'Pet não informado';
-              // <<< OBTER Prontuário ID da primeira charge (se existir) >>>
-              const prontuarioId = firstCharge?.prontuarioId || null; 
+              const prontuarioId = firstItem?.prontuarioId || null;
+              // Ajustar lógica de isGroupLoadedInCart e groupTotal depois
+              const isGroupLoadedInCart = items.some(item => currentLoadedChargeIds.includes(item.id));
+              const groupTotal = items.reduce((sum, item) => sum + (item.totalAmount || 0), 0);
 
-              // Verifica se ALGUMA charge deste grupo está carregada no caixa (usa currentLoadedChargeIds)
-              const isGroupLoadedInCart = charges.some(charge => currentLoadedChargeIds.includes(charge.id));
-
-              // Calcula o total do grupo
-              const groupTotal = charges.reduce((sum, charge) => sum + (charge.totalAmount || 0), 0);
-
-              // <<< CARD UNIFICADO POR CLIENTE >>>
-  return (
-                <Card key={tutorId} className={`overflow-hidden ${isGroupLoadedInCart ? 'border-blue-500 border-2' : ''}`}>
-                  {/* Cabeçalho com Pet e Cliente e Prontuário */}
+              return (
+                <Card key={customerId} className={`overflow-hidden ${isGroupLoadedInCart ? 'border-blue-500 border-2' : ''}`}>
                   <CardHeader className="bg-muted/50 p-3 border-b">
                      <p className="text-sm font-semibold">
                         <span className="font-bold">Pet:</span> {petName}
-                        {/* <<< Exibir Prontuário se existir no formato correto >>> */}
-                        {prontuarioId ? ` - Prontuário: ${prontuarioId}` : ''} 
+                        {prontuarioId ? ` - Prontuário: ${prontuarioId}` : ''}
                          - <span className="font-bold">Cliente:</span> {customerName}
                      </p>
                   </CardHeader>
-
-                  {/* Conteúdo listando CADA charge (EP/OS) */}
-                  <CardContent className="p-3 text-sm space-y-2"> {/* Diminuir espaço entre itens */}
-                     {/* Itera sobre CADA charge no grupo para mostrar seus detalhes */}
-                     {charges.map((charge) => (
-                       <div key={charge.id} className="flex justify-between items-center border-b pb-1 last:border-b-0 last:pb-0"> 
+                  <CardContent className="p-3 text-sm space-y-2">
+                     {items.map((item) => (
+                       <div key={item.id} className="flex justify-between items-center border-b pb-1 last:border-b-0 last:pb-0">
+                         <div className="flex items-center space-x-2"> {/* Adicionado flex container */} 
+                           {/* Lógica de Exibição Refinada */}
+                           {item.itemType === 'charge' && item.episodeId && (
+                               <>
+                                 {/* TODO: Adicionar ícone para Clínica? */}
+                                 <p><span className="font-medium">Episódio:</span> {item.episodeId}</p>
+                               </>
+                           )}
+                           {item.itemType === 'charge' && item.osNumber && (
+                               <>
+                                 {/* TODO: Adicionar ícone para Petshop? */}
+                                 <p><span className="font-medium">OS (Serviço):</span> {item.osNumber}</p>
+                               </>
+                           )}
+                           {item.itemType === 'order_service' && (
+                               <>
+                                 {/* TODO: Adicionar ícone para Caixa? */}
+                                 <p><span className="font-medium">OS (Caixa):</span> {item.osNumber}</p>
+                                 {/* <<< DESTAQUE SE FOR A OS ATIVA >>> */}
+                                 {item.id === activeContinuedOsId && (
+                                     <Badge variant="outline" className="ml-1 px-1.5 py-0.5 text-xs h-auto">Editando</Badge>
+                                 )}
+                               </>
+                           )}
+                           {item.itemType === 'charge' && !item.episodeId && !item.osNumber && (
+                               <p>Cobrança Direta</p> // Manter por segurança, mas talvez inalcançável
+                           )}
+                         </div>
                          <div>
-                           {charge.episodeId && (
-                               <p><span className="font-medium">Episódio:</span> {charge.episodeId}</p>
-                           )}
-                           {charge.osNumber && (
-                                <p><span className="font-medium">OS:</span> {charge.osNumber}</p>
-                           )}
-                           {!charge.episodeId && !charge.osNumber && (
-                               <p>Origem Desconhecida</p>
-                           )}
-                              </div>
-                         <div>
-                            <p className="text-right font-medium">R$ {charge.totalAmount?.toFixed(2) ?? 'N/A'}</p>
-                                  </div>
-                                </div>
+                            <p className="text-right font-medium">R$ {item.totalAmount?.toFixed(2) ?? 'N/A'}</p>
+                         </div>
+                       </div>
                      ))}
-
-                      {/* Total Agrupado e Botões */}
-                      <div className="pt-2 mt-1"> 
+                      <div className="pt-2 mt-1">
                           <div className="flex justify-between items-center mb-3">
                               <span className="font-semibold">Total Cliente:</span>
                               <span className="font-semibold text-lg">R$ {groupTotal.toFixed(2)}</span>
-                              </div>
-                          <div className="flex justify-end space-x-2"> 
-                               {/* Botão Continuar Comprando (só aparece se o grupo estiver carregado) */} 
+                          </div>
+                          <div className="flex justify-end space-x-2">
+                               {/* Botão Continuar Comprando (Lógica OK) */}
                                {isGroupLoadedInCart && (
-                                   <Button 
+                                   <Button
                                        variant="outline"
                                        size="sm"
-                                       onClick={() => { 
-                                           console.log("TODO: Implementar 'Continuar Comprando' para o cliente:", tutorId);
-                                           toast({ title: "Aviso", description: "Funcionalidade 'Continuar Comprando' ainda não implementada.", variant: "warning" });
-                                       }} 
+                                       // <<< Passar customerId e items para o handler >>>
+                                       onClick={() => handleContinueShopping(customerId, items)} 
+                                       disabled={isCreatingOs} 
                                    >
+                                       {isCreatingOs ? (
+                                           <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                       ) : (
+                                           <ShoppingBag className="h-4 w-4 mr-1" />
+                                       )}
                                        Continuar Comprando
                                    </Button>
                                )}
-                               {/* Botão Finalizar Compra (para o grupo todo) */}
-                              <Button 
-                                size="sm" 
-                                  // MODIFICADO: Chama a nova função passando o array 'charges'
-                                  onClick={() => handleLoadCustomerChargesToCart(charges)}
-                                  // Desabilita se OUTRO grupo/charge estiver carregado (usa currentLoadedChargeIds agora)
+                               {/* Botão Finalizar Compra */}
+                              <Button
+                                size="sm"
+                                  // <<< CHAMAR FUNÇÃO RENOMEADA >>>
+                                  onClick={() => handleLoadCustomerItemsToCart(items)} 
                                   disabled={currentLoadedChargeIds.length > 0 && !isGroupLoadedInCart}
-                                  // Muda aparência se ESTE grupo estiver carregado
                                   variant={isGroupLoadedInCart ? "secondary" : "default"}
                               >
                                   {isGroupLoadedInCart ? 'Carregado' : 'Finalizar Compra'}
@@ -615,10 +752,9 @@ export default function CashierPage() {
                    </p>
                 ) : (
                    <div className="space-y-2">
-                     {cart.map((item, index) => {
-                       const itemId = item.id || item.itemId; // Garante que temos um ID
+                     {cart.map((item) => {
                        return (
-                         <div key={`${itemId}-${item.type}-${index}`} className="flex items-center justify-between text-sm border-b pb-1">
+                         <div key={item.cartItemId} className="flex items-center justify-between text-sm border-b pb-1">
                            <div>
                              <p className="font-medium">{item.name || item.description}</p> 
                              {/* <<< EXIBIR IDs ABAIXO DO NOME >>> */}
@@ -637,26 +773,29 @@ export default function CashierPage() {
                                type="number"
                                min="1"
                                value={item.quantity}
-                               onChange={(e) => updateQuantity(itemId, item.type, parseInt(e.target.value))}
+                               onChange={(e) => updateQuantity(item.cartItemId, item.type, parseInt(e.target.value))}
                                className="w-16 h-8"
-                               // MODIFICADO: Usa currentLoadedChargeIds
                                disabled={currentLoadedChargeIds.length > 0}
                              />
                              <span>R$ {(item.totalPrice || (item.unitPrice * item.quantity)).toFixed(2)}</span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                               onClick={() => removeFromCart(itemId, item.type)}
+                             <Button
+                               variant="ghost"
+                               size="icon"
+                               onClick={() => {
+                                   if (item.originalDocumentType === 'charge') {
+                                       handleOpenCancellationModal(item);
+                                   } else {
+                                       removeFromCart(item.cartItemId);
+                                   }
+                               }}
                                className="h-8 w-8"
-                               // MODIFICADO: Usa currentLoadedChargeIds
-                               disabled={currentLoadedChargeIds.length > 0}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
+                             >
+                               <X className="h-4 w-4" />
+                             </Button>
+                           </div>
+                         </div>
                        );
-                      })}
+                     })}
                   </div>
                 )}
               </ScrollArea>
@@ -694,18 +833,142 @@ export default function CashierPage() {
     );
   };
 
-  // <<< RESTAURAR DEFINIÇÃO groupChargesByCustomer >>>
-  const groupChargesByCustomer = (charges) => {
-    return charges.reduce((acc, charge) => {
-      const tutorId = charge.tutorId || 'unknown'; // Agrupa charges sem tutorId separadamente
-      if (!acc[tutorId]) {
-        acc[tutorId] = [];
+  // <<< RENOMEADO: groupChargesByCustomer >>>
+  const groupPendingItemsByCustomer = (items) => {
+    return items.reduce((acc, item) => {
+      // Usar customerId como chave padronizada
+      const customerIdKey = item.customerId || item.tutorId || 'unknown'; 
+      if (!acc[customerIdKey]) {
+        acc[customerIdKey] = [];
       }
-      acc[tutorId].push(charge);
+      acc[customerIdKey].push(item);
       return acc;
     }, {});
   };
-  // <<< FIM RESTAURAÇÃO >>>
+  
+  // Função para verificar/deletar OS vazia
+  const checkAndDeleteEmptyOs = async (osId) => {
+    if (!osId) return;
+    console.log(`[CashierPage] Verificando OS ${osId} para possível exclusão.`);
+
+    const tenantId = localStorage.getItem('current_tenant');
+    if (!tenantId) {
+        console.error("[CashierPage] Tenant ID não encontrado no localStorage ao verificar OS vazia!");
+        return;
+    }
+
+    try {
+      const osDocRef = doc(db, 'tenants', tenantId, 'order_services', osId);
+      const osDocSnap = await getDoc(osDocRef);
+
+      if (osDocSnap.exists()) {
+        const osData = osDocSnap.data();
+        if (osData.items && osData.items.length === 0) {
+          console.log(`[CashierPage] OS ${osId} está vazia. Preparando para chamar função de exclusão.`);
+          
+          // <<< DESCOMENTAR CHAMADA DA FUNÇÃO BACKEND >>>
+          const deleteEmptyOs = httpsCallable(functions, 'deleteEmptyCashierOs');
+          try {
+            const result = await deleteEmptyOs({ osId: osId }); // <<< Passar osId no payload >>>
+            console.log(`[CashierPage] Função deleteEmptyCashierOs chamada. Resultado:`, result.data);
+            if (result.data?.deleted) {
+                 toast({ title: "OS Removida", description: "A ordem de serviço iniciada e não utilizada foi removida." });
+            } else {
+                // Log opcional se não deletou (ex: não estava vazia no backend)
+                 console.log(`[CashierPage] Backend reportou que OS ${osId} não foi deletada (motivo: ${result.data?.message})`);
+            }
+          } catch (error) {
+            console.error(`[CashierPage] Erro ao chamar deleteEmptyCashierOs para OS ${osId}:`, error);
+            toast({ title: "Erro", description: "Falha ao tentar remover OS vazia.", variant: "destructive" });
+          }
+          // <<< FIM DESCOMENTAR >>>
+
+        } else {
+          console.log(`[CashierPage] OS ${osId} contém itens ou não existe mais. Nenhuma ação de exclusão necessária.`);
+        }
+      } else {
+        console.warn(`[CashierPage] OS ${osId} não encontrada ao verificar para exclusão.`);
+      }
+    } catch (error) {
+      console.error(`[CashierPage] Erro ao verificar OS ${osId} para exclusão:`, error);
+    }
+  };
+
+  // Função wrapper para onClose do Modal 
+  const handleCloseQuickSaleModal = () => {
+    console.log("[CashierPage] Fechando QuickSaleModal.");
+    setShowQuickSaleModal(false);
+    // Se estávamos no modo "Continuar Comprando", verificar se a OS ficou vazia
+    if (activeContinuedOsId) {
+        checkAndDeleteEmptyOs(activeContinuedOsId);
+        setActiveContinuedOsId(null); // Limpar o ID ativo após fechar
+    }
+  };
+  // <<< FIM FUNÇÃO WRAPPER >>>
+
+  // <<< FUNÇÃO PLACEHOLDER para abrir modal de cancelamento >>>
+  const handleOpenCancellationModal = (item) => {
+      console.log("[CashierPage] Abrir modal de cancelamento para o item:", item);
+      setItemToCancel(item); // Guarda o item que será cancelado
+      setCancellationModalOpen(true); // Abre o modal
+      // <<< REMOVER TOAST PLACEHOLDER >>>
+      // toast({ title: "Ação Necessária", description: `É preciso um motivo para cancelar o item '${item.name}'. (Modal ainda não implementado)`, variant: "warning", duration: 5000 });
+  };
+  // <<< FIM FUNÇÃO PLACEHOLDER >>>
+
+  // <<< NOVA FUNÇÃO para confirmar o cancelamento (chamada pelo modal) >>>
+  // <<< AJUSTADO: Recebe itemIdentifier (id original) em vez de cartItemId >>>
+  const handleConfirmCancellation = async (itemIdentifier, originalDocumentId, reason) => {
+    console.log(`[CashierPage] Confirmando cancelamento do item ${itemIdentifier} (Charge: ${originalDocumentId}) com motivo: ${reason}`);
+
+    // <<< TODO: IMPLEMENTAR CHAMADA PARA CLOUD FUNCTION 'cancelChargeItem' >>>
+    try {
+      console.log(`[CashierPage] Chamando função 'cancelChargeItem'...`);
+      const cancelFunction = httpsCallable(functions, 'cancelChargeItem');
+      const result = await cancelFunction({ 
+          chargeId: originalDocumentId, 
+          itemId: itemIdentifier, 
+          reason: reason 
+      });
+      console.log(`[CashierPage] Resultado da função 'cancelChargeItem':`, result.data);
+
+      // <<< AJUSTADO: Remover o item VISUALMENTE do carrinho usando o cartItemId do estado >>>
+      if (itemToCancel && itemToCancel.cartItemId) {
+          removeFromCart(itemToCancel.cartItemId);
+      } else {
+          console.warn("[CashierPage] Não foi possível remover o item do carrinho visualmente após cancelamento (cartItemId não encontrado).", itemToCancel);
+      }
+
+      toast({ title: "Item Removido", description: `O item "${itemToCancel?.name}" foi removido do carrinho. O cancelamento será processado.` });
+      
+      // Não precisa fechar o modal aqui, o próprio modal faz isso em caso de sucesso
+      // setCancellationModalOpen(false); // O modal se fecha via onClose
+      // setItemToCancel(null); // handleCloseCancellationModal faz isso
+
+    } catch (error) {
+      // <<< CÓDIGO DE ERRO RESTAURADO >>>
+      console.error(`[CashierPage] Erro ao tentar cancelar item ${itemIdentifier} via backend:`, error);
+      // Exibir o erro para o usuário
+      toast({ 
+        title: "Erro no Cancelamento", 
+        description: error.message || "Não foi possível processar o cancelamento no momento.", 
+        variant: "destructive" 
+      });
+      // NÃO remover do carrinho visualmente se o backend falhar
+      // Re-lançar o erro para que o modal não feche automaticamente
+      throw error;
+      // <<< FIM CÓDIGO DE ERRO RESTAURADO >>>
+    }
+    // <<< FIM TODO >>>
+  };
+  // <<< FIM NOVA FUNÇÃO >>>
+
+  // <<< NOVA FUNÇÃO para fechar o modal de cancelamento >>>
+  const handleCloseCancellationModal = () => {
+    setCancellationModalOpen(false);
+    setItemToCancel(null);
+  };
+  // <<< FIM NOVA FUNÇÃO >>>
 
   // <<< Estados de Loading e Erro ANTES do return principal >>>
   if (isLoadingTenant) {
@@ -731,7 +994,7 @@ export default function CashierPage() {
     <div className="flex h-screen overflow-hidden bg-background">
         {/* Coluna Esquerda - Adicionar overflow-hidden */}
         <div className="w-full md:w-7/12 lg:w-7/12 border-r flex flex-col overflow-hidden"> 
-           {renderPendingChargesColumn()} 
+           {renderPendingItemsColumn()} 
         </div>
 
         {/* Coluna Direita - Adicionar overflow-hidden */}
@@ -788,13 +1051,17 @@ export default function CashierPage() {
         
        {showProductForm && <ProductForm onClose={() => setShowProductForm(false)} />} 
 
-       {/* <<< RENDERIZAR O NOVO MODAL >>> */}
+       {/* <<< RENDERIZAR MODAL com props ajustadas >>> */}
        <QuickSaleModal 
           isOpen={showQuickSaleModal}
-          onClose={() => setShowQuickSaleModal(false)}
-          onConfirm={handleConfirmQuickSale}
+          // MODIFICADO: Usa o novo handler para onClose
+          onClose={handleCloseQuickSaleModal} 
+          // MANTIDO: onConfirm ainda é usado para o modo "Novo Pedido"
+          onConfirm={handleConfirmQuickSale} 
           products={products}
           isLoadingProducts={isLoadingProducts}
+          // NOVO: Passa o ID da OS ativa (será null no modo "Novo Pedido")
+          targetOsId={activeContinuedOsId} 
        />
 
        {/* Loading de Produtos (pode ser sobreposto ou dentro da coluna direita) */}
@@ -804,6 +1071,20 @@ export default function CashierPage() {
               <span className="ml-2">Carregando produtos...</span>
           </div>
        )}
+
+       {/* <<< RENDERIZAR MODAL DE CANCELAMENTO >>> */} 
+       <CancellationReasonModal
+           isOpen={cancellationModalOpen}
+           onClose={handleCloseCancellationModal}
+           // <<< AJUSTADO: Passar o id original do item (item.id) na chamada onConfirm >>>
+           onConfirm={(originalItemIdFromModal, originalDocId, cancelReason) => {
+                // A função onConfirm do modal agora passa o ID original do item diretamente.
+                // A função handleConfirmCancellation espera este ID.
+                // Não precisamos mais pegar de itemToCancel.id aqui.
+                return handleConfirmCancellation(originalItemIdFromModal, originalDocId, cancelReason);
+            }}
+           item={itemToCancel}
+       />
     </div>
   );
 } 

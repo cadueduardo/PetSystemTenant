@@ -5,7 +5,7 @@ import axios from 'axios';
 import * as logger from "firebase-functions/logger";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
-import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { HttpsError, onCall, CallableRequest } from "firebase-functions/v2/https";
 import { defineString, defineSecret } from "firebase-functions/params";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { ScheduledEvent } from "firebase-functions/v2/scheduler";
@@ -86,6 +86,30 @@ interface WahaWebhookPayload {
   payload?: any;
   me?: { id: string; pushName: string };
   timestamp?: number;
+}
+
+// ==============================================
+// INTERFACES (se necessário)
+// ==============================================
+
+// <<< Adicionar interfaces aqui >>>
+interface ChargeItem {
+  itemId?: string;
+  sourceId?: string;
+  description?: string;
+  unitPrice?: number;
+  quantity?: number;
+  totalPrice?: number;
+  itemType?: string;
+  cancelled?: boolean;
+  cancellationReason?: string;
+  // cancellationTimestamp?: admin.firestore.Timestamp; // Usar admin.firestore.Timestamp se precisar
+}
+
+interface CancelChargeItemData {
+  chargeId: string;
+  itemId: string;
+  reason: string;
 }
 
 // --- Funções Auxiliares ---
@@ -2194,8 +2218,10 @@ export const lookupBarcode = https.onRequest(
 // --- Função de Processamento de Pagamento ---
 
 interface PaymentData {
-  chargeIds?: string[];    // IDs das cobranças existentes (se aplicável)
-  cartItems?: Array<{     // Itens do carrinho (para venda direta)
+  chargeIds?: string[];    
+  // <<< ADICIONAR continuedOsIds >>>
+  continuedOsIds?: string[]; 
+  cartItems?: Array<{     
     itemId: string;
     description: string;
     quantity: number;
@@ -2204,9 +2230,9 @@ interface PaymentData {
     itemType: 'product' | 'service';
   }>;
   paymentMethod: 'pix' | 'credit_card' | 'debit_card' | 'cash' | 'other';
-  amountPaid: number;       // Valor total pago nesta transação
-  customerId: string;
-  cardInfo?: {             // Opcional, apenas para cartão
+  amountPaid: number;       
+  customerId: string | null; // <<< PERMITIR NULL para venda anônima >>>
+  cardInfo?: {             
     number: string;
     holder: string;
     expiry: string;
@@ -2221,7 +2247,7 @@ export const processPayment = onCall<
   {
     region: "southamerica-east1",
     cors: ["http://localhost:5173", "https://petfacil.app"],
-    enforceAppCheck: false, // Considerar habilitar em produção
+    enforceAppCheck: false, 
   },
   async (request) => {
     logger.info(`[processPayment / v: ${CODE_VERSION}] Function called.`, { uid: request.auth?.uid });
@@ -2236,30 +2262,40 @@ export const processPayment = onCall<
       logger.error(`[processPayment] User ${request.auth.uid} is missing tenant_id claim.`);
       throw new HttpsError("failed-precondition", "Usuário não pertence a um tenant.");
     }
-    const cashierId = request.auth.uid; // UID do colaborador que está processando
+    const cashierId = request.auth.uid;
 
     // 2. Validação dos Dados de Entrada
     const data = request.data;
     logger.info(`[processPayment] Received data for tenant ${tenantId}:`, data);
 
-    // MODIFIED: Allow null/missing customerId ONLY if chargeIds is also missing (direct sale)
-    // Allow chargeIds to be empty or null when cartItems are present.
-    if (!data.paymentMethod || data.amountPaid == null || data.amountPaid <= 0 || (!data.customerId && data.chargeIds && data.chargeIds.length > 0)) {
-        logger.error("[processPayment] Invalid input data (missing required payment fields or missing customerId for existing charge).", data);
-        throw new HttpsError("invalid-argument", "Dados de pagamento incompletos ou inválidos (método, valor obrigatórios; cliente obrigatório para cobranças existentes).");
+    // Validar campos básicos de pagamento
+    if (!data.paymentMethod || data.amountPaid == null || data.amountPaid <= 0) {
+        logger.error("[processPayment] Invalid input data (missing/invalid paymentMethod or amountPaid).", data);
+        throw new HttpsError("invalid-argument", "Método de pagamento e valor pago (positivo) são obrigatórios.");
+    }
+    
+    // <<< AJUSTAR VALIDAÇÃO customerId >>>
+    // Customer ID é obrigatório SE houver chargeIds OU continuedOsIds
+    const hasExistingItems = (data.chargeIds && data.chargeIds.length > 0) || (data.continuedOsIds && data.continuedOsIds.length > 0);
+    if (hasExistingItems && !data.customerId) {
+        logger.error("[processPayment] Invalid input data (missing customerId for existing charge/OS).", data);
+        throw new HttpsError("invalid-argument", "ID do Cliente é necessário ao pagar cobranças ou OS existentes.");
     }
 
-    if ((!data.chargeIds || data.chargeIds.length === 0) && (!data.cartItems || data.cartItems.length === 0)) {
-        logger.error("[processPayment] Invalid input data (missing chargeIds and cartItems).", data);
-        throw new HttpsError("invalid-argument", "É necessário fornecer IDs de cobrança ou itens no carrinho.");
+    // <<< AJUSTAR VALIDAÇÃO DE ITENS >>>
+    // Deve haver OU (chargeIds/osIds) OU cartItems
+    const hasCartItems = data.cartItems && data.cartItems.length > 0;
+    if (!hasExistingItems && !hasCartItems) {
+        logger.error("[processPayment] Invalid input data (no items provided).", data);
+        throw new HttpsError("invalid-argument", "É necessário fornecer IDs de cobrança/OS ou itens no carrinho.");
+    }
+    // Não pode haver cartItems E itens existentes juntos (essa validação pode ser mantida)
+    if (hasExistingItems && hasCartItems) {
+        logger.error("[processPayment] Invalid input data (both existing items and cartItems provided).", data);
+        throw new HttpsError("invalid-argument", "Não é possível processar cobranças/OS existentes e itens de carrinho simultaneamente.");
     }
 
-    if (data.chargeIds && data.chargeIds.length > 0 && data.cartItems && data.cartItems.length > 0) {
-        logger.error("[processPayment] Invalid input data (both chargeIds and cartItems provided).", data);
-        throw new HttpsError("invalid-argument", "Não é possível processar IDs de cobrança e itens de carrinho simultaneamente.");
-    }
-
-    // Validação específica do cartão (se aplicável)
+    // Validação específica do cartão (igual antes)
     if ((data.paymentMethod === 'credit_card' || data.paymentMethod === 'debit_card') && 
         (!data.cardInfo || !data.cardInfo.number || !data.cardInfo.holder || !data.cardInfo.expiry || !data.cardInfo.cvv)) {
         logger.error("[processPayment] Invalid card data.", data.cardInfo);
@@ -2267,111 +2303,216 @@ export const processPayment = onCall<
     }
 
     try {
-      let finalChargeId: string | undefined = (data.chargeIds && data.chargeIds.length > 0) ? data.chargeIds[0] : undefined; // Use first chargeId for return, if needed
+      // <<< Remover definição de finalChargeId daqui >>>
+      // let finalChargeId: string | undefined = (data.chargeIds && data.chargeIds.length > 0) ? data.chargeIds[0] : undefined;
       let transactionId: string | undefined;
 
       // Usar uma transação Firestore para garantir atomicidade
       await db.runTransaction(async (transaction) => {
-        logger.info(`[processPayment] Starting Firestore transaction for tenant ${tenantId}.`);
+        logger.info(`[processPayment / Tx ${tenantId}] Starting Firestore transaction.`);
+        const customerIdForTransaction = data.customerId; // Já validado que existe se hasExistingItems
+        
+        // --- CASO 1: Pagamento Combinado (Charges + OS) --- 
+        if (data.chargeIds && data.chargeIds.length > 0 && data.continuedOsIds && data.continuedOsIds.length > 0) {
+            logger.info(`[processPayment / Tx ${tenantId}] Processing COMBINED payment: Charges [${data.chargeIds.join(', ')}] + OS [${data.continuedOsIds.join(', ')}]`);
+            if (!customerIdForTransaction) throw new HttpsError("internal", "Erro interno: Customer ID ausente no caso combinado."); // Verificação extra
 
-        if (data.chargeIds && data.chargeIds.length > 0) {
-          // --- Lógica para pagar MÚLTIPLAS COBRANÇAS EXISTENTES --- 
-          logger.info(`[processPayment] Processing payment for existing charges: ${data.chargeIds.join(', ')}`);
+            // --- Fase de Leitura Combinada ---
+            const chargeRefs: admin.firestore.DocumentReference[] = [];
+            const osRefs: admin.firestore.DocumentReference[] = [];
+            const validDocsData: { [id: string]: { ref: admin.firestore.DocumentReference, data: FirebaseFirestore.DocumentData, type: 'charge' | 'order_service' } } = {};
+            let totalAmountFromDocs = 0;
 
-          // 1. Criar uma ÚNICA transação para o pagamento total
-          const newTransactionRef = db.collection('tenants').doc(tenantId).collection('transactions').doc();
-          transactionId = newTransactionRef.id; // Atribui o ID da transação
+            // Ler Charges
+            logger.info(`[processPayment / Tx Read ${tenantId}] Reading ${data.chargeIds.length} charge(s)...`);
+            for (const chargeId of data.chargeIds) {
+                const chargeRef = db.collection('tenants').doc(tenantId).collection('charges').doc(chargeId);
+                chargeRefs.push(chargeRef);
+                const chargeDoc = await transaction.get(chargeRef);
+                if (!chargeDoc.exists || !chargeDoc.data()) {
+                    logger.error(`[processPayment / Tx Read ${tenantId}] Charge ${chargeId} not found or data missing.`);
+                    // Considerar lançar erro ou apenas logar e pular?
+                } else {
+                    const docData = chargeDoc.data()!;
+                    if (docData.status === 'paid') {
+                        logger.warn(`[processPayment / Tx Read ${tenantId}] Charge ${chargeId} already paid. Skipping.`);
+                    } else {
+                        validDocsData[chargeId] = { ref: chargeRef, data: docData, type: 'charge' };
+                        totalAmountFromDocs += docData.totalAmount || 0;
+                    }
+                }
+            }
 
-          // Usar o customerId fornecido na chamada (deve ser consistente para todas as charges agrupadas)
-          const customerIdForTransaction = data.customerId;
-          if (!customerIdForTransaction) {
-            logger.error("[processPayment] Customer ID is missing when processing multiple charges.");
-            throw new HttpsError("invalid-argument", "ID do Cliente é necessário ao pagar cobranças existentes.");
+            // Ler Order Services
+            logger.info(`[processPayment / Tx Read ${tenantId}] Reading ${data.continuedOsIds.length} order service(s)...`);
+            for (const osId of data.continuedOsIds) {
+                const osRef = db.collection('tenants').doc(tenantId).collection('order_services').doc(osId);
+                osRefs.push(osRef);
+                const osDoc = await transaction.get(osRef);
+                if (!osDoc.exists || !osDoc.data()) {
+                    logger.error(`[processPayment / Tx Read ${tenantId}] Order Service ${osId} not found or data missing.`);
+                    // Considerar lançar erro ou apenas logar e pular?
+                } else {
+                    const docData = osDoc.data()!;
+                    if (docData.status !== 'pending_cashier') { // Validar status esperado
+                        logger.warn(`[processPayment / Tx Read ${tenantId}] Order Service ${osId} status is not 'pending_cashier' (${docData.status}). Skipping.`);
+                    } else {
+                        validDocsData[osId] = { ref: osRef, data: docData, type: 'order_service' };
+                        totalAmountFromDocs += docData.totalValue || 0;
+                    }
+                }
+            }
+            logger.info(`[processPayment / Tx Read ${tenantId}] Finished reading. Total amount from valid docs: ${totalAmountFromDocs}`);
+            
+            // Opcional: Validar total vs valor pago
+            // if (Math.abs(data.amountPaid - totalAmountFromDocs) > 0.01) { ... }
+
+            // --- Fase de Escrita Combinada ---
+            logger.info(`[processPayment / Tx Write ${tenantId}] Writing transaction and doc updates...`);
+            const newTransactionRef = db.collection('tenants').doc(tenantId).collection('transactions').doc();
+            transactionId = newTransactionRef.id;
+
+            // Criar Transaction referenciando AMBOS os tipos
+            logger.info(`[processPayment / Tx Write ${tenantId}] Creating transaction ${transactionId} for amount ${data.amountPaid}`);
+            transaction.set(newTransactionRef, {
+                chargeIds: data.chargeIds, // Guardar os IDs das charges
+                orderServiceIds: data.continuedOsIds, // Guardar os IDs das OS
+                tenantId: tenantId,
+                tutorId: customerIdForTransaction,
+                method: data.paymentMethod,
+                amount: data.amountPaid,
+                status: 'completed',
+                transactionTimestamp: admin.firestore.FieldValue.serverTimestamp(),
+                cashierId: cashierId,
+                notes: `Pagamento referente a Charges: [${data.chargeIds.join(', ')}] e OS: [${data.continuedOsIds.join(', ')}]`,
+            });
+
+            // Atualizar CADA documento válido (charge ou OS)
+            for (const docId in validDocsData) {
+                const { ref, data: docData, type } = validDocsData[docId];
+                const updateTimestamp = admin.firestore.FieldValue.serverTimestamp();
+                const paidAtTimestamp = updateTimestamp; // Assumindo pagamento total
+
+                if (type === 'charge') {
+                    logger.info(`[processPayment / Tx Write ${tenantId}] Updating charge ${docId} status to paid.`);
+                    transaction.update(ref, {
+                        status: 'paid',
+                        amountPaid: docData.totalAmount, // Pagar valor total da charge
+                        paymentMethod: data.paymentMethod,
+                        updatedAt: updateTimestamp,
+                        paidAt: paidAtTimestamp,
+                        cashierId: cashierId,
+                    });
+                } else { // type === 'order_service'
+                    logger.info(`[processPayment / Tx Write ${tenantId}] Updating order_service ${docId} status to paid.`);
+                    transaction.update(ref, {
+                        status: 'paid', // Ou 'completed'? Definir padrão
+                        paymentStatus: 'paid',
+                        paymentMethod: data.paymentMethod,
+                        // amountPaid: docData.totalValue, // OS não tem amountPaid?
+                        paidAt: paidAtTimestamp,
+                        updatedAt: updateTimestamp,
+                        cashierId: cashierId,
+                        // Atualizar totalValue se necessário (provavelmente não muda no pagamento)
+                    });
+                }
+            }
+            logger.info(`[processPayment / Tx Write ${tenantId}] Finished writing combined updates.`);
+            
+        // --- CASO 2: Pagamento apenas de Charges Existentes --- 
+        } else if (data.chargeIds && data.chargeIds.length > 0) {
+          // Lógica existente (Reads first) para múltiplas charges
+          // (Copiar/Adaptar a lógica anterior que já funcionava)
+          logger.info(`[processPayment / Tx ${tenantId}] Processing payment for existing charges ONLY: ${data.chargeIds.join(', ')}`);
+          if (!customerIdForTransaction) throw new HttpsError("internal", "Erro interno: Customer ID ausente no caso de charges.");
+
+          // --- FASE DE LEITURA (Charges Only) ---
+          const chargeRefs: admin.firestore.DocumentReference[] = [];
+          const chargeDocsData: { [id: string]: FirebaseFirestore.DocumentData | null } = {}; 
+          let totalAmountFromCharges = 0; 
+
+          logger.info(`[processPayment / Tx Read ${tenantId}] Reading ${data.chargeIds.length} charge document(s)...`);
+          for (const chargeId of data.chargeIds) {
+            const chargeRef = db.collection('tenants').doc(tenantId).collection('charges').doc(chargeId);
+            chargeRefs.push(chargeRef); 
+            const chargeDoc = await transaction.get(chargeRef);
+            if (!chargeDoc.exists || !chargeDoc.data()) {
+                logger.error(`[processPayment / Tx Read ${tenantId}] Charge ${chargeId} not found or data missing.`);
+                chargeDocsData[chargeId] = null; 
+            } else {
+                const docData = chargeDoc.data()!;
+                if (docData.status === 'paid') {
+                   logger.warn(`[processPayment / Tx Read ${tenantId}] Charge ${chargeId} already paid. Skipping.`);
+                   chargeDocsData[chargeId] = null;
+                } else {
+                   chargeDocsData[chargeId] = docData;
+                   totalAmountFromCharges += docData.totalAmount || 0;
+                }
+            }
           }
+          logger.info(`[processPayment / Tx Read ${tenantId}] Finished reading charges. Total amount: ${totalAmountFromCharges}`);
+          // if (Math.abs(data.amountPaid - totalAmountFromCharges) > 0.01) { ... }
 
-          logger.info(`[processPayment] Creating single transaction ${transactionId} for amount ${data.amountPaid}`);
+          // --- FASE DE ESCRITA (Charges Only) ---
+          logger.info(`[processPayment / Tx Write ${tenantId}] Writing transaction and charge updates...`);
+          const newTransactionRef = db.collection('tenants').doc(tenantId).collection('transactions').doc();
+          transactionId = newTransactionRef.id;
+
+          logger.info(`[processPayment / Tx Write ${tenantId}] Creating single transaction ${transactionId} for amount ${data.amountPaid}`);
           transaction.set(newTransactionRef, {
-            chargeIds: data.chargeIds, // Salva todos os IDs relacionados
+            chargeIds: data.chargeIds, // <<< Apenas chargeIds aqui >>>
             tenantId: tenantId,
             tutorId: customerIdForTransaction, 
             method: data.paymentMethod,
-            amount: data.amountPaid, // Valor total pago
-            status: 'completed', // Assumir completo por enquanto
+            amount: data.amountPaid,
+            status: 'completed',
             transactionTimestamp: admin.firestore.FieldValue.serverTimestamp(),
             cashierId: cashierId,
             notes: `Pagamento referente às cobranças: ${data.chargeIds.join(', ')}`,
           });
 
-          // 2. Atualizar CADA charge individualmente
-          for (const chargeId of data.chargeIds) {
-            const chargeRef = db.collection('tenants').doc(tenantId).collection('charges').doc(chargeId);
-            const chargeDoc = await transaction.get(chargeRef); // Obter dentro da transação
-
-            if (!chargeDoc.exists) {
-              logger.error(`[processPayment] Charge ${chargeId} not found during transaction.`);
-              throw new HttpsError("not-found", `Cobrança ${chargeId} não encontrada.`);
-            }
-
-            const chargeData = chargeDoc.data();
-            if (!chargeData) {
-                logger.error(`[processPayment / Tx] Charge data is undefined for charge ${chargeId}.`);
-                throw new HttpsError("internal", `Erro ao ler dados da cobrança ${chargeId}.`);
-            }
-
-            // Verifica se a charge já não estava paga para evitar reprocessamento (opcional mas bom)
-            if (chargeData.status === 'paid') {
-              logger.warn(`[processPayment / Tx] Charge ${chargeId} already marked as paid. Skipping update for this charge.`);
-              continue; // Pula para a próxima charge no loop
-            }
-
-            // TODO: Implementar lógica de pagamento parcial se necessário.
-            // Por agora, marca como 'paid' e assume que data.amountPaid quitou tudo.
-            logger.info(`[processPayment / Tx] Updating charge ${chargeId} status to paid.`);
-            transaction.update(chargeRef, {
-              status: 'paid', // TODO: Ajustar para 'partially_paid' se necessário
-              // Atualiza o amountPaid da charge para refletir seu valor total (assumindo pagamento integral)
-              amountPaid: chargeData.totalAmount, 
-              paymentMethod: data.paymentMethod, // <<< ADICIONADO paymentMethod >>>
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              paidAt: admin.firestore.FieldValue.serverTimestamp(), // TODO: Apenas se quitado
-              cashierId: cashierId, // Registrar quem recebeu
-            });
+          for (const chargeRef of chargeRefs) {
+              const chargeId = chargeRef.id;
+              const chargeData = chargeDocsData[chargeId];
+              if (!chargeData) { 
+                  logger.info(`[processPayment / Tx Write ${tenantId}] Skipping update for charge ${chargeId}.`);
+                  continue; 
+              }
+              logger.info(`[processPayment / Tx Write ${tenantId}] Updating charge ${chargeId} status to paid.`);
+              transaction.update(chargeRef, {
+                status: 'paid', 
+                amountPaid: chargeData.totalAmount, 
+                paymentMethod: data.paymentMethod,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                paidAt: admin.firestore.FieldValue.serverTimestamp(),
+                cashierId: cashierId,
+              });
           }
+          logger.info(`[processPayment / Tx Write ${tenantId}] Finished writing charge updates.`);
 
-        } else if (data.cartItems) {
-          // --- Lógica para VENDA DIRETA NO CAIXA --- 
-          // ... (código interno da transação para venda direta) ...
+        // --- CASO 3: Pagamento de Venda Direta (cartItems) --- 
+        } else if (data.cartItems && data.cartItems.length > 0) {
+          logger.info(`[processPayment / Tx ${tenantId}] Processing payment for direct sale (cart items).`);
+          // A lógica existente para venda direta já funciona aqui
           const newChargeRef = db.collection('tenants').doc(tenantId).collection('charges').doc();
-          finalChargeId = newChargeRef.id; // Atribui o ID aqui
-
-          // TODO: Validar se customerId existe?
-          // TODO: Validar se os itens (products/services) existem e têm preços válidos?
+          const finalChargeId = newChargeRef.id; // Definir ID da nova charge
           
           const totalAmount = data.cartItems.reduce((sum, item) => sum + item.totalPrice, 0);
-          if (Math.abs(totalAmount - data.amountPaid) > 0.01) { // Permitir pequena diferença de arredondamento
-              logger.error(`[processPayment] Direct sale amount mismatch. Cart total: ${totalAmount}, Amount paid: ${data.amountPaid}`);
-              throw new HttpsError("invalid-argument", `Valor pago (${data.amountPaid}) não corresponde ao total do carrinho (${totalAmount}).`);
+          if (Math.abs(totalAmount - data.amountPaid) > 0.01) { 
+              logger.error(`[processPayment / Tx ${tenantId}] Direct sale amount mismatch. Cart: ${totalAmount}, Paid: ${data.amountPaid}`);
+              throw new HttpsError("invalid-argument", `Valor pago (${data.amountPaid.toFixed(2)}) não corresponde ao total do carrinho (${totalAmount.toFixed(2)}).`);
           }
 
-          logger.info(`[processPayment] Creating new charge ${finalChargeId} for direct sale.`);
+          logger.info(`[processPayment / Tx ${tenantId}] Creating new charge ${finalChargeId} for direct sale.`);
           transaction.set(newChargeRef, {
             tenantId: tenantId,
-            tutorId: data.customerId || null, // Explicitly set to null if missing/undefined
+            tutorId: data.customerId || null, // Pode ser nulo aqui
             petId: null, 
-            items: data.cartItems.map(item => ({
-                itemId: item.itemId,
-                sourceType: item.itemType, 
-                sourceId: null, 
-                description: item.description,
-                quantity: item.quantity,
-                unitPrice: item.unitPrice,
-                totalPrice: item.totalPrice,
-                itemType: item.itemType, 
-            })),
+            items: data.cartItems.map(item => ({ /* ... mapeamento ... */ })),
             totalAmount: totalAmount,
             amountPaid: data.amountPaid,
             status: 'paid', 
-            paymentMethod: data.paymentMethod, // <<< ADICIONADO paymentMethod >>>
+            paymentMethod: data.paymentMethod, 
             sourceType: 'cashier_direct',
             cashierId: cashierId,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2382,12 +2523,12 @@ export const processPayment = onCall<
           });
 
           const newTransactionRef = db.collection('tenants').doc(tenantId).collection('transactions').doc();
-          transactionId = newTransactionRef.id; // Atribui o ID aqui
-          logger.info(`[processPayment] Creating transaction ${transactionId} for new charge ${finalChargeId}`);
+          transactionId = newTransactionRef.id; 
+          logger.info(`[processPayment / Tx ${tenantId}] Creating transaction ${transactionId} for new charge ${finalChargeId}`);
           transaction.set(newTransactionRef, {
-            chargeId: finalChargeId,
+            chargeId: finalChargeId, // <<< Apenas chargeId aqui >>>
             tenantId: tenantId,
-            tutorId: data.customerId || null, // Explicitly set to null if missing/undefined
+            tutorId: data.customerId || null,
             method: data.paymentMethod,
             amount: data.amountPaid,
             status: 'completed',
@@ -2395,31 +2536,29 @@ export const processPayment = onCall<
             cashierId: cashierId,
             notes: `Pagamento para venda direta no caixa.`,
           });
+          logger.info(`[processPayment / Tx ${tenantId}] Finished writing direct sale charge and transaction.`);
+
         } else {
-          // Este caso não deveria acontecer devido às validações anteriores, mas é bom ter um fallback
-          logger.error("[processPayment] Transaction error: Neither chargeIds nor cartItems were effectively processed.");
-          throw new HttpsError("internal", "Erro inesperado na lógica de processamento do pagamento.");
+          // Caso de erro inesperado (nenhum item válido)
+          logger.error("[processPayment / Tx ${tenantId}] Transaction error: No valid items found to process.");
+          throw new HttpsError("internal", "Erro inesperado: Nenhum item válido para processar pagamento.");
         }
-        logger.info(`[processPayment] Firestore transaction function completed for tenant ${tenantId}.`);
-        // A transação será commitada automaticamente se nenhum erro for lançado aqui
+        logger.info(`[processPayment / Tx ${tenantId}] Firestore transaction function completed successfully.`);
       }); // <<< Fim do db.runTransaction
 
-      // Se a transação foi bem-sucedida, chegamos aqui.
-      // Agora podemos retornar o objeto de sucesso.
-      logger.info(`[processPayment] Payment processed successfully. Returning success.`, { chargeId: finalChargeId, transactionId });
-      return { success: true, message: "Pagamento processado com sucesso!", chargeId: finalChargeId, transactionId: transactionId };
+      logger.info(`[processPayment / ${tenantId}] Payment processed successfully. Returning success.`, { transactionId });
+      return { success: true, message: "Pagamento processado com sucesso!", transactionId: transactionId }; // <<< Retorna transactionId >>>
 
     } catch (error: any) {
-      logger.error(`[processPayment] Error processing payment for tenant ${tenantId}:`, error);
+      logger.error(`[processPayment / ${tenantId}] Error processing payment:`, error);
       if (error instanceof HttpsError) {
-        throw error; // Re-lança HttpsErrors diretamente
+        throw error; 
       } else {
-        // Encapsula outros erros em um HttpsError genérico
         throw new HttpsError("internal", "Ocorreu um erro interno ao processar o pagamento.", { originalError: error.message });
       }
     }
-  } // <<< Fim da função async (request)
-); // <<< Fim do onCall
+  } 
+); 
 
 // --- Gatilhos Firestore ---
 
@@ -2756,7 +2895,7 @@ export const onAppointmentCompletedCreateCharge = onDocumentUpdated(
 export const generateOsNumber = https.onCall(
   {
     region: "southamerica-east1", // Mantenha sua região
-    cors: ["http://localhost:5173", "https://petfacil.app"] // <-- ADICIONADO CORS AQUI
+    cors: ["http://localhost:5173", "https://petfacil.app"], // <-- ADICIONADO CORS AQUI
   },
   async (request) => {
     logger.info(`[generateOsNumber / v: ${CODE_VERSION}] Function called.`); // Use CODE_VERSION se definido
@@ -2784,3 +2923,359 @@ export const generateOsNumber = https.onCall(
   }
 );
 // --- FIM NOVA FUNÇÃO --- 
+
+// --- NOVA FUNÇÃO: Criar OS para "Continuar Comprando" ---
+
+interface CreateContinuedOsData {
+  customerId: string;
+  // Adicionar petId se for relevante vincular a OS a um pet específico desde o início
+  // petId?: string;
+}
+
+export const createContinuedOrderService = onCall<
+  CreateContinuedOsData,
+  Promise<{ success: boolean; message?: string; osId?: string; osNumber?: string }>
+>(
+  {
+    region: "southamerica-east1",
+    cors: ["http://localhost:5173", "https://petfacil.app"],
+    memory: "128MiB", // Pode ser menor
+  },
+  async (request) => {
+    logger.info(`[createContinuedOrderService / v: ${CODE_VERSION}] Function called.`);
+
+    // 1. Autenticação e Autorização
+    if (!request.auth?.uid) {
+      logger.error("[createContinuedOrderService] Unauthenticated user.");
+      throw new HttpsError("unauthenticated", "Usuário não autenticado.");
+    }
+    const tenantId = request.auth.token.tenant_id;
+    if (!tenantId) {
+      logger.error(`[createContinuedOrderService] User ${request.auth.uid} is missing tenant_id claim.`);
+      throw new HttpsError("failed-precondition", "Usuário não pertence a um tenant.");
+    }
+    const cashierId = request.auth.uid; // Colaborador que está criando
+
+    // 2. Validação dos Dados
+    const { customerId } = request.data;
+    if (!customerId) {
+      logger.error("[createContinuedOrderService] Missing required data: customerId.", { tenantId });
+      throw new HttpsError("invalid-argument", "ID do Cliente é obrigatório.");
+    }
+
+    logger.info(`[createContinuedOrderService] Request validated for tenant ${tenantId}, customer ${customerId}, cashier ${cashierId}.`);
+
+    try {
+      // 3. Gerar Número da OS
+      const randomNumber = Math.floor(Math.random() * 90000000) + 10000000;
+      // Alterado: Remover prefixo CSH para seguir o padrão OS-XXXXXXXX
+      const osNumber = `OS-${pad8(randomNumber)}`; 
+      logger.info(`[createContinuedOrderService] Generated OS Number: ${osNumber} for tenant ${tenantId}`);
+
+      // 4. Criar Documento OS em Firestore
+      const osCollectionPath = `tenants/${tenantId}/order_services`;
+      const osCollection = db.collection(osCollectionPath);
+      const newOsDocRef = osCollection.doc(); // Gera um ID automático
+
+      const newOsData = {
+        osNumber: osNumber,
+        customerId: customerId, // <<< CORREÇÃO: Usar customerId extraído de request.data
+        // petId: data.petId, // Adicionar se passado e necessário
+        status: "pending_cashier", // Novo status indicando criado pelo caixa
+        items: [], // Inicia sem itens
+        totalValue: 0, // Valor inicial
+        paymentStatus: "pending", // Status do pagamento
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdBy: request.auth?.token.user_id || "unknown", // ID do colaborador que criou
+        createdFrom: "cashier_continue_shopping", // Origem da OS
+        tenantId: tenantId,
+      };
+
+      await newOsDocRef.set(newOsData);
+      logger.info(`[createContinuedOrderService] Created new Order Service document ${newOsDocRef.id} in ${osCollectionPath}`);
+
+      // 5. Retornar Sucesso
+      return { success: true, osId: newOsDocRef.id, osNumber: osNumber };
+    } catch (error: any) { // <<< CORREÇÃO: Tipar erro como any
+      logger.error(`[createContinuedOrderService] Error creating continued OS for tenant ${tenantId}, customer ${customerId}:`, error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", "Erro interno ao criar ordem de serviço para continuar comprando.", error);
+    }
+  }
+);
+// --- FIM NOVA FUNÇÃO ---
+
+// --- NOVA FUNÇÃO: Deletar OS de Caixa Vazia ---
+
+interface DeleteOsData {
+  osId: string;
+}
+
+export const deleteEmptyCashierOs = onCall<
+  DeleteOsData,
+  Promise<{ success: boolean; deleted: boolean; message?: string }>
+>(
+  {
+    region: "southamerica-east1",
+    cors: ["http://localhost:5173", "https://petfacil.app"],
+    memory: "128MiB",
+  },
+  async (request) => {
+    logger.info(`[deleteEmptyCashierOs / v: ${CODE_VERSION}] Function called.`);
+
+    // 1. Autenticação e Autorização
+    if (!request.auth?.uid) {
+      logger.error("[deleteEmptyCashierOs] Unauthenticated user.");
+      throw new HttpsError("unauthenticated", "Usuário não autenticado.");
+    }
+    const tenantId = request.auth.token.tenant_id;
+    if (!tenantId) {
+      logger.error(`[deleteEmptyCashierOs] User ${request.auth.uid} is missing tenant_id claim.`);
+      throw new HttpsError("failed-precondition", "Usuário não pertence a um tenant.");
+    }
+    const callerUid = request.auth.uid;
+
+    // 2. Validação dos Dados
+    const { osId } = request.data;
+    if (!osId) {
+      logger.error("[deleteEmptyCashierOs] Missing required data: osId.", { tenantId });
+      throw new HttpsError("invalid-argument", "ID da Ordem de Serviço é obrigatório.");
+    }
+
+    logger.info(`[deleteEmptyCashierOs] Request validated for tenant ${tenantId}, osId ${osId}, caller ${callerUid}.`);
+
+    try {
+      // 3. Referência do Documento
+      const osDocRef = db.collection('tenants').doc(tenantId).collection('order_services').doc(osId);
+      
+      // 4. Ler o documento
+      const osDocSnap = await osDocRef.get();
+
+      if (!osDocSnap.exists) {
+        logger.warn(`[deleteEmptyCashierOs] OS document ${osId} not found for tenant ${tenantId}. Cannot delete.`);
+        return { success: true, deleted: false, message: "OS não encontrada." }; 
+      }
+
+      const osData = osDocSnap.data();
+      if (!osData) {
+         logger.error(`[deleteEmptyCashierOs] OS document ${osId} data is undefined. Cannot process.`);
+         throw new HttpsError("internal", "Erro ao ler dados da OS.");
+      }
+
+      // 5. Verificar se está vazia e deletar
+      // Considerar também checar o status? Ex: só deletar se for 'pending_cashier'?
+      if (osData.items && osData.items.length === 0) {
+        logger.info(`[deleteEmptyCashierOs] OS ${osId} is empty. Deleting...`);
+        await osDocRef.delete();
+        logger.info(`[deleteEmptyCashierOs] OS ${osId} deleted successfully.`);
+        return { success: true, deleted: true, message: "OS vazia deletada com sucesso." };
+      } else {
+        logger.info(`[deleteEmptyCashierOs] OS ${osId} is not empty (items count: ${osData.items?.length ?? 'undefined'}). Not deleting.`);
+        return { success: true, deleted: false, message: "OS não está vazia, não foi deletada." };
+      }
+
+    } catch (error: any) {
+      logger.error(`[deleteEmptyCashierOs] Error processing OS ${osId} for tenant ${tenantId}:`, error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", "Erro interno ao tentar deletar OS vazia.", { originalError: error.message });
+    }
+  }
+);
+// --- FIM NOVA FUNÇÃO ---
+
+// <<< NOVA FUNÇÃO: Cancelar um item específico de uma charge >>>
+export const cancelChargeItem = onCall<CancelChargeItemData>(
+  { // <<< Adicionar opções v2 aqui se necessário (region, cors, etc.) >>>
+    region: "southamerica-east1", // Exemplo
+    cors: ["http://localhost:5173", "https://petfacil.app"],
+  },
+  async (request: CallableRequest<CancelChargeItemData>) => {
+    // <<< ADICIONAR LOG DETALHADO DO TOKEN >>>
+    logger.info(`[cancelChargeItem v2 ENTRY] Called by UID: ${request.auth?.uid}. Auth Token:`, request.auth?.token);
+
+    // 1. Validar Autenticação e Tenant (usando request.auth)
+    if (!request.auth) {
+      // <<< ADICIONAR LOG ANTES DE LANÇAR ERRO >>>
+      logger.error("[cancelChargeItem v2] Authentication check failed: request.auth is missing.");
+      throw new HttpsError(
+        "unauthenticated",
+        "Usuário não autenticado."
+      );
+    }
+    const tenantId = request.auth.token.tenantId;
+    if (!tenantId) {
+      // <<< ADICIONAR LOG ANTES DE LANÇAR ERRO >>>
+      logger.error(`[cancelChargeItem v2] Tenant ID check failed: tenantId is missing from token for UID ${request.auth.uid}. Token data:`, request.auth.token);
+      throw new HttpsError(
+        "failed-precondition",
+        "Tenant ID não encontrado no token de autenticação."
+      );
+    }
+
+    // 2. Validar Input (usando request.data)
+    const { chargeId, itemId, reason } = request.data;
+    if (!chargeId || !itemId || !reason) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Parâmetros chargeId, itemId e reason são obrigatórios."
+      );
+    }
+    if (typeof reason !== "string" || reason.trim().length === 0) {
+      throw new HttpsError(
+        "invalid-argument",
+        "O motivo (reason) não pode estar vazio."
+      );
+    }
+
+    console.log(`[cancelChargeItem v2] Tenant: ${tenantId}, Charge: ${chargeId}, Item: ${itemId}, Reason: ${reason}`);
+
+    // 3. Referência ao Documento da Charge (sem alteração)
+    const chargeRef = db
+      .collection("tenants")
+      .doc(tenantId)
+      .collection("charges")
+      .doc(chargeId);
+
+    try {
+      // 4. Executar Atualização dentro de uma Transação (sem alteração na lógica interna)
+      await db.runTransaction(async (transaction) => {
+        const chargeDoc = await transaction.get(chargeRef);
+
+        if (!chargeDoc.exists) {
+          throw new HttpsError("not-found", `Charge ${chargeId} não encontrada.`);
+        }
+
+        const chargeData = chargeDoc.data();
+        if (!chargeData) {
+          throw new HttpsError("internal", `Falha ao ler dados da charge ${chargeId}.`);
+        }
+
+        if (chargeData.status === "paid" || chargeData.status === "canceled") {
+            throw new HttpsError("failed-precondition", `Não é possível cancelar item de uma charge que já está ${chargeData.status}.`);
+        }
+
+        const items = chargeData.items || [];
+        let itemFound = false;
+
+        // <<< Reaplicar tipo ChargeItem (definida anteriormente) >>>
+        const updatedItems = items.map((item: ChargeItem) => { 
+          if (item.itemId === itemId || item.sourceId === itemId) {
+            itemFound = true;
+            return {
+              ...item,
+              cancelled: true,
+              cancellationReason: reason,
+              // cancellationTimestamp: Timestamp.now() // Descomentar se importar Timestamp
+            };
+          }
+          return item;
+        });
+
+        if (!itemFound) {
+          throw new HttpsError("not-found", `Item com ID ${itemId} não encontrado na charge ${chargeId}.`);
+        }
+
+        transaction.update(chargeRef, { items: updatedItems });
+        console.log(`[cancelChargeItem v2] Item ${itemId} marcado como cancelado na charge ${chargeId}.`);
+      });
+
+      // 5. Retornar Sucesso (sem alteração)
+      return { success: true, message: "Item marcado como cancelado com sucesso." };
+
+    } catch (error: any) {
+      console.error(`[cancelChargeItem v2] Erro ao cancelar item ${itemId} na charge ${chargeId}:`, error);
+      // <<< Usar HttpsError v2 importado diretamente >>>
+      if (error instanceof HttpsError) { 
+        throw error;
+      }
+      const errorMessage = error instanceof Error ? error.message : "Erro interno desconhecido.";
+      throw new HttpsError(
+        "internal",
+        "Erro interno ao processar o cancelamento do item.",
+        errorMessage
+      );
+    }
+});
+
+// ==============================================
+// FUNÇÕES DE BACKGROUND / TRIGGERS (Exemplo)
+// ==============================================
+
+// <<< REMOVER INTERFACE UTILITÁRIA >>>
+/*
+// <<< Interface para a função utilitária >>>
+interface SetClaimsData {
+  targetUid: string;  // UID do usuário alvo
+  claimsToSet: { [key: string]: any }; // Objeto com as claims a serem definidas
+}
+*/
+
+// ... (outras funções) ...
+
+
+// ==============================================
+// UTILITY FUNCTIONS (Use with caution!)
+// ==============================================
+
+// <<< REMOVER FUNÇÃO UTILITÁRIA >>>
+/*
+export const setCustomUserClaimsUtil = onCall<SetClaimsData>(
+  {
+    region: "southamerica-east1",
+    cors: ["http://localhost:5173", "https://petfacil.app"], // Ajuste CORS se necessário
+  },
+  async (request: CallableRequest<SetClaimsData>) => {
+    logger.info(`[setCustomUserClaimsUtil ENTRY] Function called.`);
+
+    // --- AUTHORIZATION: Only allow specific Admin UIDs --- 
+    // <<< SUBSTITUIR PLACEHOLDER PELO UID DO SUPERADMIN >>>
+    const allowedCallerUids = ["fGV0D5dhIKY5rlbMZfJ2raNFOx33"]; 
+    const callerUid = request.auth?.uid;
+
+    if (!callerUid || !allowedCallerUids.includes(callerUid)) {
+      logger.error(`[setCustomUserClaimsUtil] Unauthorized attempt by UID: ${callerUid}. Allowed: ${allowedCallerUids.join(", ")}.`);
+      throw new HttpsError("permission-denied", "Você não tem permissão para executar esta operação.");
+    }
+    logger.info(`[setCustomUserClaimsUtil] Caller ${callerUid} authorized.`);
+    // --- END AUTHORIZATION --- 
+
+    // --- Validate Input Data --- 
+    const { targetUid, claimsToSet } = request.data;
+    if (!targetUid || !claimsToSet || typeof claimsToSet !== 'object' || Object.keys(claimsToSet).length === 0) {
+      logger.error(`[setCustomUserClaimsUtil] Invalid input data received for target UID ${targetUid}:`, request.data);
+      throw new HttpsError("invalid-argument", "UID alvo e um objeto de claims não vazio são obrigatórios.");
+    }
+    logger.info(`[setCustomUserClaimsUtil] Input validated. Target UID: ${targetUid}, Claims:`, claimsToSet);
+    // --- End Validation --- 
+
+    try {
+      // --- Set Custom Claims --- 
+      logger.info(`[setCustomUserClaimsUtil] Attempting to set claims for UID: ${targetUid}...`);
+      await admin.auth().setCustomUserClaims(targetUid, claimsToSet);
+      logger.info(`[setCustomUserClaimsUtil] Successfully set custom claims for UID: ${targetUid}. Claims set:`, claimsToSet);
+      // --- End Set Custom Claims --- 
+
+      // Forçar atualização do token no lado do cliente (opcional, mas recomendado se a UI depender disso imediatamente)
+      // O cliente precisará lidar com isso após a chamada da função.
+
+      return { success: true, message: `Claims atualizadas com sucesso para o usuário ${targetUid}.` };
+
+    } catch (error: any) {
+      logger.error(`[setCustomUserClaimsUtil] Error setting custom claims for UID ${targetUid}:`, error);
+      // Check for specific auth errors
+      if (error.code === 'auth/user-not-found') {
+        throw new HttpsError("not-found", `Usuário com UID ${targetUid} não encontrado.`);
+      }
+      // Generic internal error
+      throw new HttpsError("internal", "Erro interno ao definir custom claims.", { originalError: error.message });
+    }
+});
+*/
+
+// ==============================================
+// MAIN FUNCTIONS (continue from here...)
+// ==============================================

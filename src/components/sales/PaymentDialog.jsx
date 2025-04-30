@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import PropTypes from 'prop-types';
 
-export default function PaymentDialog({ open, onOpenChange, cart, customer = null, chargeIds = [], totalAmount, onSuccess, isAnonymousSale = false }) {
+export default function PaymentDialog({ open, onOpenChange, cart, customer = null, chargeIds = [], continuedOsIds = [], totalAmount, onSuccess, isAnonymousSale = false }) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("pix");
   const [changeAmount, setChangeAmount] = useState(0);
@@ -120,15 +120,16 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer = nul
     setIsProcessing(true);
 
     const paymentPayload = {
-        chargeIds: hasCharges ? chargeIds : null,
-        cartItems: hasCharges ? null : cart.map(item => ({
+        chargeIds: chargeIds && chargeIds.length > 0 ? chargeIds : null,
+        continuedOsIds: continuedOsIds && continuedOsIds.length > 0 ? continuedOsIds : null,
+        cartItems: (chargeIds?.length === 0 && continuedOsIds?.length === 0) ? cart.map(item => ({
             itemId: item.id,
             description: item.name,
             quantity: item.quantity,
             unitPrice: item.unitPrice || item.price,
             totalPrice: item.totalPrice || (item.price * item.quantity),
             itemType: item.type === 'service' ? 'service' : 'product'
-        })),
+        })) : null,
         paymentMethod: paymentMethod, 
         amountPaid: total,
         customerId: customer ? customer.id : null,
@@ -168,99 +169,110 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer = nul
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="w-[98vw] max-w-none">
         <DialogHeader>
           <DialogTitle>Finalizar Pagamento</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div>
-            <h3 className="font-medium mb-2">Cliente</h3>
-            <div className="p-3 bg-gray-50 rounded-lg">
-              {customer ? (
-                <>
-                  <p className="font-medium">{customer.full_name}</p>
-                  <p className="text-sm text-gray-500">{customer.email}</p>
-                </>
-              ) : (
-                <p className="text-red-500">Nenhum cliente selecionado</p>
-              )}
-            </div>
-          </div>
+        {/* Layout principal com grid responsivo (12 colunas em md+) */}
+        <div className="grid md:grid-cols-12 gap-6">
 
-          <div>
-            <h3 className="font-medium mb-2">Resumo</h3>
-            <div className="border rounded-lg overflow-hidden">
-              <div className="max-h-[200px] overflow-y-auto">
-                {cart.map((item, index) => (
-                  <div key={`${item.type}-${item.id}-${index}`} className="p-3 flex items-center justify-between border-b last:border-b-0">
-                    <div>
-                      <p className="font-medium">{item.name}</p>
-                      <p className="text-sm text-gray-500">
-                        {item.quantity} x {item.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          {/* Coluna Esquerda: Cliente e Resumo (Ocupa 8 colunas) */}
+          <div className="space-y-4 md:col-span-8">
+            <div>
+              <h3 className="font-medium mb-2">Cliente</h3>
+              <div className="p-3 bg-gray-50 rounded-lg min-h-[60px]">
+                {customer ? (
+                  <>
+                    <p className="font-medium">{customer.full_name}</p>
+                    <p className="text-sm text-gray-500">{customer.email}</p>
+                  </>
+                ) : isAnonymousSale ? (
+                   <p className="text-sm text-orange-600">Venda Anônima (Cliente não vinculado)</p>
+                ): (
+                  <p className="text-red-500">Nenhum cliente selecionado</p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <h3 className="font-medium mb-2">Resumo</h3>
+              <div className="border rounded-lg overflow-hidden">
+                <div className="max-h-[250px] overflow-y-auto">
+                  {cart.map((item, index) => (
+                    <div key={`${item.type}-${item.id}-${index}`} className="p-3 flex items-center justify-between border-b last:border-b-0">
+                      <div>
+                        <p className="font-medium">{item.name}</p>
+                        <p className="text-sm text-gray-500">
+                          {item.quantity} x {(item.unitPrice || item.price).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </p>
+                      </div>
+                      <p className="font-medium">
+                        {(item.totalPrice || (item.unitPrice || item.price) * item.quantity).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                       </p>
                     </div>
-                    <p className="font-medium">
-                      {(item.totalPrice || item.price * item.quantity).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </p>
-                  </div>
-                ))}
-              </div>
-              <div className="p-3 bg-gray-50 font-bold flex items-center justify-between">
-                <span>Total a Pagar</span>
-                <span>
-                  {total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </span>
+                  ))}
+                </div>
+                <div className="p-3 bg-gray-50 font-bold flex items-center justify-between">
+                  <span>Total a Pagar</span>
+                  <span>
+                    {total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label>Forma de pagamento</Label>
-            <div className="grid grid-cols-4 gap-2">
-              <Card 
-                className={`cursor-pointer ${paymentMethod === 'cash' ? 'border-blue-500 bg-blue-50' : ''}`}
-                onClick={() => handlePaymentMethodChange('cash')}
-              >
-                <CardContent className="p-3 flex flex-col items-center justify-center text-center">
-                  <Banknote className={`h-6 w-6 mb-1 ${paymentMethod === 'cash' ? 'text-blue-500' : 'text-gray-500'}`} />
-                  <span className="text-sm">Dinheiro</span>
-                </CardContent>
-              </Card>
-              
-              <Card 
-                className={`cursor-pointer ${paymentMethod === 'credit_card' ? 'border-blue-500 bg-blue-50' : ''}`}
-                onClick={() => handlePaymentMethodChange('credit_card')}
-              >
-                <CardContent className="p-3 flex flex-col items-center justify-center text-center">
-                  <CreditCard className={`h-6 w-6 mb-1 ${paymentMethod === 'credit_card' ? 'text-blue-500' : 'text-gray-500'}`} />
-                  <span className="text-sm">Crédito</span>
-                </CardContent>
-              </Card>
-              
-              <Card 
-                className={`cursor-pointer ${paymentMethod === 'debit_card' ? 'border-blue-500 bg-blue-50' : ''}`}
-                onClick={() => handlePaymentMethodChange('debit_card')}
-              >
-                <CardContent className="p-3 flex flex-col items-center justify-center text-center">
-                  <CreditCard className={`h-6 w-6 mb-1 ${paymentMethod === 'debit_card' ? 'text-blue-500' : 'text-gray-500'}`} />
-                  <span className="text-sm">Débito</span>
-                </CardContent>
-              </Card>
-              
-              <Card 
-                className={`cursor-pointer ${paymentMethod === 'pix' ? 'border-blue-500 bg-blue-50' : ''}`}
-                onClick={() => handlePaymentMethodChange('pix')}
-              >
-                <CardContent className="p-3 flex flex-col items-center justify-center text-center">
-                  <QrCode className={`h-6 w-6 mb-1 ${paymentMethod === 'pix' ? 'text-blue-500' : 'text-gray-500'}`} />
-                  <span className="text-sm">PIX</span>
-                </CardContent>
-              </Card>
+          {/* Coluna Direita: Forma de Pagamento (Ocupa 4 colunas) */}
+          <div className="space-y-4 md:col-span-4">
+             <div>
+                <Label>Forma de pagamento</Label>
+                <div className="grid grid-cols-4 gap-2 mt-1">
+                  <Card 
+                    className={`cursor-pointer ${paymentMethod === 'cash' ? 'border-blue-500 bg-blue-50' : ''}`}
+                    onClick={() => handlePaymentMethodChange('cash')}
+                  >
+                    <CardContent className="p-3 flex flex-col items-center justify-center text-center">
+                      <Banknote className={`h-6 w-6 mb-1 ${paymentMethod === 'cash' ? 'text-blue-500' : 'text-gray-500'}`} />
+                      <span className="text-sm">Dinheiro</span>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card 
+                    className={`cursor-pointer ${paymentMethod === 'credit_card' ? 'border-blue-500 bg-blue-50' : ''}`}
+                    onClick={() => handlePaymentMethodChange('credit_card')}
+                  >
+                    <CardContent className="p-3 flex flex-col items-center justify-center text-center">
+                      <CreditCard className={`h-6 w-6 mb-1 ${paymentMethod === 'credit_card' ? 'text-blue-500' : 'text-gray-500'}`} />
+                      <span className="text-sm">Crédito</span>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card 
+                    className={`cursor-pointer ${paymentMethod === 'debit_card' ? 'border-blue-500 bg-blue-50' : ''}`}
+                    onClick={() => handlePaymentMethodChange('debit_card')}
+                  >
+                    <CardContent className="p-3 flex flex-col items-center justify-center text-center">
+                      <CreditCard className={`h-6 w-6 mb-1 ${paymentMethod === 'debit_card' ? 'text-blue-500' : 'text-gray-500'}`} />
+                      <span className="text-sm">Débito</span>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card 
+                    className={`cursor-pointer ${paymentMethod === 'pix' ? 'border-blue-500 bg-blue-50' : ''}`}
+                    onClick={() => handlePaymentMethodChange('pix')}
+                  >
+                    <CardContent className="p-3 flex flex-col items-center justify-center text-center">
+                      <QrCode className={`h-6 w-6 mb-1 ${paymentMethod === 'pix' ? 'text-blue-500' : 'text-gray-500'}`} />
+                      <span className="text-sm">PIX</span>
+                    </CardContent>
+                  </Card>
+                </div>
+             </div>
 
               {/* --- Renderização Condicional para Pagamento em Dinheiro --- */}
               {paymentMethod === "cash" && (
-                <div className="col-span-4 space-y-2 mt-4 border-t pt-4">
+                <div className="space-y-2 mt-4 border-t pt-4">
                   <div>
                     <Label htmlFor="receivedAmount">Valor Recebido</Label>
                     <Input 
@@ -287,7 +299,7 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer = nul
 
               {/* --- Renderização Condicional para Pagamento com Cartão --- */}
               {(paymentMethod === 'credit_card' || paymentMethod === 'debit_card') && (
-                <div className="col-span-4 space-y-3 mt-4 border-t pt-4">
+                <div className="space-y-3 mt-4 border-t pt-4">
                   <div>
                     <Label htmlFor="card-number">Número do cartão</Label>
                     <Input
@@ -340,21 +352,21 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer = nul
                 </div>
               )}
               {/* --- Fim da Renderização Condicional --- */}
-            </div>
+
+            {/* Conditional rendering for PIX payment */}
+             {paymentMethod === 'pix' && (
+                <div className="p-4 bg-gray-50 rounded-lg flex flex-col items-center mt-4 border-t pt-4">
+                  <QrCode className="h-24 w-24 text-blue-500 mb-2" />
+                  <p className="text-center text-sm">
+                    Use o app do seu banco para escanear o QR code e efetuar o pagamento
+                  </p>
+                </div>
+             )}
           </div>
 
-          {/* Conditional rendering for PIX payment */}
-          {paymentMethod === 'pix' && (
-            <div className="p-4 bg-gray-50 rounded-lg flex flex-col items-center">
-              <QrCode className="h-24 w-24 text-blue-500 mb-2" />
-              <p className="text-center text-sm">
-                Use o app do seu banco para escanear o QR code e efetuar o pagamento
-              </p>
-            </div>
-          )}
         </div>
 
-        <DialogFooter className="flex justify-between">
+        <DialogFooter className="flex justify-between pt-6">
           <Button
             type="button"
             variant="outline"
@@ -368,7 +380,7 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer = nul
             onClick={handleSubmit}
             disabled={isProcessing || 
                       (!customer && !isAnonymousSale) || 
-                      (total <= 0 && !chargeIds) || 
+                      (total <= 0 && !(chargeIds && chargeIds.length > 0)) || // Ajustado aqui: desabilitar se total <= 0 E não houver chargeIds
                       (paymentMethod === 'cash' && parseFloat(receivedAmount || "0") < total) ||
                       ((paymentMethod === 'credit_card' || paymentMethod === 'debit_card') && (!cardInfo.number || !cardInfo.holder || !cardInfo.expiry || !cardInfo.cvv))
                     }
@@ -397,6 +409,7 @@ PaymentDialog.propTypes = {
   cart: PropTypes.array.isRequired,
   customer: PropTypes.object,
   chargeIds: PropTypes.arrayOf(PropTypes.string),
+  continuedOsIds: PropTypes.arrayOf(PropTypes.string),
   totalAmount: PropTypes.number.isRequired,
   onSuccess: PropTypes.func.isRequired,
   isAnonymousSale: PropTypes.bool

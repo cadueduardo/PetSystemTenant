@@ -136,6 +136,21 @@ service cloud.firestore {
         }
         // +++ FIM: Regras para Charges e Transactions (Subcoleção) +++
 
+        // +++ INÍCIO: Regras para Order Services (Caixa) +++
+        match /order_services/{osId} {
+          // Leitura permitida para membros do tenant
+          allow read: if isTenantMember(tenantId);
+          
+          // Atualização permitida para membros (necessário para modal adicionar/remover itens)
+          // Garante que o tenantId não pode ser alterado. Outras validações (status, etc.) ficam no backend.
+          allow update: if isTenantMember(tenantId)
+                           && request.resource.data.tenantId == tenantId; 
+                           
+          // Criação/Exclusão bloqueadas do lado do cliente (feitas por Cloud Functions)
+          allow create, delete: if false;
+        }
+        // +++ FIM: Regras para Order Services (Caixa) +++
+
       } // Fim do match /tenants/{tenantId}
 
     match /cancellationReasons/{reasonId} {
