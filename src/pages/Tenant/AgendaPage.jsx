@@ -6,7 +6,7 @@ import interactionPlugin from '@fullcalendar/interaction'; // para seleção e d
 import dayGridPlugin from '@fullcalendar/daygrid'; // para visão mensal opcional
 import timeGridPlugin from '@fullcalendar/timegrid'; // ADICIONAR PLUGIN timeGrid
 import ptBrLocale from '@fullcalendar/core/locales/pt-br'; // Importar locale PT-BR
-import { getFirestore, collection, query, where, getDocs, Timestamp, doc, getDoc, updateDoc, onSnapshot, deleteDoc, addDoc } from 'firebase/firestore'; // Importar funções do Firestore e Timestamp - REMOVIDO addDoc
+import { getFirestore, collection, query, where, getDocs, Timestamp, doc, getDoc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore'; // Importar funções do Firestore e Timestamp - REMOVIDO addDoc
 import { httpsCallable } from 'firebase/functions'; // Importar funções do Firebase Functions - REMOVIDO getFunctions
 import { functions } from '@/lib/firebaseConfig'; // <-- IMPORT PRE-CONFIGURED FUNCTIONS INSTANCE
 // import { useTenant } from '@/components/tenant/TenantContext'; // Desativado para mock de recursos
@@ -18,11 +18,13 @@ import { useTenant as useRealTenant } from '@/components/tenant/TenantContext'; 
 import useProfessionalStore from '@/stores/professionalStore'; // <-- IMPORT THE ZUSTAND STORE
 import { CheckCircle, Clock, UserCheck, PlayCircle, Ban, AlertTriangle, Trophy, Eye, HelpCircle } from 'lucide-react'; // <-- Import icons - REMOVIDO ListFilter
 import { cn } from "@/lib/utils"; // <-- Importar cn
-import { addMinutes, isFuture, startOfDay } from 'date-fns'; // <<< ADICIONAR isFuture, startOfDay
+import { addMinutes /*, isFuture, startOfDay */ } from 'date-fns'; // <<< REMOVIDO isFuture, startOfDay
 import { AppointmentContextMenu } from '@/components/agenda/AppointmentContextMenu'; // <-- IMPORTAR MENU
-import { Pet, QueueService, Service } from '@/api/entities'; // <<< ADICIONAR IMPORT Service >>>
-import { petService } from '@/api/firebase/petService'; // <<< ADICIONAR IMPORT petService
-// import { customerService } from '@/api/firebase/customerService'; // <<< ADICIONAR IMPORT customerService
+// MODIFICADO: Removido Pet, QueueService, Service da importação
+import { /* Pet, QueueService, Service */ } from '@/api/entities';
+// MODIFICADO: Removido petService da importação
+// import { petService } from '@/api/firebase/petService'; 
+// import { customerService } from '@/api/firebase/customerService'; 
 // TODO: Importar o Modal e o Formulário de Agendamento quando prontos
 // import { AppointmentModal } from '@/components/agenda/AppointmentModal'; 
 
@@ -501,188 +503,94 @@ export default function AgendaPage() {
 
     try {
       // <<< INÍCIO: BUSCAR AGENDAMENTO E VERIFICAR DATA ANTES DE ATUALIZAR >>>
-      const appointmentSnap = await getDoc(appointmentRef);
-      if (!appointmentSnap.exists()) {
-          console.error(`[handleUpdateStatusFromMenu] Appointment ${eventId} not found.`);
-          toast({ title: "Erro", description: "Agendamento não encontrado.", variant: "destructive" });
-          return;
-      }
-      const appointmentData = appointmentSnap.data();
-
-      // <<< VERIFICAR SE ESTÁ TENTANDO MARCAR 'ARRIVED' PARA DATA FUTURA >>>
-      if (newStatus === 'arrived') {
-        const startTime = appointmentData.start_time;
-        if (startTime && typeof startTime.toDate === 'function') {
-          const startTimeDate = startTime.toDate();
-          if (isFuture(startOfDay(startTimeDate))) {
-            console.warn(`[handleUpdateStatusFromMenu] Attempted to set 'arrived' for future appointment ${eventId}.`);
-            toast({
-              title: "Ação não permitida",
-              description: "Não é possível marcar 'Chegou' para um agendamento futuro. Por favor, reagende para a data/hora atual se necessário.",
-              variant: "warning",
-            });
-            return; // IMPEDE a atualização e a criação do episódio
-          }
+      let appointmentData = null;
+      try {
+        const eventFromState = events.find(ev => ev.id === eventId);
+        if (eventFromState) {
+          appointmentData = eventFromState; // Usa o evento do estado se encontrado
+          console.log(`[handleUpdateStatusFromMenu] Found event in local state for ${eventId}:`, appointmentData);
         } else {
-            console.warn(`[handleUpdateStatusFromMenu] Could not verify start_time for appointment ${eventId} before setting arrived.`);
-            toast({ title: "Aviso", description: "Não foi possível verificar a data do agendamento.", variant: "warning" });
-            return;
+           console.warn(`[handleUpdateStatusFromMenu] Event ${eventId} not found in local state. Fetching from Firestore...`);
+           const docSnap = await getDoc(appointmentRef);
+           if (docSnap.exists()) {
+                // Recria a estrutura esperada pelo FullCalendar para consistência
+                const data = docSnap.data();
+                let startDateTime = data.start_time instanceof Timestamp ? data.start_time.toDate() : new Date();
+                let endDateTime = data.end_time instanceof Timestamp ? data.end_time.toDate() : new Date(startDateTime.getTime() + 60 * 60000);
+                appointmentData = {
+                  id: docSnap.id,
+                  start: startDateTime.toISOString(),
+                  end: endDateTime.toISOString(),
+                  extendedProps: { ...data, professionalId: data.professionalId || data.employeeId, status: data.status || 'scheduled' }
+                };
+               console.log(`[handleUpdateStatusFromMenu] Fetched event data for ${eventId}:`, appointmentData);
+           } else {
+               throw new Error('Agendamento não encontrado no Firestore.');
+           }
         }
+      } catch (fetchError) {
+           console.error(`[handleUpdateStatusFromMenu] Error getting event data for ${eventId}:`, fetchError);
+           toast({ title: "Erro", description: "Não foi possível obter os dados do agendamento para atualizar.", variant: "destructive" });
+           return; // Sai se não conseguir os dados
       }
-      // <<< FIM: VERIFICAÇÃO DE DATA FUTURA >>>
 
-      // Se passou na verificação (ou não era 'arrived'), prosseguir com a atualização:
-      console.log(`[handleUpdateStatusFromMenu] Proceeding to update status for ${eventId} to ${newStatus}`);
-      let osNumberToSave = null;
-      if (newStatus === 'arrived') {
-          const randomChars = Math.random().toString(36).substring(2, 8).toUpperCase();
-          osNumberToSave = `OS-${randomChars}`;
-          console.log(`[handleUpdateStatusFromMenu] Generated osNumber: ${osNumberToSave} for appointment ${eventId}`);
+      // <<< LOG ADICIONAL para verificar extendedProps >>>
+      console.log(`[handleUpdateStatusFromMenu] Checking extendedProps for ${eventId}:`, appointmentData?.extendedProps);
+
+      // <<< VERIFICAÇÃO EXPLÍCITA dos campos necessários ANTES de criar payload >>>
+      const props = appointmentData?.extendedProps;
+      if (!props || !props.tenant_id || !props.pet_id || !props.customer_id || !props.service_id) {
+         console.error(`[handleUpdateStatusFromMenu] ERRO CRÍTICO: Dados essenciais faltando em extendedProps para ${eventId}!`, props);
+         toast({ title: "Erro Crítico", description: "Dados essenciais do agendamento estão faltando. Não foi possível atualizar o status.", variant: "destructive" });
+         return; // Impede a atualização se dados essenciais faltarem
       }
-      await updateDoc(appointmentRef, {
+
+      // <<< Gerar osNumber apenas se for petshop E status for arrived >>>
+      let osNumberToSave = null;
+      if (newStatus === 'arrived' && props.service_type === 'petshop') {
+         const generateOsNumber = httpsCallable(functions, 'generateOsNumber');
+         try {
+             const result = await generateOsNumber({ tenantId: props.tenant_id });
+             // @ts-ignore 
+             osNumberToSave = result.data.osNumber;
+             console.log(`[handleUpdateStatusFromMenu] OS Number gerado para ${eventId}: ${osNumberToSave}`);
+          } catch (osError) {
+             console.error("[handleUpdateStatusFromMenu] Erro ao gerar OS Number:", osError);
+             toast({ title: "Erro OS", description: "Falha ao gerar número da OS.", variant: "destructive" });
+             // Considerar se deve continuar ou parar aqui
+         }
+     } else if (newStatus === 'arrived') {
+         console.log(`[handleUpdateStatusFromMenu] Serviço não é petshop (${props.service_type}) ou status não é arrived. Pulando OS Number.`);
+     }
+
+      // MODIFICADO: Usar dados de extendedProps e incluir professionalId
+      const updatePayload = {
         status: newStatus,
         updated_at: Timestamp.now(),
+        // Reafirmar dados essenciais LIDOS DE EXTENDEDPROPS
+        tenant_id: props.tenant_id,
+        pet_id: props.pet_id,
+        customer_id: props.customer_id,
+        service_id: props.service_id,
+        professionalId: props.professionalId || null, // Usa o professionalId de extendedProps
+        // Manter outros campos relevantes de extendedProps se necessário
+        professionalName: props.professionalName,
+        service_name: props.service_name,
+        service_type: props.service_type,
+        // ... outros campos de props que você queira garantir ...
+        // Salva osNumber apenas se gerado
         ...(osNumberToSave && { osNumber: osNumberToSave }),
         ...(newStatus === 'confirmed' && { confirmed_via: 'manual' }),
         ...(newStatus === 'canceled' && { cancelled_via: 'manual' }),
-      });
+      };
+
+      console.log(`[handleUpdateStatusFromMenu] Atualizando appointment ${eventId} com payload (de extendedProps):`, updatePayload); // Log do payload
+      await updateDoc(appointmentRef, updatePayload);
+
       toast({ title: "Status atualizado!", description: `Agendamento ${eventId.substring(0,6)}... marcado como ${statusStyles[newStatus]?.label || newStatus}.`, variant: "success" });
 
-      // <<< INÍCIO: CRIAR EPISÓDIO SE STATUS FOR 'ARRIVED' (MENU CONTEXTO) >>>
-      if (newStatus === 'arrived') {
-          console.log(`[handleUpdateStatusFromMenu] Status IS 'arrived'. Attempting check/create EPISODE for appointment ${eventId}...`);
-          try {
-              // Reusa appointmentData que já buscamos
-              const tenantId = appointmentData.tenant_id;
-              const petId = appointmentData.pet_id;
-              const customerId = appointmentData.customer_id;
-
-              if (!tenantId || !petId) {
-                  console.error(`[handleUpdateStatusFromMenu] Missing tenantId or petId in appointment data for ${eventId}. Cannot create episode.`);
-                  return; 
-              }
-              
-              // <<< INÍCIO: BUSCAR PET E GARANTIR recordNumber >>>
-              let prontuarioId = null;
-              try {
-                  let petData = await Pet.get(petId);
-                  if (!petData) {
-                      console.error(`[handleUpdateStatusFromMenu] Pet data not found for Pet ID ${petId}. Cannot create episode.`);
-                      return;
-                  }
-                  
-                  if (!petData.recordNumber) {
-                      console.warn(`[handleUpdateStatusFromMenu] Pet ${petId} has no recordNumber. Generating one...`);
-                      const nextRecordNumber = `PT-${Math.floor(Math.random() * 90000000) + 10000000}`;
-                      // Tenta atualizar o pet com o novo recordNumber
-                      await petService.update(petId, { recordNumber: nextRecordNumber }); // Assume petService está importado ou importe
-                      console.log(`[handleUpdateStatusFromMenu] Pet ${petId} updated with recordNumber: ${nextRecordNumber}`);
-                      prontuarioId = nextRecordNumber;
-                  } else {
-                      prontuarioId = petData.recordNumber; 
-                  }
-              } catch (petError) {
-                   console.error(`[handleUpdateStatusFromMenu] Error fetching or updating Pet ${petId}:`, petError);
-                   toast({ title: "Erro", description: "Falha ao obter ou atualizar dados do prontuário do pet.", variant: "destructive" });
-                   return; // Não continuar se não conseguir o prontuário
-              }
-              // <<< FIM: BUSCAR PET E GARANTIR recordNumber >>>
-
-              // AGORA temos certeza (ou deveríamos ter) que prontuarioId existe
-              if (!prontuarioId) {
-                  console.error(`[handleUpdateStatusFromMenu] Failed to obtain prontuarioId for pet ${petId}. Aborting episode creation.`);
-                  return;
-              }
-
-              const episodesPath = `tenants/${tenantId}/prontuarios/${prontuarioId}/episodes`;
-              console.log(`[handleUpdateStatusFromMenu] Path for new episode: ${episodesPath}`);
-
-              // Simplificado: Assume que não existe e tenta criar.
-              console.log(`[handleUpdateStatusFromMenu] Proceeding to create episode in subcollection...`);
-              const episodeData = {
-                  appointmentId: eventId,
-                  petId: petId, 
-                  customerId: customerId, 
-                  tenantId: tenantId, 
-                  prontuarioId: prontuarioId, 
-                  status: 'pending', 
-                  createdAt: Timestamp.now(), 
-                  updatedAt: Timestamp.now(), 
-                  serviceName: appointmentData.service_name,
-                  professionalName: appointmentData.professionalName,
-              };
-              console.log("[handleUpdateStatusFromMenu] Data for new episode:", episodeData);
-              const episodesCollectionRef = collection(db, episodesPath);
-              const newEpisodeRef = await addDoc(episodesCollectionRef, episodeData);
-              console.log(`[handleUpdateStatusFromMenu] Episode created successfully with ID ${newEpisodeRef.id} in path ${episodesPath}.`);
-              
-              // <<< INÍCIO: ATUALIZAR AGENDAMENTO COM O ID DO EPISÓDIO >>>
-              try {
-                  console.log(`[handleUpdateStatusFromMenu] Updating appointment ${eventId} with episodeId: ${newEpisodeRef.id}`);
-                  await updateDoc(appointmentRef, { // Reusa appointmentRef que já temos
-                      currentEpisodeId: newEpisodeRef.id,
-                      prontuarioId: prontuarioId // Garante que prontuarioId também está no appointment
-                  });
-                   console.log(`[handleUpdateStatusFromMenu] Appointment ${eventId} updated successfully with episodeId.`);
-              } catch (updateError) {
-                  console.error(`[handleUpdateStatusFromMenu] Failed to update appointment ${eventId} with episodeId:`, updateError);
-                  // Não reverter a criação do episódio, mas logar o erro.
-                  toast({ title: "Aviso", description: "Falha ao vincular episódio ao agendamento.", variant: "warning" });
-              }
-              // <<< FIM: ATUALIZAR AGENDAMENTO COM O ID DO EPISÓDIO >>>
-
-              // <<< INÍCIO: ADICIONAR ITEM À FILA DE ATENDIMENTO (CONDICIONAL) >>>
-              try {
-                  // 1. Buscar detalhes do Serviço para checar o módulo
-                  console.log(`[handleUpdateStatusFromMenu] Checking service module for appointment ${eventId} (Service ID: ${appointmentData.service_id})...`);
-                  const serviceData = await Service.get(appointmentData.service_id);
-
-                  // 2. Criar entrada na fila SOMENTE se for do módulo 'petshop'
-                  if (serviceData && serviceData.module === 'petshop') {
-                      console.log(`[handleUpdateStatusFromMenu] Service module is 'petshop'. Adding appointment ${eventId} to the service queue...`);
-                      const queueEntryData = {
-                          appointment_id: eventId, // Link para o agendamento original
-                          tenant_id: appointmentData.tenant_id,
-                          customer_id: appointmentData.customer_id,
-                          pet_id: appointmentData.pet_id,
-                          service_id: appointmentData.service_id,
-                          queue_type: 'petshop', // <<< Adicionar o tipo da fila
-                          appointment_date: appointmentData.start_time, // Usar o start_time original como data/hora da fila
-                          status: 'waiting', // Status inicial na fila
-                          created_at: Timestamp.now(), // Timestamp de quando entrou na fila
-                          // Copiar outros campos relevantes se necessário (ex: notes, professionalId)
-                          notes: appointmentData.notes || '', // Garante que não seja undefined
-                          professionalId: appointmentData.professionalId || null, // Garante que não seja undefined
-                      };
-                      
-                      // Você precisa ter o QueueService importado e com um método 'create' ou 'add'
-                      const newQueueEntry = await QueueService.create(queueEntryData); 
-                      console.log(`[handleUpdateStatusFromMenu] Successfully added PETSHOP appointment ${eventId} to queue with ID ${newQueueEntry.id}`);
-                      toast({ title: "Adicionado à Fila (Petshop)", description: "O atendimento entrou na fila de espera do petshop.", variant: "info" });
-                  } else {
-                      console.log(`[handleUpdateStatusFromMenu] Appointment ${eventId} is NOT for Petshop module (module: ${serviceData?.module || 'unknown'}). Skipping queue entry creation.`);
-                      // Opcional: informar o usuário se for clínica, mas pode ser redundante se ele já usa o LiveVet
-                      // if (serviceData?.module === 'clinica') {
-                      //     toast({ title: "Chegada Registrada (Clínica)", description: "O atendimento clínico está pronto para iniciar no LiveVet.", variant: "info" });
-                      // }
-                  }
-
-              } catch (queueError) {
-                  console.error(`[handleUpdateStatusFromMenu] Failed to check service or add appointment ${eventId} to queue:`, queueError);
-                  // Informa o usuário, mas não reverte a criação do episódio ou a atualização do status do appointment
-                  toast({ title: "Erro na Fila", description: "Não foi possível adicionar o atendimento à fila.", variant: "destructive" });
-              }
-              // <<< FIM: ADICIONAR ITEM À FILA DE ATENDIMENTO (CONDICIONAL) >>>
-              
-          } catch (episodeError) {
-              console.error(`[handleUpdateStatusFromMenu] Failed to create EPISODE for appointment ${eventId}:`, episodeError);
-              toast({ title: "Erro", description: "Falha ao criar o episódio clínico associado.", variant: "destructive" });
-          }
-      }
-      // <<< FIM: CRIAR EPISÓDIO (MENU CONTEXTO) >>>
-
     } catch (error) {
-      console.error("[handleUpdateStatusFromMenu] Error updating status or creating episode:", error);
+      console.error("[handleUpdateStatusFromMenu] Error updating status:", error); // Log de erro simplificado
       toast({ title: "Erro ao atualizar", description: error.message, variant: "destructive" });
     }
   };

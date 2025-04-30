@@ -1715,40 +1715,95 @@ export const scheduledAutoCancellation = onSchedule(
 );
 
 // --- Helpers for Prontuário and Episódio ID generation ---
+// REMOVIDA: Função pad8 não é mais necessária com UUIDs
+/*
 function pad8(num: number): string {
-  return num.toString().padStart(8, '0');
+  return String(num).padStart(8, '0');
 }
+*/
 
+// REMOVIDA: Função nextSeq não é mais necessária com UUIDs
+/*
 async function nextSeq(
   tenantId: string,
   field: 'prontuarioSeq' | 'episodeSeq'
 ): Promise<number> {
-  const counterRef = db.collection('counters').doc(tenantId);
-  await counterRef.set({ [field]: admin.firestore.FieldValue.increment(1) }, { merge: true });
-  const snap = await counterRef.get();
-  return snap.data()?.[field] || 0;
+  const ref = db.doc(`tenants/${tenantId}/sequences/main`);
+  const { seq } = await db.runTransaction(async (t) => {
+    const doc = await t.get(ref);
+    const currentSeq = doc.data()?.[field] ?? 0;
+    const next = currentSeq + 1;
+    t.update(ref, { [field]: next });
+    return { seq: next };
+  });
+  return seq;
+}
+*/
+
+// REINTRODUZIDO: Função para padronizar números com 8 dígitos
+function pad8(num: number): string {
+  return String(num).padStart(8, '0');
 }
 
+/**
+ * Busca ou cria um prontuário para um pet.
+ * @param tenantId ID do tenant.
+ * @param petId ID do pet.
+ * @param tutorId ID do tutor.
+ * @returns A referência ao documento do prontuário (existente ou novo).
+ */
 async function getOrCreateProntuario(
   tenantId: string,
   petId: string,
   tutorId: string
-): Promise<{ id: string }> {
-  const prontRef = db.collection(`tenants/${tenantId}/prontuarios`);
-  const querySnap = await prontRef.where('petId', '==', petId).limit(1).get();
-  if (!querySnap.empty) {
-    return { id: querySnap.docs[0].id };
-  }
-  const seq = await nextSeq(tenantId, 'prontuarioSeq');
-  const id = `PT-${pad8(seq)}`;
-  await prontRef.doc(id).set({
-    id,
+): Promise<admin.firestore.DocumentReference> { // <-- Alterado tipo de retorno para DocumentReference
+  logger.info(`[getOrCreateProntuario] Buscando prontuário para Tenant: ${tenantId}, Pet: ${petId}`);
+  const prontuariosRef = db.collection(`tenants/${tenantId}/prontuarios`);
+  // CORRIGIDO: Usar a sintaxe de query do Admin SDK
+  const querySnapshot = await prontuariosRef.where('petId', '==', petId).limit(1).get();
+
+  if (!querySnapshot.empty) {
+    const prontuarioDoc = querySnapshot.docs[0];
+    logger.info(`[getOrCreateProntuario] Prontuário encontrado: ${prontuarioDoc.id}`);
+    // <<< GARANTIR QUE O PET TEM O ID SALVO (mesmo que prontuário já exista) >>>
+    try {
+        const petRef = db.collection('pets').doc(petId);
+        await petRef.set({ prontuarioId: prontuarioDoc.id }, { merge: true });
+        logger.info(`[getOrCreateProntuario] Verified/Updated prontuarioId on pet ${petId}`);
+    } catch (petUpdateError) {
+         logger.error(`[getOrCreateProntuario] Error updating pet ${petId} with existing prontuarioId ${prontuarioDoc.id}:`, petUpdateError);
+    }
+    // <<< FIM GARANTIA >>>
+    return prontuarioDoc.ref; // Retorna a referência ao documento existente
+  } else {
+    logger.info(`[getOrCreateProntuario] Prontuário NÃO encontrado para Pet ${petId}. Criando novo...`);
+    // ALTERADO: Gerar número aleatório de 8 dígitos
+    const randomNumber = Math.floor(Math.random() * 90000000) + 10000000; 
+    const prontuarioId = `PT-${pad8(randomNumber)}`; // <<< Usa número aleatório formatado
+    const prontuarioRef = prontuariosRef.doc(prontuarioId); 
+
+    await prontuarioRef.set({
+      id: prontuarioId, // Salva o ID gerado no campo 'id' também
+      tenantId,
     petId,
     tutorId,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
-  return { id };
+    logger.info(`[getOrCreateProntuario] Novo prontuário criado com ID: ${prontuarioId}`);
+    
+    // <<< ATUALIZAR DOCUMENTO DO PET com o novo prontuarioId >>>
+    try {
+        const petRef = db.collection('pets').doc(petId);
+        await petRef.set({ prontuarioId: prontuarioId }, { merge: true });
+        logger.info(`[getOrCreateProntuario] Updated pet ${petId} with new prontuarioId ${prontuarioId}`);
+    } catch (petUpdateError) {
+        logger.error(`[getOrCreateProntuario] Error updating pet ${petId} with new prontuarioId ${prontuarioId}:`, petUpdateError);
+        // Considerar se deve lançar erro ou continuar
+    }
+    // <<< FIM ATUALIZAÇÃO PET >>>
+    
+    return prontuarioRef; // Retorna a referência ao novo documento
+  }
 }
 
 async function createEpisode(
@@ -1759,12 +1814,16 @@ async function createEpisode(
   const episodesRef = db.collection(
     `tenants/${data.tenantId}/prontuarios/${prontuarioId}/episodes`
   );
-  const seq = await nextSeq(data.tenantId, 'episodeSeq');
-  const episodeId = `EP-${pad8(seq)}`;
+  // REMOVIDO: const episodeId = `EP-${uuidv4()}`; 
+  // ALTERADO: Gerar número aleatório de 8 dígitos
+  const randomNumber = Math.floor(Math.random() * 90000000) + 10000000;
+  const episodeId = `EP-${pad8(randomNumber)}`; // <<< Usa número aleatório formatado
+
   await episodesRef.doc(episodeId).set({
     id: episodeId,
     appointmentId,
-    prontuarioId: prontuarioId, // Add prontuarioId for potential direct queries
+    prontuarioId: prontuarioId, 
+    episodeNumber: episodeId, // <<< Salva o ID formatado (EP-XXXXXXXX) como episodeNumber
     tenantId: data.tenantId,
     petId: data.petId,
     tutorId: data.tutorId,
@@ -1813,8 +1872,10 @@ export const onAppointmentArrived = onDocumentUpdated(
     const professionalName = after.professionalName;
     const specialtyId = after.specialty_id || null;
 
-    if (!tenantId || !petId || !tutorId || !serviceId || !professionalId) {
-      logger.error(`[onAppointmentArrived - ${appointmentId}] Missing required data: tenantId, petId, tutorId, serviceId, or professionalId.`, { after });
+    // MODIFIED: Removed the requirement for professionalId to be non-null
+    if (!tenantId || !petId || !tutorId || !serviceId /* || !professionalId */) {
+      // MODIFIED: Updated error message to reflect the change
+      logger.error(`[onAppointmentArrived - ${appointmentId}] Missing required data: tenantId, petId, tutorId, or serviceId.`, { after });
       return null;
     }
 
@@ -1861,6 +1922,10 @@ export const onAppointmentArrived = onDocumentUpdated(
         });
         logger.info(`[onAppointmentArrived - ${appointmentId}] Clinical Episode ${episodeId} created.`);
 
+        // <<< DEBUG LOGGING >>>
+        logger.info(`[onAppointmentArrived - ${appointmentId}] DEBUG: Value of episodeId before update: ->${episodeId}<-`, { type: typeof episodeId });
+        // <<< END DEBUG LOGGING >>>
+
         // <<< ETAPA ADICIONADA: Atualizar o Agendamento com os IDs >>>
         logger.info(`[onAppointmentArrived - ${appointmentId}] Updating appointment with prontuarioId and currentEpisodeId...`);
         const appointmentRef = db.collection('appointments').doc(appointmentId);
@@ -1873,10 +1938,39 @@ export const onAppointmentArrived = onDocumentUpdated(
         // <<< FIM DA ETAPA ADICIONADA >>>
 
       } else if (serviceModule === 'petshop') {
-        logger.info(`[onAppointmentArrived - ${appointmentId}] Service is petshop (${serviceName}). Skipping Prontuario/Episode creation.`);
-        // TODO: Add logic here to create OS (Ordem de Serviço) for 'petshop' module.
-        // Example Placeholder:
-        // await createOrdemDeServico(appointmentId, { tenantId, petId, tutorId, serviceId, serviceName, professionalId, professionalName });
+        logger.info(`[onAppointmentArrived - ${appointmentId}] Service is petshop (${serviceName}). Creating Queue Entry...`);
+        
+        // <<< ADICIONAR LÓGICA PARA CRIAR ENTRADA NA FILA >>>
+        try {
+          const queueCollectionRef = db.collection('queueEntries');
+          const osNumberFromAppointment = after.osNumber || null; // Pega o osNumber já salvo no appointment
+
+          const queueEntryData = {
+            tenant_id: tenantId,
+            appointment_id: appointmentId,
+            pet_id: petId,
+            customer_id: tutorId, // tutorId aqui é o customer_id do appointment
+            service_id: serviceId,
+            professional_id: professionalId || null, // Salva professionalId se existir
+            status: 'waiting', // Status inicial na fila
+            entry_time: admin.firestore.FieldValue.serverTimestamp(), // Hora de entrada na fila
+            osNumber: osNumberFromAppointment, // Salva o OS Number gerado anteriormente
+            // Adicionar outros campos relevantes do agendamento se necessário
+            pet_name: after.pet_name || null,
+            customer_name: after.customer_name || null,
+            service_name: serviceName, // Usar serviceName já buscado
+            appointment_date: after.start_time // Copia a data/hora original do agendamento
+          };
+
+          logger.info(`[onAppointmentArrived - ${appointmentId}] Creating queue entry for petshop service:`, queueEntryData);
+          await queueCollectionRef.add(queueEntryData); // Adiciona o novo documento
+          logger.info(`[onAppointmentArrived - ${appointmentId}] Queue entry created successfully for petshop service.`);
+
+        } catch (queueError) {
+          logger.error(`[onAppointmentArrived - ${appointmentId}] FAILED to create queue entry for petshop service:`, queueError);
+          // Considerar se deve relançar o erro ou apenas logar
+        }
+        // <<< FIM DA LÓGICA PARA CRIAR ENTRADA NA FILA >>>
 
       } else {
         logger.warn(`[onAppointmentArrived - ${appointmentId}] Unknown service module: ${serviceModule}. Skipping Prontuario/Episode/OS creation.`);
@@ -2100,7 +2194,7 @@ export const lookupBarcode = https.onRequest(
 // --- Função de Processamento de Pagamento ---
 
 interface PaymentData {
-  chargeId?: string;       // ID da cobrança existente (se aplicável)
+  chargeIds?: string[];    // IDs das cobranças existentes (se aplicável)
   cartItems?: Array<{     // Itens do carrinho (para venda direta)
     itemId: string;
     description: string;
@@ -2148,19 +2242,21 @@ export const processPayment = onCall<
     const data = request.data;
     logger.info(`[processPayment] Received data for tenant ${tenantId}:`, data);
 
-    if (!data.paymentMethod || data.amountPaid == null || data.amountPaid <= 0 || !data.customerId) {
-        logger.error("[processPayment] Invalid input data (missing required payment fields).", data);
-        throw new HttpsError("invalid-argument", "Dados de pagamento incompletos ou inválidos (método, valor, cliente).");
+    // MODIFIED: Allow null/missing customerId ONLY if chargeIds is also missing (direct sale)
+    // Allow chargeIds to be empty or null when cartItems are present.
+    if (!data.paymentMethod || data.amountPaid == null || data.amountPaid <= 0 || (!data.customerId && data.chargeIds && data.chargeIds.length > 0)) {
+        logger.error("[processPayment] Invalid input data (missing required payment fields or missing customerId for existing charge).", data);
+        throw new HttpsError("invalid-argument", "Dados de pagamento incompletos ou inválidos (método, valor obrigatórios; cliente obrigatório para cobranças existentes).");
     }
 
-    if (!data.chargeId && (!data.cartItems || data.cartItems.length === 0)) {
-        logger.error("[processPayment] Invalid input data (missing chargeId and cartItems).", data);
-        throw new HttpsError("invalid-argument", "É necessário fornecer um ID de cobrança ou itens no carrinho.");
+    if ((!data.chargeIds || data.chargeIds.length === 0) && (!data.cartItems || data.cartItems.length === 0)) {
+        logger.error("[processPayment] Invalid input data (missing chargeIds and cartItems).", data);
+        throw new HttpsError("invalid-argument", "É necessário fornecer IDs de cobrança ou itens no carrinho.");
     }
 
-    if (data.chargeId && data.cartItems && data.cartItems.length > 0) {
-        logger.error("[processPayment] Invalid input data (both chargeId and cartItems provided).", data);
-        throw new HttpsError("invalid-argument", "Não é possível processar um ID de cobrança e itens de carrinho simultaneamente.");
+    if (data.chargeIds && data.chargeIds.length > 0 && data.cartItems && data.cartItems.length > 0) {
+        logger.error("[processPayment] Invalid input data (both chargeIds and cartItems provided).", data);
+        throw new HttpsError("invalid-argument", "Não é possível processar IDs de cobrança e itens de carrinho simultaneamente.");
     }
 
     // Validação específica do cartão (se aplicável)
@@ -2171,59 +2267,76 @@ export const processPayment = onCall<
     }
 
     try {
-      let finalChargeId: string | undefined = data.chargeId;
+      let finalChargeId: string | undefined = (data.chargeIds && data.chargeIds.length > 0) ? data.chargeIds[0] : undefined; // Use first chargeId for return, if needed
       let transactionId: string | undefined;
 
       // Usar uma transação Firestore para garantir atomicidade
       await db.runTransaction(async (transaction) => {
         logger.info(`[processPayment] Starting Firestore transaction for tenant ${tenantId}.`);
 
-        if (data.chargeId) {
-          // --- Lógica para pagar uma COBRANÇA EXISTENTE --- 
-          // ... (código interno da transação para charge existente) ...
-          const chargeRef = db.collection('tenants').doc(tenantId).collection('charges').doc(data.chargeId);
-          const chargeDoc = await transaction.get(chargeRef);
+        if (data.chargeIds && data.chargeIds.length > 0) {
+          // --- Lógica para pagar MÚLTIPLAS COBRANÇAS EXISTENTES --- 
+          logger.info(`[processPayment] Processing payment for existing charges: ${data.chargeIds.join(', ')}`);
 
-          if (!chargeDoc.exists) {
-            logger.error(`[processPayment] Charge ${data.chargeId} not found for tenant ${tenantId}.`);
-            throw new HttpsError("not-found", "Cobrança não encontrada."); // Erro dentro da transação a aborta
-          }
-
-          const chargeData = chargeDoc.data();
-          if (!chargeData) {
-              logger.error(`[processPayment] Charge data is undefined for charge ${data.chargeId}.`);
-              throw new HttpsError("internal", "Erro ao ler dados da cobrança.");
-          }
-          
-          // TODO: Validar se a cobrança já está 'paid'
-          // TODO: Validar se data.amountPaid é suficiente (considerar pagamentos parciais no futuro)
-          // TODO: Calcular novo status ('paid' ou 'partially_paid') e novo amountPaid
-
+          // 1. Criar uma ÚNICA transação para o pagamento total
           const newTransactionRef = db.collection('tenants').doc(tenantId).collection('transactions').doc();
-          transactionId = newTransactionRef.id; // Atribui o ID aqui para retornar fora da transação
+          transactionId = newTransactionRef.id; // Atribui o ID da transação
 
-          logger.info(`[processPayment] Creating transaction ${transactionId} for charge ${data.chargeId}`);
+          // Usar o customerId fornecido na chamada (deve ser consistente para todas as charges agrupadas)
+          const customerIdForTransaction = data.customerId;
+          if (!customerIdForTransaction) {
+            logger.error("[processPayment] Customer ID is missing when processing multiple charges.");
+            throw new HttpsError("invalid-argument", "ID do Cliente é necessário ao pagar cobranças existentes.");
+          }
+
+          logger.info(`[processPayment] Creating single transaction ${transactionId} for amount ${data.amountPaid}`);
           transaction.set(newTransactionRef, {
-            chargeId: data.chargeId,
+            chargeIds: data.chargeIds, // Salva todos os IDs relacionados
             tenantId: tenantId,
-            tutorId: chargeData.tutorId, // Usar tutorId da cobrança
+            tutorId: customerIdForTransaction, 
             method: data.paymentMethod,
-            amount: data.amountPaid,
+            amount: data.amountPaid, // Valor total pago
             status: 'completed', // Assumir completo por enquanto
             transactionTimestamp: admin.firestore.FieldValue.serverTimestamp(),
             cashierId: cashierId,
-            notes: `Pagamento para cobrança ${data.chargeId}`,
+            notes: `Pagamento referente às cobranças: ${data.chargeIds.join(', ')}`,
           });
 
-          logger.info(`[processPayment] Updating charge ${data.chargeId} status.`);
-          transaction.update(chargeRef, {
-            status: 'paid', // TODO: Ajustar para 'partially_paid' se necessário
-            amountPaid: admin.firestore.FieldValue.increment(data.amountPaid), // TODO: Ajustar se amountPaid for o total pago
-            paymentMethod: data.paymentMethod, // <<< ADICIONADO paymentMethod >>>
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            paidAt: admin.firestore.FieldValue.serverTimestamp(), // TODO: Apenas se quitado
-            cashierId: cashierId, // Registrar quem recebeu
-          });
+          // 2. Atualizar CADA charge individualmente
+          for (const chargeId of data.chargeIds) {
+            const chargeRef = db.collection('tenants').doc(tenantId).collection('charges').doc(chargeId);
+            const chargeDoc = await transaction.get(chargeRef); // Obter dentro da transação
+
+            if (!chargeDoc.exists) {
+              logger.error(`[processPayment] Charge ${chargeId} not found during transaction.`);
+              throw new HttpsError("not-found", `Cobrança ${chargeId} não encontrada.`);
+            }
+
+            const chargeData = chargeDoc.data();
+            if (!chargeData) {
+                logger.error(`[processPayment / Tx] Charge data is undefined for charge ${chargeId}.`);
+                throw new HttpsError("internal", `Erro ao ler dados da cobrança ${chargeId}.`);
+            }
+
+            // Verifica se a charge já não estava paga para evitar reprocessamento (opcional mas bom)
+            if (chargeData.status === 'paid') {
+              logger.warn(`[processPayment / Tx] Charge ${chargeId} already marked as paid. Skipping update for this charge.`);
+              continue; // Pula para a próxima charge no loop
+            }
+
+            // TODO: Implementar lógica de pagamento parcial se necessário.
+            // Por agora, marca como 'paid' e assume que data.amountPaid quitou tudo.
+            logger.info(`[processPayment / Tx] Updating charge ${chargeId} status to paid.`);
+            transaction.update(chargeRef, {
+              status: 'paid', // TODO: Ajustar para 'partially_paid' se necessário
+              // Atualiza o amountPaid da charge para refletir seu valor total (assumindo pagamento integral)
+              amountPaid: chargeData.totalAmount, 
+              paymentMethod: data.paymentMethod, // <<< ADICIONADO paymentMethod >>>
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              paidAt: admin.firestore.FieldValue.serverTimestamp(), // TODO: Apenas se quitado
+              cashierId: cashierId, // Registrar quem recebeu
+            });
+          }
 
         } else if (data.cartItems) {
           // --- Lógica para VENDA DIRETA NO CAIXA --- 
@@ -2243,7 +2356,7 @@ export const processPayment = onCall<
           logger.info(`[processPayment] Creating new charge ${finalChargeId} for direct sale.`);
           transaction.set(newChargeRef, {
             tenantId: tenantId,
-            tutorId: data.customerId,
+            tutorId: data.customerId || null, // Explicitly set to null if missing/undefined
             petId: null, 
             items: data.cartItems.map(item => ({
                 itemId: item.itemId,
@@ -2274,7 +2387,7 @@ export const processPayment = onCall<
           transaction.set(newTransactionRef, {
             chargeId: finalChargeId,
             tenantId: tenantId,
-            tutorId: data.customerId,
+            tutorId: data.customerId || null, // Explicitly set to null if missing/undefined
             method: data.paymentMethod,
             amount: data.amountPaid,
             status: 'completed',
@@ -2284,7 +2397,7 @@ export const processPayment = onCall<
           });
         } else {
           // Este caso não deveria acontecer devido às validações anteriores, mas é bom ter um fallback
-          logger.error("[processPayment] Transaction error: Neither chargeId nor cartItems were effectively processed.");
+          logger.error("[processPayment] Transaction error: Neither chargeIds nor cartItems were effectively processed.");
           throw new HttpsError("internal", "Erro inesperado na lógica de processamento do pagamento.");
         }
         logger.info(`[processPayment] Firestore transaction function completed for tenant ${tenantId}.`);
@@ -2316,12 +2429,13 @@ async function addItemsToPendingCharge(
     tutorId: string, 
     petId: string | null, 
     items: any[], // Array de itens a adicionar
-    petName?: string | null,     // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    osNumber?: string | null,    // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    episodeId?: string | null,   // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    prontuarioId?: string | null // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    petName?: string | null,
+    osNumber?: string | null,
+    episodeId?: string | null,
+    prontuarioId?: string | null
 ) {
-  logger.info(`[Charge Helper / ${tenantId}] Attempting to add items for tutor ${tutorId}. Items count: ${items.length}`, { petId, petName, osNumber, episodeId, prontuarioId });
+  // MODIFICADO: Log para indicar criação
+  logger.info(`[Charge Helper / ${tenantId}] Attempting to CREATE A NEW charge for tutor ${tutorId}. Items count: ${items.length}`, { petId, petName, osNumber, episodeId, prontuarioId });
   if (!items || items.length === 0) {
     logger.warn(`[Charge Helper / ${tenantId}] No items provided for tutor ${tutorId}. Aborting.`);
     return { success: false, message: "Nenhum item fornecido." };
@@ -2329,17 +2443,21 @@ async function addItemsToPendingCharge(
 
   const chargesRef = db.collection('tenants').doc(tenantId).collection('charges');
 
-  // 1. Tenta encontrar uma charge 'pending' recente para este tutor (usando métodos encadeados)
+  // REMOVIDO: Query para buscar charge existente
+  /*
   const q = chargesRef
     .where("tutorId", "==", tutorId)
     .where("status", "==", "pending")
     .orderBy("createdAt", "desc")
     .limit(1);
+  */
 
   try {
-    const querySnapshot = await q.get(); // Usa .get() na query
+    // REMOVIDO: Execução da query e lógica para obter existingChargeId
+    /*
+    const querySnapshot = await q.get();
     let existingChargeId: string | null = null;
-    let existingChargeData: any = {}; // Para guardar dados da charge existente
+    let existingChargeData: any = {};
     if (!querySnapshot.empty) {
       existingChargeId = querySnapshot.docs[0].id;
       existingChargeData = querySnapshot.docs[0].data();
@@ -2347,58 +2465,32 @@ async function addItemsToPendingCharge(
     } else {
       logger.info(`[Charge Helper / ${tenantId}] No existing pending charge found for tutor ${tutorId}. Will create a new one.`);
     }
+    */
 
-    // 2. Executa a lógica dentro de uma transação Firestore
+    // MODIFICADO: Transação agora SEMPRE cria uma nova charge
     const transactionResult = await db.runTransaction(async (transaction) => {
-      let targetChargeId: string | null = null; // Inicia como null
+      // REMOVIDO: O bloco 'if (existingChargeId)' inteiro que atualizava
+      /*
+      if (existingChargeId) {
+         // ... código de atualização removido ...
+      }
+      */
+
+      // --- ALWAYS Create New Charge ---
+        const newChargeRef = chargesRef.doc(); // Gera novo ID
+      const targetChargeId = newChargeRef.id; // Define o ID alvo
+        logger.info(`[Charge Helper / ${tenantId} / Tx] Creating new charge ${targetChargeId}.`);
       const newItemsTotal = items.reduce((sum, item) => sum + (item.totalPrice || 0), 0);
 
-      if (existingChargeId) {
-        // --- Atualiza Charge Existente ---
-        const chargeRef = chargesRef.doc(existingChargeId);
-        const chargeDoc = await transaction.get(chargeRef);
-        
-        if (chargeDoc.exists && chargeDoc.data()?.status === 'pending') {
-          // Charge válida encontrada na transação
-          targetChargeId = existingChargeId; // Define o ID alvo
-          logger.info(`[Charge Helper / ${tenantId} / Tx] Updating existing charge ${targetChargeId}.`);
-          
-          const updates: any = { // Define um objeto para as atualizações
-            items: admin.firestore.FieldValue.arrayUnion(...items), 
-            totalAmount: admin.firestore.FieldValue.increment(newItemsTotal),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-          };
-          
-          // <<< Adiciona campos apenas se não existirem na charge e forem fornecidos agora >>>
-          if (petId && !existingChargeData.petId) updates.petId = petId;
-          if (petName && !existingChargeData.petName) updates.petName = petName;
-          if (osNumber && !existingChargeData.osNumber) updates.osNumber = osNumber;
-          if (episodeId && !existingChargeData.episodeId) updates.episodeId = episodeId;
-          if (prontuarioId && !existingChargeData.prontuarioId) updates.prontuarioId = prontuarioId;
-          // <<< Fim da adição condicional >>>
-
-          transaction.update(chargeRef, updates); // Aplica todas as atualizações
-        } else {
-          // A charge encontrada antes não é mais válida, força criação de nova
-          logger.warn(`[Charge Helper / ${tenantId}] Charge ${existingChargeId} no longer valid in transaction. Will create new charge.`);
-          existingChargeId = null; // Garante que a próxima condição seja atendida
-        }
-      } 
-      
-      // --- Cria Nova Charge (se existingChargeId for null) ---
-      if (existingChargeId === null) { 
-        const newChargeRef = chargesRef.doc(); // Gera novo ID
-        targetChargeId = newChargeRef.id; // Define o ID alvo
-        logger.info(`[Charge Helper / ${tenantId} / Tx] Creating new charge ${targetChargeId}.`);
         transaction.set(newChargeRef, {
           tenantId: tenantId,
           tutorId: tutorId,
           petId: petId || null,
-          petName: petName || null,      // <<< Adiciona petName >>>
-          osNumber: osNumber || null,    // <<< Adiciona osNumber >>>
-          episodeId: episodeId || null,  // <<< Adiciona episodeId >>>
-          prontuarioId: prontuarioId || null, // <<< Adiciona prontuarioId >>>
-          items: items,
+          petName: petName || null,
+          osNumber: osNumber || null,
+          episodeId: episodeId || null,
+          prontuarioId: prontuarioId || null,
+          items: items, // Contém os itens da OS/Episódio atual
           totalAmount: newItemsTotal,
           amountPaid: 0,
           status: 'pending',
@@ -2406,24 +2498,26 @@ async function addItemsToPendingCharge(
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
-      }
       
-      // Verifica se um ID foi definido (seja por atualização ou criação)
+      // REMOVIDO: Verificação desnecessária de targetChargeId
+      /*
       if (!targetChargeId) {
-           logger.error(`[Charge Helper / ${tenantId} / Tx] CRITICAL: targetChargeId was not set during transaction.`);
-           throw new Error("Não foi possível determinar a cobrança alvo na transação.");
+           // ... throw new Error ...
       }
+      */
       
-      // Retorna o ID da charge 
-      return { chargeId: targetChargeId }; // Retorna um objeto com a propriedade chargeId
+      // Retorna o ID da charge criada
+      return { chargeId: targetChargeId };
     });
 
-    logger.info(`[Charge Helper / ${tenantId}] Transaction successful. Charge ID: ${transactionResult.chargeId}`);
-    return { success: true, chargeId: transactionResult.chargeId }; // Retorna sucesso e o chargeId
+    // MODIFICADO: Log para refletir criação
+    logger.info(`[Charge Helper / ${tenantId}] Transaction successful. NEW Charge ID created: ${transactionResult.chargeId}`);
+    return { success: true, chargeId: transactionResult.chargeId };
 
   } catch (error: any) {
-    logger.error(`[Charge Helper / ${tenantId}] Error processing charge for tutor ${tutorId}:`, { error: error.message, stack: error.stack, details: error.details });
-    return { success: false, message: `Erro ao processar cobrança: ${error.message}`, errorDetails: error }; 
+    // MODIFICADO: Log de erro para refletir criação
+    logger.error(`[Charge Helper / ${tenantId}] Error CREATING charge for tutor ${tutorId}:`, { error: error.message, stack: error.stack, details: error.details });
+    return { success: false, message: `Erro ao criar cobrança: ${error.message}`, errorDetails: error };
   }
 }
 
@@ -2432,7 +2526,7 @@ export const onAppointmentCompletedCreateCharge = onDocumentUpdated(
   {
     region: "southamerica-east1",
     document: "appointments/{appointmentId}", 
-    memory: "256MiB", 
+    memory: "256MiB",
     timeoutSeconds: 60,
   },
   async (event: FirestoreEvent<Change<QueryDocumentSnapshot> | undefined, { appointmentId: string }>) => {
@@ -2473,13 +2567,13 @@ export const onAppointmentCompletedCreateCharge = onDocumentUpdated(
 
         if (!appointmentSnap.exists) {
             logger.error(`[onAppointmentCompletedCreateCharge / ${tenantId}] CRITICAL: Appointment document ${appointmentId} not found after status change trigger! Aborting.`);
-            return;
-        }
+        return;
+      }
         const appointmentData = appointmentSnap.data();
         if (!appointmentData) {
              logger.error(`[onAppointmentCompletedCreateCharge / ${tenantId}] CRITICAL: Appointment document ${appointmentId} data is empty! Aborting.`);
-             return;
-        }
+        return;
+      }
         // --- End Fetch ---
 
         // --- Use data from the fetched document ---
@@ -2504,7 +2598,7 @@ export const onAppointmentCompletedCreateCharge = onDocumentUpdated(
                 if (petSnap.exists) {
                     petName = petSnap.data()?.name || null;
                     logger.info(`[onAppointmentCompletedCreateCharge / ${tenantId}] Fetched pet name: ${petName}`);
-                } else {
+    } else {
                     logger.warn(`[onAppointmentCompletedCreateCharge / ${tenantId}] Pet document ${petId} not found.`);
                 }
             } catch (petError) {
@@ -2523,8 +2617,8 @@ export const onAppointmentCompletedCreateCharge = onDocumentUpdated(
         }
         if (!tutorId || !serviceId || !serviceName || typeof servicePrice !== 'number') {
            logger.error(`[onAppointmentCompletedCreateCharge / ${tenantId}] Missing required data (tutorId, serviceId, serviceName, price) in FETCHED appointment ${appointmentId}. Cannot create charge item.`, { tutorId, serviceId, serviceName, servicePrice });
-           return; 
-        }
+       return;
+    }
         // Allow zero price for now, but log a warning. Negative price is skipped.
         if (servicePrice < 0) { 
            logger.warn(`[onAppointmentCompletedCreateCharge / ${tenantId}] Fetched appointment ${appointmentId} has negative price (${servicePrice}). Skipping charge item creation.`);
@@ -2607,14 +2701,14 @@ export const onAppointmentCompletedCreateCharge = onDocumentUpdated(
         // --- Final Check and Call to Add Items ---\\
         if (chargeItems.length === 0) {
             logger.warn(`[onAppointmentCompletedCreateCharge / ${tenantId}] No valid items found for charge creation for appointment ${appointmentId}. Skipping.`);
-            return;
-        }
+         return; 
+      }
 
         logger.info(`[onAppointmentCompletedCreateCharge / ${tenantId}] Preparing to add ${chargeItems.length} items to charge for tutor ${tutorId}.`);
         
         // Call the helper function to add items to a pending charge
         const chargeResult = await addItemsToPendingCharge(
-            tenantId,
+          tenantId,
             tutorId,
             petId, 
             chargeItems,
@@ -2644,7 +2738,7 @@ export const onAppointmentCompletedCreateCharge = onDocumentUpdated(
          logger.log(`[onAppointmentCompletedCreateCharge / ${tenantId}] Triggered for appointment ${appointmentId}, but status was already 'completed'. No action taken.`);
       }
     }
-    
+
     const functionEndTime = Date.now();
     logger.info(`[onAppointmentCompletedCreateCharge / ${tenantId}] Function execution finished for appointment ${appointmentId}. Duration: ${functionEndTime - functionStartTime}ms`);
 
@@ -2656,3 +2750,37 @@ export const onAppointmentCompletedCreateCharge = onDocumentUpdated(
 // TODO: Mover a função processPayment para esta seção se desejar organizar melhor
 
 // ... (processPayment e outras funções existentes) ...
+
+
+// --- NOVA FUNÇÃO: Gerar Número da OS --- 
+export const generateOsNumber = https.onCall(
+  {
+    region: "southamerica-east1", // Mantenha sua região
+    cors: ["http://localhost:5173", "https://petfacil.app"] // <-- ADICIONADO CORS AQUI
+  },
+  async (request) => {
+    logger.info(`[generateOsNumber / v: ${CODE_VERSION}] Function called.`); // Use CODE_VERSION se definido
+
+    if (!request.auth?.token?.tenant_id) {
+      logger.error("[generateOsNumber] Permission denied: User is not authenticated or missing tenant_id.");
+      throw new HttpsError("permission-denied", "Ação permitida apenas para usuários logados com tenant.");
+    }
+    const tenantId = request.auth.token.tenant_id;
+    logger.info(`[generateOsNumber] Generating OS number for tenant: ${tenantId}`);
+
+    try {
+      // Lógica para gerar o número da OS (usando número aleatório de 8 dígitos)
+      const randomNumber = Math.floor(Math.random() * 90000000) + 10000000;
+      const osNumber = `OS-${pad8(randomNumber)}`;
+      
+      // Apenas retorna o número gerado
+      logger.info(`[generateOsNumber] Generated OS Number: ${osNumber} for tenant ${tenantId}`);
+      return { success: true, osNumber: osNumber };
+
+    } catch (error: any) {
+      logger.error(`[generateOsNumber] Error generating OS number for tenant ${tenantId}:`, error);
+      throw new HttpsError("internal", "Erro interno ao gerar número da OS.", error.message);
+    }
+  }
+);
+// --- FIM NOVA FUNÇÃO --- 

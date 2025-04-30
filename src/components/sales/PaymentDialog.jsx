@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import PropTypes from 'prop-types';
 
-export default function PaymentDialog({ open, onOpenChange, cart, customer = null, chargeId = null, totalAmount, onSuccess }) {
+export default function PaymentDialog({ open, onOpenChange, cart, customer = null, chargeIds = [], totalAmount, onSuccess, isAnonymousSale = false }) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("pix");
   const [changeAmount, setChangeAmount] = useState(0);
@@ -79,16 +79,17 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer = nul
   };
 
   const handleSubmit = async () => {
-    if (!customer) {
+    if (!customer && !isAnonymousSale) {
       toast({
         title: "Cliente obrigatório",
-        description: "Selecione um cliente para continuar.",
+        description: "Selecione um cliente para continuar (ou certifique-se que é uma venda anônima).",
         variant: "destructive"
       });
       return;
     }
 
-    if (!chargeId && total <= 0 && cart.length > 0) {
+    const hasCharges = chargeIds && chargeIds.length > 0;
+    if (!hasCharges && total <= 0 && cart.length > 0) {
       toast({
         title: "Valor inválido",
         description: "O total do carrinho não pode ser zero para venda direta.",
@@ -119,8 +120,8 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer = nul
     setIsProcessing(true);
 
     const paymentPayload = {
-        chargeId: chargeId || null,
-        cartItems: chargeId ? null : cart.map(item => ({
+        chargeIds: hasCharges ? chargeIds : null,
+        cartItems: hasCharges ? null : cart.map(item => ({
             itemId: item.id,
             description: item.name,
             quantity: item.quantity,
@@ -130,7 +131,7 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer = nul
         })),
         paymentMethod: paymentMethod, 
         amountPaid: total,
-        customerId: customer.id,
+        customerId: customer ? customer.id : null,
         cardInfo: (paymentMethod === "credit_card" || paymentMethod === "debit_card") ? cardInfo : null,
     };
 
@@ -365,7 +366,12 @@ export default function PaymentDialog({ open, onOpenChange, cart, customer = nul
           <Button
             type="button"
             onClick={handleSubmit}
-            disabled={isProcessing || !customer}
+            disabled={isProcessing || 
+                      (!customer && !isAnonymousSale) || 
+                      (total <= 0 && !chargeIds) || 
+                      (paymentMethod === 'cash' && parseFloat(receivedAmount || "0") < total) ||
+                      ((paymentMethod === 'credit_card' || paymentMethod === 'debit_card') && (!cardInfo.number || !cardInfo.holder || !cardInfo.expiry || !cardInfo.cvv))
+                    }
           >
             {isProcessing ? (
               <>
@@ -390,7 +396,8 @@ PaymentDialog.propTypes = {
   onOpenChange: PropTypes.func.isRequired,
   cart: PropTypes.array.isRequired,
   customer: PropTypes.object,
-  chargeId: PropTypes.string, 
-  totalAmount: PropTypes.number.isRequired, 
+  chargeIds: PropTypes.arrayOf(PropTypes.string),
+  totalAmount: PropTypes.number.isRequired,
   onSuccess: PropTypes.func.isRequired,
+  isAnonymousSale: PropTypes.bool
 };

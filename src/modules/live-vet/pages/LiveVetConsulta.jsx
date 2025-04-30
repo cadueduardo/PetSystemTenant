@@ -18,7 +18,7 @@ import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { medicationTaskService } from '@/api/firebase/medicationTaskService';
 import { addPendingItems } from '@/api/mock/chargeableItemService';
-import { collectionGroup, query, where, getDocs, orderBy, limit, collection, doc, getDoc, updateDoc, Timestamp, setDoc, serverTimestamp, addDoc } from "firebase/firestore";
+import { collectionGroup, query, where, getDocs, orderBy, limit, collection, doc, getDoc, updateDoc, Timestamp } from "firebase/firestore";
 import { db } from '@/lib/firebaseConfig';
 // <<< ADICIONAR IMPORTS PARA COMBOBOX >>>
 import { ChevronsUpDown } from "lucide-react";
@@ -26,8 +26,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import React from 'react';
-import { ScrollArea } from "@/components/ui/scroll-area";
-// import chargeService from "@/api/services/chargeService"; // <<< LINHA REMOVIDA
 
 // <<< ATUALIZAR URLs para Cloud Run >>>
 // const AUDIO_SERVICE_BASE_URL = 'http://localhost:8001'; // URL Antiga
@@ -260,12 +258,13 @@ export default function LiveVetConsulta() {
         setService(serviceDataResult);
         console.log('[useEffect Main] Estados Pet/Customer/Service atualizados com sucesso.');
 
-        // <<< INÍCIO: Buscar Episódio Atual e Histórico (MOVIDO PARA DEPOIS DO FETCH PET/CUST/SVC) >>>
+        // <<< INÍCIO: Buscar Episódio Atual e Histórico (COM LOGS DETALHADOS) >>>
         const tenantId = currentApptData.tenant_id; // Pegar tenantId do agendamento atualizado
+        console.log(`[useEffect Episode] Tenant ID para busca: ${tenantId}`); // LOG 1: Tenant ID
         if (tenantId) {
           try {
             // Buscar episódio ATUAL usando collectionGroup e appointmentId
-            console.log(`[useEffect Episode] Buscando episódio para appt ${appointmentId} e tenant ${tenantId}`);
+            console.log(`[useEffect Episode] Buscando episódio para appt ${appointmentId} e tenant ${tenantId}`); // LOG 2: Parâmetros Query Episódio
             const episodesQuery = query(
               collectionGroup(db, 'episodes'),
               where('tenantId', '==', tenantId),
@@ -273,48 +272,49 @@ export default function LiveVetConsulta() {
               limit(1)
             );
             const episodeSnapshot = await getDocs(episodesQuery);
+            console.log(`[useEffect Episode] Snapshot do episódio atual recebido. Size: ${episodeSnapshot.size}, Empty: ${episodeSnapshot.empty}`); // LOG 3: Resultado Snapshot Episódio
 
             if (!episodeSnapshot.empty) {
               const episodeDoc = episodeSnapshot.docs[0];
               const episodeData = { id: episodeDoc.id, ...episodeDoc.data() };
               setCurrentEpisodeData(episodeData); // Salva dados do episódio atual
-              console.log('[useEffect Episode] Episódio Atual encontrado:', episodeData);
+              console.log('[useEffect Episode] Episódio Atual encontrado e setado no estado:', episodeData); // LOG 4: Dados do Episódio Encontrado
 
               const prontuarioId = episodeData.prontuarioId; // Pega o ID do prontuário
+              console.log(`[useEffect Episode History] Prontuário ID extraído do episódio: ${prontuarioId}`); // LOG 5: Prontuario ID
 
               // Buscar histórico de episódios do MESMO prontuário
               if (prontuarioId) {
-                 console.log(`[useEffect Episode History] Buscando histórico para prontuarioId: ${prontuarioId}, TenantId: ${tenantId}`); // LOG 1
+                 console.log(`[useEffect Episode History] Buscando histórico para prontuarioId: ${prontuarioId}, TenantId: ${tenantId}`); // LOG 6: Parâmetros Query Histórico
                 const historyQuery = query(
                   collection(db, `tenants/${tenantId}/prontuarios/${prontuarioId}/episodes`),
-                  // where('id', '!=', episodeData.id), // <<< TEMPORARIAMENTE REMOVIDO PARA TESTE
                   orderBy('createdAt', 'desc'),     // Ordena pelos mais recentes
                   limit(5)                          // Limita a 5 resultados
                 );
                 const historySnapshot = await getDocs(historyQuery);
-                console.log(`[useEffect Episode History] Snapshot size: ${historySnapshot.size}`); // LOG 2
+                console.log(`[useEffect Episode History] Snapshot do histórico recebido. Size: ${historySnapshot.size}, Empty: ${historySnapshot.empty}`); // LOG 7: Resultado Snapshot Histórico
                 const historyData = historySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                console.log('[useEffect Episode History] Mapped history data:', historyData); // LOG 3
+                console.log('[useEffect Episode History] Dados do histórico mapeados:', historyData); // LOG 8: Dados do Histórico Mapeados
                 setEpisodeHistory(historyData);
               } else {
-                 console.warn('[useEffect Episode History] Prontuario ID não encontrado no episódio atual. Não foi possível buscar histórico.'); // LOG 4
+                 console.warn('[useEffect Episode History] Prontuario ID não encontrado no episódio atual. Não foi possível buscar histórico.'); // LOG 9: Falha Prontuario ID
                  setEpisodeHistory([]);
               }
 
             } else {
-              console.warn(`[useEffect Episode] Nenhum episódio encontrado para appointmentId: ${appointmentId} e tenantId: ${tenantId}. O serviço pode não ser clínico ou houve erro no trigger.`);
+              console.warn(`[useEffect Episode] Nenhum episódio encontrado para appointmentId: ${appointmentId} e tenantId: ${tenantId}.`); // LOG 10: Episódio não encontrado
               setCurrentEpisodeData(null);
               setEpisodeHistory([]);
             }
 
           } catch (episodeError) {
-            console.error("[useEffect Episode] Erro ao buscar episódio/histórico:", episodeError);
+            console.error("[useEffect Episode] Erro ao buscar episódio/histórico:", episodeError); // LOG 11: Erro na busca
             toast({ title: "Erro", description: "Não foi possível carregar os detalhes do episódio.", variant: "destructive" });
             setCurrentEpisodeData(null);
             setEpisodeHistory([]);
           }
         } else {
-           console.error("[useEffect Episode] Tenant ID não encontrado no agendamento. Não foi possível buscar episódio.");
+           console.error("[useEffect Episode] Tenant ID não encontrado no agendamento. Não foi possível buscar episódio."); // LOG 12: Falha Tenant ID
            setCurrentEpisodeData(null);
            setEpisodeHistory([]);
         }
@@ -393,7 +393,7 @@ export default function LiveVetConsulta() {
           handleStopStreamingRecording();
       }
     };
-  }, [appointmentId, location.search, handleStopStreamingRecording]);
+  }, [appointmentId, location.search, handleStopStreamingRecording]); // << MANTER DEPENDÊNCIAS ORIGINAIS
 
   const handleStartStreamingRecording = useCallback(async () => {
     if (isStreaming) return;

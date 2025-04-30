@@ -114,15 +114,34 @@ Substituir a página de "Vendas" atual por um módulo de "Caixa" mais robusto, c
 
 ## 8. Tarefas Pós-MVP
 
-1.  [ ] **Frontend:** Refatorar `Cashier.jsx` para nova UX (sem abas, linhas de cliente expansíveis com detalhes dos itens via collapse, modal "Continuar Comprando" gerando nova OS para itens avulsos).
-2.  [ ] **Frontend:** Refatorar `SalesHistory.jsx` para buscar e exibir `charges` pagas (em vez da estrutura antiga `PurchaseHistory`).
-3.  [ ] **Backend/Frontend:** Implementar funcionalidade "Gerar NF" em `SalesHistory.jsx` (botão por linha, chamar função backend para separar itens e integrar com API de NF).
+1.  [ ] **Frontend:** Refatorar `Cashier.jsx` para nova UX:
+    *   [ ] Layout de duas colunas (Esquerda: Pendentes agrupadas por cliente, Direita: Caixa/Carrinho/Produtos).
+    *   [ ] Remover `Tabs`.
+    *   [ ] Implementar lista de cobranças pendentes na coluna esquerda com cards por cliente (usar dados agregados do listener).
+    *   [ ] Botão "Finalizar Compra" por cliente/grupo na coluna esquerda (chama `handleLoadChargeToCart`).
+    *   [ ] Botão "Ver Detalhes" (placeholder ou expandir para mostrar itens da charge).
+    *   [ ] Botão "Continuar Comprando" (aparece quando charge está carregada):
+        *   [ ] Backend: Criar função para gerar nova OS vazia (`createDirectSaleOrderService`).
+        *   [ ] Frontend: Chamar função backend, abrir modal de busca/adição de produtos/serviços.
+        *   [ ] Frontend: Adicionar itens do modal ao carrinho principal marcados com a nova OS.
+    *   [ ] Implementar fluxo de **Venda Anônima/Rápida**:
+        *   [ ] Adicionar estado `isAnonymousSaleActive`.
+        *   [ ] Adicionar botão "Novo Pedido" (chama `handleNewAnonymousOrder` para limpar estado e ativar modo anônimo).
+        *   [ ] Ajustar funções (`handleDeselectCustomerOrCharge`, `onSelectCustomer`, `handleLoadChargeToCart`) para gerenciar `isAnonymousSaleActive`.
+        *   [ ] Ajustar condições de `disabled` na coluna direita (busca, carrinho) para permitir ações no modo anônimo.
+        *   [ ] Adicionar botão/link "Cadastrar Cliente e Vincular Compra?" (visível em modo anônimo com itens no carrinho).
+        *   [X] Ajustar `CustomerDialog` e `CustomerForm` (`onSuccess`) para vincular cliente novo/existente à venda anônima *sem* limpar o carrinho.
+        *   [X] Ajustar `PaymentDialog` e backend `processPayment` para lidar com vendas anônimas (sem `tutorId` ou com marcador especial).
+2.  [ ] **Frontend:** Refatorar `SalesHistory.jsx` para `ChargeHistory.jsx` (buscar e exibir `charges` pagas, com paginação e filtros básicos).
+3.  [ ] **Backend/Frontend:** Implementar funcionalidade "Gerar NF" em `ChargeHistory.jsx` (botão por linha, chamar função backend para separar itens e integrar com API de NF).
 4.  [ ] **Backend:** Integração completa com API de emissão de NFSe/NFC-e.
 5.  [ ] **Backend:** Implementação da lógica de cálculo e registro de comissões.
 6.  [ ] **Backend/Frontend:** Tratamento de pagamentos parciais e estorno/reembolso.
 7.  [ ] **Frontend:** Implementar funcionalidade de exportação para Excel em `ChargeHistory.jsx`.
+8.  [ ] **Correção Lógica OS/Episódio:** Ajustar `AgendaPage.jsx` para **não** gerar `osNumber` para agendamentos `service_type: 'clinica'`. A geração de OS deve ocorrer apenas para tipos de serviço apropriados (ex: 'petshop'). (Detectado em 29/04/2025)
+9.  [ ] **Correção Layout Caixa:** Investigar por que as alterações no layout da coluna de cobranças pendentes em `Cashier.jsx` (exibição individual por charge) não estão refletindo visualmente, mesmo após limpeza de cache/restart. (Detectado em 29/04/2025)
 
-## 9. Últimas Atualizações (28/04/2025)
+## 9. Últimas Atualizações (28/04/2025 - 20:00)
 
 *   **Backend (`functions/src/index.ts`):**
     *   Corrigido gatilho `onAppointmentCompletedCreateCharge` para buscar consultas (`consultations`) usando `tenant_id`.
@@ -143,4 +162,13 @@ Substituir a página de "Vendas" atual por um módulo de "Caixa" mais robusto, c
 *   **Plano (`project_context_fluxo_caixa.md`):**
     *   Tarefas MVP marcadas como concluídas.
     *   Adicionadas tarefas Pós-MVP (Refatoração Caixa UX, Refatoração Histórico, Geração NF, Exportação Excel).
+    *   Adicionada esta seção de últimas atualizações.
+
+## 10. Últimas Atualizações (29/04/2025 - ~21:00)
+
+*   **Backend (`functions/src/index.ts`):**
+    *   Corrigida a função `processPayment` para aceitar `customerId: null` em casos de venda direta do caixa (sem `chargeId`), resolvendo o erro 400 que impedia vendas anônimas. A lógica agora exige `customerId` apenas se um `chargeId` existente estiver sendo pago.
+    *   Garantido que `tutorId` seja salvo como `null` nas coleções `charges` e `transactions` quando `customerId` não for fornecido na venda direta.
+*   **Contexto (`project_context_fluxo_caixa.md`):**
+    *   Tarefa Pós-MVP relacionada ao backend da venda anônima marcada como concluída.
     *   Adicionada esta seção de últimas atualizações.

@@ -15,7 +15,7 @@ import { medicationTaskService } from '@/api/firebase/medicationTaskService';
 import { petService } from '@/api/firebase/petService';
 import ServiceTimer from '@/components/queue/ServiceTimer';
 import { Badge } from "@/components/ui/badge"; // <-- Adicionar import do Badge
-import { collection, query, where, getDocs, limit, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, limit } from 'firebase/firestore';
 import { db } from '@/lib/firebaseConfig'; // <<< Assumindo que db é exportado daqui
 
 // Função auxiliar para exibir o status como Badge
@@ -172,24 +172,12 @@ export default function LiveVetDashboard() {
                         if (episodeData.episodeNumber) {
                             episodeNumber = episodeData.episodeNumber;
                         } else {
-                            console.log(`[LiveVetDash] Episódio ${episodeDoc.id} sem episodeNumber. Gerando e atualizando...`);
-                            const nextEp = Math.floor(Math.random() * 90000000) + 10000000;
-                            episodeNumber = `EP-${nextEp}`;
-                            // ATUALIZAÇÃO: A entidade Consultation não é mais usada aqui.
-                            // Precisamos chamar updateDoc diretamente ou criar um episodeService.
-                            // Por simplicidade, vamos tentar atualizar aqui, mas idealmente isso estaria num service.
-                            // await Consultation.update(episodeDoc.id, { episodeNumber }); // << Linha antiga removida
-                             try {
-                                const episodeDocRef = doc(db, episodesPath, episodeDoc.id); // Ref para o doc específico
-                                await updateDoc(episodeDocRef, { episodeNumber: episodeNumber });
-                                console.log(`[LiveVetDash] Episódio ID ${episodeDoc.id} atualizado com Episode#: ${episodeNumber}`);
-                             } catch (updateError) {
-                                console.error(`[LiveVetDash] FALHA ao atualizar episódio ID ${episodeDoc.id} com episodeNumber:`, updateError);
-                                episodeNumber = '-'; // Reverte se falhar
-                             }
+                            console.log(`[LiveVetDash] Episódio ${episodeDoc.id} encontrado, mas o campo episodeNumber não existe ou está vazio. Exibindo '-'`);
+                            episodeNumber = '-'; // Apenas define como '-' se não encontrar
                         }
                     } else {
                         console.log(`[LiveVetDash] Nenhum episódio encontrado na subcoleção para Appt ID ${appt.id}. EpisodeNumber permanecerá '-'`);
+                        episodeNumber = '-'; // Garante '-' se não encontrar
                     }
                 } catch (episodeQueryError) {
                     console.error(`[LiveVetDash] Erro ao buscar episódio na subcoleção para ${appt.id}:`, episodeQueryError);
