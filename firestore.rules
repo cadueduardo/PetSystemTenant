@@ -49,6 +49,17 @@ service cloud.firestore {
       // Tenant Admin: Atualizar apenas campos de suporte (RESTAURADA)
       allow update: if isTenantMember(tenantId) && isTenantUpdatingSupportAccessOnly();
         
+        // +++ INÍCIO: Regras para Cancellation Reasons (Subcoleção) +++
+        match /cancellation_reasons/{reasonId} {
+          // Leitura: Membros do tenant podem ler motivos do SEU tenant.
+          allow read: if isTenantMember(tenantId);
+          
+          // Criação: Apenas a Cloud Function `addCancellationReason` pode criar.
+          // Atualização/Exclusão: Bloqueado do lado do cliente por enquanto.
+          allow write: if false; 
+        }
+        // +++ FIM: Regras para Cancellation Reasons (Subcoleção) +++
+
         // --- Subcoleções do Tenant ---
       match /integrations/{integrationDocId} {
         // Permite que usuários autenticados do mesmo tenant leiam

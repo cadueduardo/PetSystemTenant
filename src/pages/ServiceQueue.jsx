@@ -84,6 +84,7 @@ import {
   // X, // Remover
   // Info, // Remover
 } from "lucide-react"; // Remover bloco inteiro se vazio
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 export default function ServiceQueue() {
   const [queueItems, setQueueItems] = useState([]);

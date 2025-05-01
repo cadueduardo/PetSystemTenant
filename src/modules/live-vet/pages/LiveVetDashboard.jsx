@@ -5,29 +5,38 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, AlertCircle, Play, Clock, RefreshCcw, UserCircle, ClipboardList, XCircle } from 'lucide-react';
+import { Loader2, AlertCircle, Play, Clock, RefreshCcw } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Appointment, Service, Pet, Customer } from '@/api/entities';
 import { toast } from '@/components/ui/use-toast';
 import { isToday, parseISO, differenceInSeconds, format } from 'date-fns';
 import { createPageUrl } from '@/utils'; // Precisamos desta função
 import { queueService } from '@/api/firebase/queueService';
 import { medicationTaskService } from '@/api/firebase/medicationTaskService';
-import { petService } from '@/api/firebase/petService';
 import ServiceTimer from '@/components/queue/ServiceTimer';
 import { Badge } from "@/components/ui/badge"; // <-- Adicionar import do Badge
-import { collection, query, where, getDocs, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, limit, orderBy, doc, updateDoc, serverTimestamp /*, getDoc */ } from 'firebase/firestore';
 import { db } from '@/lib/firebaseConfig'; // <<< Assumindo que db é exportado daqui
 
 // Função auxiliar para exibir o status como Badge
 const getStatusBadge = (status) => {
-  const statusText = status || 'Desconhecido';
-  let badgeVariant = "secondary"; // Default variant
-  // Adicionar lógica de variantes se necessário (ex: destructive para canceled)
-  if (status === 'canceled' || status === 'no_show') badgeVariant = "destructive";
-  if (status === 'completed') badgeVariant = "outline";
-  if (status === 'in_progress') badgeVariant = "default"; // Primary color usually
+  const statusConfig = {
+    // Clínica
+    arrived: { label: "Aguardando", className: "bg-orange-100 text-orange-800" }, // Mesma cor do 'waiting' do petshop
+    in_progress: { label: "Em Atendimento", className: "bg-purple-100 text-purple-800 border border-purple-300" }, // Mesma cor do petshop
+    completed: { label: "Concluído", className: "bg-green-100 text-green-800" }, // Mesma cor do petshop
+    canceled: { label: "Cancelado", className: "bg-red-100 text-red-800" }, // Mesma cor do petshop
+    no_show: { label: "Não Compareceu", className: "bg-gray-400 text-white" }, // Exemplo
+    // Fila de Retorno (pode ter status próprios se vierem da fila)
+    waiting: { label: "Aguardando Retorno", className: "bg-orange-100 text-orange-800" }, // Status da fila de retorno
+  };
   
-  return <Badge variant={badgeVariant} className="capitalize">{statusText.replace('_',' ')}</Badge>;
+  const config = statusConfig[status] || { 
+    label: status ? String(status).replace(/_/g, ' ') : "Desconhecido", 
+    className: "bg-gray-100 text-gray-800" 
+  }; 
+  
+  return <Badge className={`capitalize ${config.className}`}>{config.label}</Badge>;
 };
 
 export default function LiveVetDashboard() {
@@ -135,63 +144,61 @@ export default function LiveVetDashboard() {
       });
       console.log('[LiveVetDash] Agendamentos Filtrados para Hoje (Clínica):', todayClinicAppointments.length, todayClinicAppointments);
 
-      // 4. Buscar dados adicionais (Pet, Cliente, Serviço) para exibição
+      // <<< REVERTIDO: Buscar dados diretamente dentro do map >>>
       const populatedAppointments = await Promise.all(
         todayClinicAppointments.map(async (appt) => {
-          // Log para verificar o objeto appt
-          console.log('[LiveVetDash] Populando dados para Appt:', JSON.stringify(appt, null, 2));
+          console.log('[LiveVetDash] Populando dados para Appt:', appt.id);
           try {
+            // <<< REVERTIDO: Buscar Pet, Customer, Service diretamente >>>
             const [pet, customer, service] = await Promise.all([
-              Pet.get(appt.pet_id).catch(() => ({ name: 'Pet não encontrado' })),
+              Pet.get(appt.pet_id).catch(() => ({ name: 'Pet não encontrado', prontuarioId: null })), // Adiciona prontuarioId null no fallback
               Customer.get(appt.customer_id).catch(() => ({ full_name: 'Cliente não encontrado' })),
               Service.get(appt.service_id).catch(() => ({ name: 'Serviço não encontrado' }))
             ]);
-            // Ensure pet has a recordNumber
-            let recordNumber = pet.recordNumber;
-            if (!recordNumber) {
-              const next = Math.floor(Math.random() * 90000000) + 10000000;
-              recordNumber = `PT-${next}`;
-              await petService.update(pet.id, { recordNumber });
+
+            if (!pet) { // Checa se o pet foi encontrado
+                console.warn(`[LiveVetDash] Pet ${appt.pet_id} não encontrado para Appt ${appt.id}. Usando defaults.`);
+                return { /* ... dados default ... */ }; // Retorna default se pet não encontrado
             }
-            // <<< INÍCIO: LÓGICA ALTERADA PARA BUSCAR EPISÓDIO DA SUBCOLEÇÃO >>>
+
+            // <<< USAR prontuarioId diretamente do pet buscado >>>
+            const recordNumber = pet.prontuarioId; // Assume que prontuarioId existe (criado pelo backend)
+            console.log(`[LiveVetDash Populating ${appt.id}] Using recordNumber (from pet.prontuarioId): ${recordNumber}`);
+
+            // Buscar episodeNumber (lógica mantida, mas agora usa recordNumber lido)
             let episodeNumber = '-';
-            if (tenantId && recordNumber) { // Precisa do tenantId e prontuarioId
+            const tenantId = localStorage.getItem('current_tenant') || 'default';
+            if (tenantId && recordNumber) {
                 const episodesPath = `tenants/${tenantId}/prontuarios/${recordNumber}/episodes`;
-                console.log(`[LiveVetDash] Buscando episódio em ${episodesPath} para Appt ID ${appt.id}`);
+                console.log(`[LiveVetDash Populating ${appt.id}] Buscando episódio em ${episodesPath}`);
                 try {
                     const episodesCollectionRef = collection(db, episodesPath);
-                    const q = query(episodesCollectionRef, where('appointmentId', '==', appt.id), limit(1));
+                    const q = query(episodesCollectionRef, where('appointmentId', '==', appt.id), orderBy('createdAt', 'desc'), limit(1));
                     const querySnapshot = await getDocs(q);
-                    
+
                     if (!querySnapshot.empty) {
                         const episodeDoc = querySnapshot.docs[0];
                         const episodeData = episodeDoc.data();
-                        console.log(`[LiveVetDash] Episódio encontrado na subcoleção: ID=${episodeDoc.id}, Data:`, episodeData);
-                        
-                        // Tenta pegar episodeNumber existente, senão gera um NOVO e atualiza
-                        if (episodeData.episodeNumber) {
-                            episodeNumber = episodeData.episodeNumber;
-                        } else {
-                            console.log(`[LiveVetDash] Episódio ${episodeDoc.id} encontrado, mas o campo episodeNumber não existe ou está vazio. Exibindo '-'`);
-                            episodeNumber = '-'; // Apenas define como '-' se não encontrar
-                        }
+                        console.log(`[LiveVetDash Populating ${appt.id}] Episódio encontrado na subcoleção: ID=${episodeDoc.id}, Data:`, episodeData);
+                        episodeNumber = episodeData.episodeNumber || '-';
+                        console.log(`[LiveVetDash Populating ${appt.id}] Episode found. Setting episodeNumber to: ${episodeNumber}`);
                     } else {
-                        console.log(`[LiveVetDash] Nenhum episódio encontrado na subcoleção para Appt ID ${appt.id}. EpisodeNumber permanecerá '-'`);
-                        episodeNumber = '-'; // Garante '-' se não encontrar
+                        console.log(`[LiveVetDash Populating ${appt.id}] Nenhum episódio encontrado na subcoleção para Appt ID. Episode query returned empty.`);
                     }
                 } catch (episodeQueryError) {
-                    console.error(`[LiveVetDash] Erro ao buscar episódio na subcoleção para ${appt.id}:`, episodeQueryError);
-                    episodeNumber = '-'; // Mantém '-' em caso de erro na query
+                    console.error(`[LiveVetDash Populating ${appt.id}] Erro ao buscar episódio na subcoleção:`, episodeQueryError);
                 }
             } else {
-                console.warn(`[LiveVetDash] TenantId (${tenantId}) ou ProntuarioId/RecordNumber (${recordNumber}) faltando para Appt ID ${appt.id}. Não foi possível buscar episódio.`);
+                console.warn(`[LiveVetDash Populating ${appt.id}] Skipping episode search due to missing tenantId or recordNumber.`);
             }
-            // <<< FIM: LÓGICA ALTERADA >>>
+            // <<< FIM LÓGICA episodeNumber >>>
+
+            console.log(`[LiveVetDash Populating ${appt.id}] Returning populated data: recordNumber=${recordNumber}, episodeNumber=${episodeNumber}`);
 
             return {
               ...appt,
-              petName: pet.name,
-              recordNumber,
+              petName: pet.name || 'Nome não encontrado',
+              recordNumber, // <<< Exibe o prontuarioId lido >>>
               episodeNumber,
               petId: pet.id,
               episodesCount: Array.isArray(pet.consultationHistory) ? pet.consultationHistory.length : 0,
@@ -199,18 +206,13 @@ export default function LiveVetDashboard() {
               serviceName: service.name,
             };
           } catch (err) {
-            console.error(`Erro ao popular dados para agendamento ${appt.id}:`, err);
-            return { // Retorna com dados parciais em caso de erro
-              ...appt,
-              petName: 'Erro',
-              customerName: 'Erro',
-              serviceName: allServices.find(s => s.id === appt.service_id)?.name || 'Erro',
-            };
+            console.error(`[LiveVetDash] Erro GERAL ao popular dados para agendamento ${appt.id}:`, err);
+            return { /* ... dados de erro ... */ };
           }
         })
       );
-      
-      // Ordenar por horário
+
+      // Ordenar por horário (lógica mantida)
       populatedAppointments.sort((a, b) => {
         const timeA = a.time || '00:00'; // Handle missing time
         const timeB = b.time || '00:00';
@@ -302,17 +304,39 @@ export default function LiveVetDashboard() {
     item.status === 'arrived' // <-- Only show items with status 'arrived'
   );
   const emAtendimentoItems = allClinicAppointmentsToday.filter(item => item.status === 'in_progress');
-  const aguardandoConfirmacaoItems = allClinicAppointmentsToday.filter(item => ['scheduled', 'confirmed'].includes(item.status));
   const completedItems = allClinicAppointmentsToday.filter(item => item.status === 'completed');
   const cancelledItems = allClinicAppointmentsToday.filter(item => ['canceled', 'no_show'].includes(item.status)); // Include no_show here?
 
-  const handleStartConsultation = (appointmentId) => {
-    // Navegar para a página de consulta usando o mapeamento e parâmetros
-    const url = createPageUrl('LiveVetConsulta', { appointmentId: appointmentId });
-    console.log('[LiveVetDash] Navegando para URL:', url);
-    navigate(url); 
-    // console.log(`Iniciar consulta para o agendamento: ${appointmentId}`);
-    // toast({ title: "Funcionalidade em desenvolvimento", description: "Iniciar consulta ainda não implementado." });
+  const handleStartConsultation = async (appointmentId) => { 
+    console.log(`[LiveVetDash] handleStartConsultation called for ID: ${appointmentId}`);
+    try {
+      // 1. Atualizar o status e start_time no Firestore
+      const appointmentRef = doc(db, "appointments", appointmentId);
+      console.log(`[LiveVetDash] Updating appointment ${appointmentId} status to in_progress and setting start_time...`);
+      await updateDoc(appointmentRef, {
+        status: 'in_progress',
+        start_time: serverTimestamp(), // Define o horário de início
+        updatedAt: serverTimestamp() // Atualiza também o updatedAt
+      });
+      console.log(`[LiveVetDash] Appointment ${appointmentId} updated successfully.`);
+
+      // 2. Navegar para a página de consulta
+      const url = createPageUrl('LiveVetConsulta', { appointmentId: appointmentId });
+      console.log('[LiveVetDash] Navigating to URL:', url);
+      navigate(url); 
+
+       // 3. Recarregar os dados em segundo plano para refletir a mudança imediatamente no dashboard
+       // (Opcional, mas melhora a UX se o usuário voltar rapidamente)
+       loadAppointmentsAndFollowUps();
+
+    } catch (error) {
+      console.error(`[LiveVetDash] Error starting consultation for ${appointmentId}:`, error);
+      toast({
+        title: "Erro ao Iniciar",
+        description: "Não foi possível iniciar a consulta. Verifique o console para detalhes.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleStartFollowUp = async (queueItemId, originalAppointmentId) => {
@@ -343,30 +367,6 @@ export default function LiveVetDashboard() {
     }
   };
 
-  const handleStatusChange = (appointmentId, newStatus) => {
-    // Implemente a lógica para atualizar o status do agendamento
-    console.log(`[LiveVetDash] Status do agendamento ${appointmentId} mudou para: ${newStatus}`);
-    // Adicione a lógica para atualizar o status no banco de dados
-  };
-
-  const handleSelectService = (appointment) => {
-    // Implemente a lógica para selecionar um serviço
-    console.log(`[LiveVetDash] Selecionando serviço para o agendamento: ${appointment.id}`);
-    // Adicione a lógica para navegar para a página de edição do serviço
-  };
-
-  const handleAddNotes = (appointmentId) => {
-    // Implemente a lógica para adicionar uma nota ao agendamento
-    console.log(`[LiveVetDash] Adicionando nota ao agendamento: ${appointmentId}`);
-    // Adicione a lógica para navegar para a página de adição de nota
-  };
-
-  const handleOpenRemoveModal = (appointment) => {
-    // Implemente a lógica para abrir o modal de remoção
-    console.log(`[LiveVetDash] Abrindo modal de remoção para o agendamento: ${appointment.id}`);
-    // Adicione a lógica para abrir o modal de remoção
-  };
-
   return (
     <div className="p-6">
       <h1 className="text-3xl font-bold mb-6">Live Vet - Fila de Atendimento</h1>
@@ -376,14 +376,12 @@ export default function LiveVetDashboard() {
       
       {!isLoadingQueue && !error && (
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-5 mb-4">
+          <TabsList className="grid w-full grid-cols-4 mb-4">
             {/* Update Trigger value and text */}
             <TabsTrigger value="waiting">Fila de Espera ({filaDeEsperaItems.length})</TabsTrigger>
             <TabsTrigger value="in_progress">Em Atendimento ({emAtendimentoItems.length})</TabsTrigger>
             <TabsTrigger value="follow_up">Retornos ({followUpItems.length})</TabsTrigger>
-            <TabsTrigger value="pending_confirmation">Aguardando ({aguardandoConfirmacaoItems.length})</TabsTrigger>
-            {/* Maybe separate completed/canceled later */}
-            <TabsTrigger value="history">Histórico ({completedItems.length + cancelledItems.length})</TabsTrigger>
+            <TabsTrigger value="history">Concluídos ({completedItems.length + cancelledItems.length})</TabsTrigger>
           </TabsList>
 
           {/* Update TabsContent value and map over filaDeEsperaItems */}
@@ -401,80 +399,67 @@ export default function LiveVetDashboard() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Chegada</TableHead>
+                      <TableHead>Hs Chegada</TableHead>
                       <TableHead>Cliente</TableHead>
                       <TableHead>Pet</TableHead>
                       <TableHead>Prontuário</TableHead>
-                      <TableHead>Episódios</TableHead>
+                      <TableHead>Episódio</TableHead>
                       <TableHead>Serviço</TableHead>
-                      <TableHead>Observações</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Tempo de Espera</TableHead>
                       <TableHead className="text-right">Ações</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filaDeEsperaItems.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={10} className="text-center py-8 text-gray-500">
-                          Nenhum atendimento encontrado com os filtros selecionados.
+                        <TableCell colSpan={9} className="text-center py-8 text-gray-500">
+                          Nenhum paciente aguardando atendimento.
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filaDeEsperaItems.map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell>
-                            {item.check_in_time ? format(item.check_in_time.toDate(), 'HH:mm') : 'N/A'}
-                          </TableCell>
-                          <TableCell>{item.customerName}</TableCell>
-                          <TableCell>
-                            <div className="font-medium">{item.petName}</div>
-                          </TableCell>
-                          <TableCell>{item.recordNumber || '-'}</TableCell>
-                          <TableCell>{item.episodeNumber || '-'}</TableCell>
-                          <TableCell>{item.serviceName}</TableCell>
-                          <TableCell>{getStatusBadge(item.status)}</TableCell>
-                          <TableCell>
-                            <ServiceTimer 
-                              service={item} 
-                              onUpdateStatus={(newStatus) => 
-                                handleStatusChange(item.id, newStatus)
-                              } 
-                            />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-2">
-                               <Button 
-                                variant="default"
-                                size="sm"
-                                onClick={() => handleStartConsultation(item.id)}
-                              >
-                                <Play className="h-4 w-4 mr-2" /> 
-                                Iniciar Consulta
-                              </Button>
-                              <Button 
-                                variant="ghost" 
-                                size="icon"
-                                onClick={() => handleSelectService(item)}
-                              >
-                                <UserCircle className="h-4 w-4" />
-                              </Button>
-                              <Button 
-                                variant="outline" 
-                                size="icon"
-                                onClick={() => handleAddNotes(item.id)}
-                              >
-                                <ClipboardList className="h-4 w-4" />
-                              </Button>
-                              <Button 
-                                variant="outline" 
-                                size="icon"
-                                onClick={() => handleOpenRemoveModal(item)}
-                              >
-                                <XCircle className="h-4 w-4" />
-                                  </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))
+                      filaDeEsperaItems.map((item) => {
+                        // <<< LOG: Verificar dados do item na Fila de Espera >>>
+                        console.log(`[LiveVetDash - Fila Espera Render] Item ID: ${item.id}, check_in_time:`, item.check_in_time, typeof item.check_in_time);
+                        return (
+                          <TableRow key={item.id}>
+                            <TableCell>
+                              {/* Tentativa de formatar check_in_time (primeiro Timestamp, depois string) */}
+                              {item.check_in_time?.toDate 
+                                ? format(item.check_in_time.toDate(), 'HH:mm') 
+                                : typeof item.check_in_time === 'string' 
+                                  ? format(parseISO(item.check_in_time), 'HH:mm') 
+                                  : '--:--'}
+                            </TableCell>
+                            <TableCell>{item.customerName}</TableCell>
+                            <TableCell>
+                              <div className="font-medium">{item.petName}</div>
+                            </TableCell>
+                            <TableCell>{item.recordNumber || '-'}</TableCell>
+                            <TableCell>{item.episodeNumber || '-'}</TableCell>
+                            <TableCell>{item.serviceName}</TableCell>
+                            <TableCell>{getStatusBadge(item.status)}</TableCell>
+                            <TableCell>
+                              <ServiceTimer 
+                                service={item} 
+                                compact={true}
+                              />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-2">
+                                 <Button 
+                                  variant="default"
+                                  size="sm"
+                                  onClick={() => handleStartConsultation(item.id)}
+                                >
+                                  <Play className="h-4 w-4 mr-2" /> 
+                                  Iniciar Consulta
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
                     )}
                   </TableBody>
                 </Table>
@@ -504,44 +489,76 @@ export default function LiveVetDashboard() {
                 )}
                 {!isLoadingQueue && !error && emAtendimentoItems.length === 0 && (
                   <div className="text-center text-muted-foreground py-8">
-                    Nenhum atendimento em atendimento na fila para hoje.
+                    Nenhum atendimento em andamento.
                   </div>
                 )}
                 {!isLoadingQueue && !error && emAtendimentoItems.length > 0 && (
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Horário</TableHead>
+                        <TableHead>Hs Início</TableHead>
+                        <TableHead>Cliente</TableHead>
                         <TableHead>Pet</TableHead>
                         <TableHead>Prontuário</TableHead>
-                        <TableHead>Episódios</TableHead>
-                        <TableHead>Cliente</TableHead>
+                        <TableHead>Episódio</TableHead>
                         <TableHead>Serviço</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Tempo da Consulta</TableHead>
                         <TableHead className="text-right">Ações</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {emAtendimentoItems.map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell>{item.start_time?.toDate ? format(item.start_time.toDate(), 'HH:mm') : '--:--'}</TableCell>
-                          <TableCell className="font-medium">
-                            <div className="font-medium">{item.petName}</div>
-                            <div className="text-xs text-gray-500">{item.petId}</div>
-                          </TableCell>
-                          <TableCell>{item.episodesCount}</TableCell>
-                          <TableCell>{item.customerName}</TableCell>
-                          <TableCell>{item.serviceName}</TableCell>
-                          <TableCell className="text-right">
-                            <Button 
-                              size="sm" 
-                              onClick={() => handleStartConsultation(item.id)}
-                            >
-                              <Play className="h-4 w-4 mr-2" />
-                              Iniciar Atendimento
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {emAtendimentoItems.map((item) => {
+                        // <<< LOG: Verificar dados do item Em Atendimento >>>
+                        console.log(`[LiveVetDash - Em Atendimento Render] Item ID: ${item.id}, start_time:`, item.start_time, typeof item.start_time);
+                        return (
+                          <TableRow key={item.id}>
+                            <TableCell>
+                              {/* Tentativa de formatar start_time (primeiro Timestamp, depois string) */}
+                              {item.start_time?.toDate 
+                                ? format(item.start_time.toDate(), 'HH:mm') 
+                                : typeof item.start_time === 'string' 
+                                  ? format(parseISO(item.start_time), 'HH:mm') 
+                                  : '--:--'}
+                            </TableCell>
+                            <TableCell>{item.customerName}</TableCell>
+                            <TableCell>
+                              <div className="font-medium">{item.petName}</div>
+                            </TableCell>
+                            <TableCell>{item.recordNumber || '-'}</TableCell>
+                            <TableCell>{item.episodeNumber || '-'}</TableCell>
+                            <TableCell>{item.serviceName}</TableCell>
+                            <TableCell>{getStatusBadge(item.status)}</TableCell>
+                            <TableCell>
+                              <ServiceTimer 
+                                service={item} 
+                                compact={true}
+                              />
+                            </TableCell>
+                            <TableCell className="text-right">
+                               <div className="flex justify-end items-center gap-1"> 
+                                 {/* TODO: Reativar botões Pausar/Concluir se necessário */}
+                                 {/* Botão Continuar Atendimento (Play) */}
+                                 <TooltipProvider>
+                                   <Tooltip>
+                                     <TooltipTrigger asChild>
+                                       <Button 
+                                         variant="ghost"
+                                         size="icon" 
+                                         onClick={() => handleStartConsultation(item.id)} // Deve ser continuar/abrir consulta
+                                         className="text-blue-600 hover:text-blue-700" 
+                                       >
+                                         <Play className="h-4 w-4" />
+                                       </Button>
+                                     </TooltipTrigger>
+                                     <TooltipContent><p>Abrir/Continuar Consulta</p></TooltipContent>
+                                   </Tooltip>
+                                 </TooltipProvider>
+                               </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 )}
@@ -593,7 +610,6 @@ export default function LiveVetDashboard() {
                            <TableCell>{item.follow_up_time?.toDate ? format(item.follow_up_time.toDate(), 'HH:mm') : '--:--'}</TableCell>
                            <TableCell className="font-medium text-orange-600 font-bold">
                              <div className="font-medium">{item.petName}</div>
-                             <div className="text-xs text-gray-500">{item.petId}</div>
                            </TableCell>
                            <TableCell>{item.customerName}</TableCell>
                            <TableCell className="text-orange-600 font-bold">{item.original_service_name}</TableCell>
@@ -623,58 +639,9 @@ export default function LiveVetDashboard() {
              </Card>
           </TabsContent>
 
-          <TabsContent value="pending_confirmation">
-            <Card>
-              <CardHeader><CardTitle>Aguardando Confirmacao ({aguardandoConfirmacaoItems.length})</CardTitle></CardHeader>
-              <CardContent>
-                 {isLoadingQueue && ( <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin" /></div> )}
-                 {!isLoadingQueue && error && ( <div className="text-center text-destructive py-8">{error}</div> )}
-                {!isLoadingQueue && !error && aguardandoConfirmacaoItems.length === 0 && (
-                  <div className="text-center text-muted-foreground py-8">Nenhum atendimento aguardando confirmação hoje.</div>
-                )}
-                {!isLoadingQueue && !error && aguardandoConfirmacaoItems.length > 0 && (
-                   <Table>
-                     <TableHeader>
-                       <TableRow>
-                         <TableHead>Horário</TableHead>
-                         <TableHead>Pet</TableHead>
-                         <TableHead>Cliente</TableHead>
-                         <TableHead>Serviço</TableHead>
-                         <TableHead>Status</TableHead>
-                       </TableRow>
-                     </TableHeader>
-                     <TableBody>
-                       {aguardandoConfirmacaoItems.map((item) => (
-                         <TableRow key={item.id} className="opacity-60">
-                           <TableCell>{item.start_time?.toDate ? format(item.start_time.toDate(), 'HH:mm') : '--:--'}</TableCell>
-                           <TableCell className="font-medium">
-                              {item.petName}
-                           </TableCell>
-                           <TableCell>{item.customerName}</TableCell>
-                           <TableCell>{item.serviceName}</TableCell>
-                           <TableCell>
-                              <span className={`px-2 py-0.5 rounded-full text-xs capitalize font-medium ${ 
-                                 item.status === 'scheduled' ? 'bg-blue-100 text-blue-800' :
-                                 item.status === 'confirmed' ? 'bg-green-100 text-green-800' :
-                                 'bg-gray-100 text-gray-800'
-                               }`}> 
-                                 {item.status === 'scheduled' ? 'Agendado' :
-                                  item.status === 'confirmed' ? 'Confirmado' :
-                                  item.status}
-                               </span>
-                           </TableCell>
-                         </TableRow>
-                       ))}
-                     </TableBody>
-                   </Table>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
           <TabsContent value="history">
             <Card>
-              <CardHeader><CardTitle>Histórico</CardTitle></CardHeader>
+              <CardHeader><CardTitle>Histórico de Atendimentos do Dia</CardTitle></CardHeader>
               <CardContent>
                  {isLoadingQueue && ( <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin" /></div> )}
                  {!isLoadingQueue && error && ( <div className="text-center text-destructive py-8">{error}</div> )}
@@ -685,10 +652,14 @@ export default function LiveVetDashboard() {
                    <Table>
                      <TableHeader>
                        <TableRow>
-                         <TableHead>Horário Fim</TableHead>
-                         <TableHead>Pet</TableHead>
                          <TableHead>Cliente</TableHead>
+                         <TableHead>Pet</TableHead>
+                         <TableHead>Prontuário</TableHead>
+                         <TableHead>Episódio</TableHead>
                          <TableHead>Serviço</TableHead>
+                         <TableHead>Status</TableHead>
+                         <TableHead>Hs Início</TableHead>
+                         <TableHead>Hs Fim</TableHead>
                          <TableHead>Duração</TableHead>
                        </TableRow>
                      </TableHeader>
@@ -718,20 +689,30 @@ export default function LiveVetDashboard() {
                           
                           return (
                              <TableRow key={item.id}>
-                               <TableCell>{item.end_time ? format(parseISO(item.end_time), 'HH:mm') : '--:--'}</TableCell>
-                               <TableCell className="font-medium">
-                                  {item.petName}
-                               </TableCell>
                                <TableCell>{item.customerName}</TableCell>
+                               <TableCell className="font-medium">{item.petName}</TableCell>
+                               <TableCell>{item.recordNumber || '-'}</TableCell>
+                               <TableCell>{item.episodeNumber || '-'}</TableCell>
+                               <TableCell>{item.serviceName}</TableCell>
+                               <TableCell>{getStatusBadge(item.status)}</TableCell>
                                <TableCell>
-                                  {item.serviceName}
-                                  {item.follow_up_completed && (
-                                    <span className="ml-2 inline-flex items-center text-xs text-orange-600 font-medium">
-                                      <RefreshCcw className="h-3 w-3 mr-1" /> (Retorno)
-                                    </span>
-                                  )}
+                                 {/* Formatar Horário Início */}
+                                 {item.start_time?.toDate 
+                                   ? format(item.start_time.toDate(), 'HH:mm') 
+                                   : typeof item.start_time === 'string' 
+                                     ? format(parseISO(item.start_time), 'HH:mm') 
+                                     : '--:--'}
                                </TableCell>
                                <TableCell>
+                                 {/* Formatar Horário Fim */}
+                                 {item.end_time?.toDate 
+                                   ? format(item.end_time.toDate(), 'HH:mm') 
+                                   : typeof item.end_time === 'string' 
+                                     ? format(parseISO(item.end_time), 'HH:mm') 
+                                     : '--:--'}
+                               </TableCell>
+                               <TableCell>
+                                  {/* Duração (lógica existente) */}
                                   {durationDisplay !== '-' ? ( 
                                      <span className="flex items-center text-sm text-muted-foreground">
                                        <Clock className="h-4 w-4 mr-1" /> {durationDisplay}

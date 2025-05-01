@@ -295,3 +295,24 @@ Este fluxo permite adicionar novos produtos/serviços diretamente no caixa a um 
     4. Testar o fluxo completo de cancelamento de item com motivo no caixa.
     5. (Opcional) Testar novamente o fluxo "Continuar Comprando".
     6. Proceder com as próximas tarefas Pós-MVP (ex: refatoração da UI do caixa, modal de confirmação de finalização, etc.).
+
+## 13. Próximos Passos Imediatos (Pós-Cancelamento - 30/04/2025 Fim do Dia)
+
+Após a implementação e depuração inicial dos fluxos "Continuar Comprando" e "Cancelamento com Motivo", e a identificação do problema com a claim `tenantId` para o usuário administrador de teste, os próximos passos são:
+
+1.  **Recriar Ambiente de Teste:**
+    *   Deletar a loja (`tenant`) e o usuário administrador de teste atuais no Firebase Console/Emulador.
+    *   Utilizar a função `createTenantAndAdmin` (invocada pela criação de conta no frontend) para gerar uma nova loja e um novo usuário administrador, garantindo que a claim `tenantId` seja definida corretamente no token ID do usuário.
+2.  **Validar Fluxo de Cancelamento:**
+    *   Logar com o novo usuário administrador.
+    *   Realizar o fluxo completo:
+        *   Finalizar um serviço para gerar uma `charge` pendente.
+        *   Carregar a `charge` no caixa.
+        *   Clicar no 'X' de um item da `charge`.
+        *   Preencher o motivo no modal de cancelamento e confirmar.
+        *   Verificar se a função `cancelChargeItem` executa com sucesso (ver logs do emulador/cloud) e se o item é removido visualmente do carrinho.
+        *   (Opcional) Verificar no Firestore se o item na `charge` foi marcado como `cancelled: true` com o `cancellationReason`.
+3.  **Revalidar Fluxo "Continuar Comprando" (Opcional):**
+    *   Realizar um teste básico do fluxo de adicionar itens a uma OS existente através do botão "Continuar Comprando".
+4.  **Proceder com Tarefas Pós-MVP:**
+    *   Retomar as tarefas da seção "8. Tarefas Pós-MVP", começando possivelmente pela refatoração da UI do caixa ou implementação de um modal de confirmação antes de finalizar o pagamento.

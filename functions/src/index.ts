@@ -21,7 +21,8 @@ const db = getFirestore();
 const corsHandler = cors({ origin: ["http://localhost:5173", "https://petfacil.app"] });
 
 // --- IDENTIFICADOR DE VERSÃO ---
-const CODE_VERSION = new Date().toISOString();
+const CODE_VERSION = "1.6.0"; // <<< ATUALIZAR SEMPRE QUE HOUVER MUDANÇAS SIGNIFICATIVAS
+const REGION = "southamerica-east1"; // <<< ADICIONAR CONSTANTE AQUI >>>
 logger.info(`[Function Init] Running code version: ${CODE_VERSION}`);
 // ---------------------------------
 
@@ -215,7 +216,7 @@ function verifyWahaWebhookSignature(secret: string, signatureHeader: string | st
 
 export const createTenantAndAdmin = https.onCall(
   {
-    region: "southamerica-east1", // <<< Adicionar Região >>>
+    region: REGION, // <<< Adicionar Região >>>
     cors: ["http://localhost:5173", "https://petfacil.app"],
     enforceAppCheck: false,
   },
@@ -333,7 +334,7 @@ export const createTenantAndAdmin = https.onCall(
 
 export const sendCustomInvite = https.onCall(
     {
-      region: "southamerica-east1", // <<< Adicionar Região >>>
+      region: REGION, // <<< Adicionar Região >>>
       cors: ["http://localhost:5173", "https://petfacil.app"]
     },
     async (request: https.CallableRequest<InviteCollaboratorData>) => {
@@ -372,6 +373,28 @@ export const sendCustomInvite = https.onCall(
         }
         logger.info(`[sendCustomInvite / v: ${CODE_VERSION}] No existing active/pending collaborator found for ${email} in tenant ${tenantId}. Proceeding...`);
 
+        // <<< INÍCIO: Buscar dados do Tenant >>>
+        let tenantCompanyName = 'sua loja'; // Valor padrão
+        let tenantAdminName = 'o administrador'; // Valor padrão
+        try {
+          const tenantDocRef = db.collection('tenants').doc(tenantId);
+          const tenantDoc = await tenantDocRef.get();
+          if (tenantDoc.exists) {
+            const tenantData = tenantDoc.data();
+            tenantCompanyName = tenantData?.company_name || tenantCompanyName;
+            // Se quiser manter o nome do admin que convidou, pode pegar daqui também, ou manter o do token
+            // tenantAdminName = tenantData?.responsible_name || tenantAdminName; 
+            tenantAdminName = request.auth.token.name || tenantAdminName; // Mantendo o nome do admin do token por enquanto
+            logger.info(`[sendCustomInvite] Tenant data fetched: Company Name - ${tenantCompanyName}, Admin Name - ${tenantAdminName}`);
+          } else {
+            logger.warn(`[sendCustomInvite] Tenant document ${tenantId} not found.`);
+          }
+        } catch (tenantFetchError) {
+          logger.error(`[sendCustomInvite] Error fetching tenant document ${tenantId}:`, tenantFetchError);
+          // Continuar com os nomes padrão em caso de erro
+        }
+        // <<< FIM: Buscar dados do Tenant >>>
+
         collaboratorDocRef = db.collection("colaboradores").doc();
         const collaboratorDocId = collaboratorDocRef.id;
         const collaboratorData = {
@@ -390,10 +413,12 @@ export const sendCustomInvite = https.onCall(
         logger.info(`[sendCustomInvite / v: ${CODE_VERSION}] Collaborator document ${collaboratorDocId} created with status 'convite_pendente'.`);
 
         const acceptInvitationLink = `https://petfacil.app/accept-invitation?token=${invitationToken}`;
-        const mailSubject = `Convite para colaborar na ${request.auth.token.name || 'sua loja'} no PetFácil!`;
+        // Usar tenantCompanyName obtido do Firestore
+        const mailSubject = `Convite para colaborar na ${tenantCompanyName} no PetFácil!`;
         const mailHtml = `
           <p>Olá ${collaboratorName},</p>
-          <p>Você foi convidado por ${request.auth.token.name || 'o administrador'} para colaborar na gestão da loja no PetFácil.</p>
+          // Usar tenantAdminName (nome do admin que convidou) e tenantCompanyName (nome da loja)
+          <p>Você foi convidado por ${tenantAdminName} para colaborar na gestão da loja ${tenantCompanyName} no PetFácil.</p>
           <p>Para aceitar o convite e criar sua senha de acesso, clique no link abaixo:</p>
           <p><a href="${acceptInvitationLink}">Aceitar Convite e Criar Senha</a></p>
           <p>Este link é válido por 24 horas.</p>
@@ -429,7 +454,7 @@ export const sendCustomInvite = https.onCall(
 
 export const completeInvitation = https.onCall(
     {
-        region: "southamerica-east1", // <<< Adicionar Região >>>
+        region: REGION, // <<< Adicionar Região >>>
         cors: ["http://localhost:5173", "https://petfacil.app"]
     },
     async (request: https.CallableRequest<CompleteInvitationData>) => {
@@ -500,7 +525,7 @@ export const completeInvitation = https.onCall(
             logger.info(`[completeInvitation] Updating collaborator document ${collaboratorId}...`);
             await collaboratorDoc.ref.update({
                 authUid: newUserUid,
-                status: 'ativo',
+                status: true,    // Definir como true para indicar ativo
                 invitationToken: null,
                 invitationExpiresAt: null,
                 atualizadoEm: admin.firestore.FieldValue.serverTimestamp()
@@ -535,7 +560,7 @@ export const completeInvitation = https.onCall(
 
 export const sendWahaConfirmation = https.onCall(
   {
-    region: 'southamerica-east1', // <<< Mudar Região >>>
+    region: REGION, // <<< Mudar Região >>>
     timeoutSeconds: 60,
     memory: '256MiB',
     cors: ["http://localhost:5173", "https://petfacil.app"]
@@ -690,7 +715,7 @@ export const sendWahaConfirmation = https.onCall(
 
 export const handleWahaWebhook = https.onRequest(
     {
-        region: 'southamerica-east1', // <<< Mudar Região >>>
+        region: REGION, // <<< Mudar Região >>>
         secrets: [wahaWebhookHmacKey],
         timeoutSeconds: 300, // <<< AUMENTADO TIMEOUT PARA 300s >>>
         memory: '512MiB',  // <<< AUMENTADA MEMÓRIA PARA 512MiB >>>
@@ -979,7 +1004,7 @@ export const handleWahaWebhook = https.onRequest(
 
 export const getWahaSessionStatus = onCall(
     {
-        region: 'southamerica-east1', // <<< Mudar Região >>>
+        region: REGION, // <<< Mudar Região >>>
         cors: ["http://localhost:5173", "https://petfacil.app"],
         timeoutSeconds: 180,
     },
@@ -1035,7 +1060,7 @@ export const getWahaSessionStatus = onCall(
 
 export const getWahaQrCode = onCall(
     {
-        region: 'southamerica-east1', // <<< Mudar Região >>>
+        region: REGION, // <<< Mudar Região >>>
         cors: ["http://localhost:5173", "https://petfacil.app"],
     },
     async (request) => {
@@ -1092,7 +1117,7 @@ export const getWahaQrCode = onCall(
 
 export const startWahaSession = onCall(
   {
-      region: 'southamerica-east1', // <<< Mudar Região >>>
+      region: REGION, // <<< Mudar Região >>>
       cors: ["http://localhost:5173", "https://petfacil.app"],
       timeoutSeconds: 60,
   },
@@ -1160,7 +1185,7 @@ export const startWahaSession = onCall(
 // <<< NOVA FUNÇÃO stopWahaSession >>>
 export const stopWahaSession = onCall(
   {
-      region: 'southamerica-east1', // <<< Mudar Região >>>
+      region: REGION, // <<< Mudar Região >>>
       cors: ["http://localhost:5173", "https://petfacil.app"],
       timeoutSeconds: 60,
   },
@@ -1328,7 +1353,7 @@ async function processAndSendConfirmation(
 export const scheduledWahaConfirmationSender = onSchedule(
     {
         schedule: "every 15 minutes",
-        region: "southamerica-east1" // <<< Adicionar Região >>>
+        region: REGION // <<< Adicionar Região >>>
     },
     async (event: ScheduledEvent): Promise<void> => {
         const functionStartTime = Date.now();
@@ -1446,7 +1471,7 @@ export const scheduledWahaConfirmationSender = onSchedule(
 // --- NOVA FUNÇÃO: Gatilho Firestore para Enviar Respostas WAHA ---
 export const sendWahaReplyOnStatusChange = onDocumentUpdated(
     { // <<< Opções v2 >>>
-        region: "southamerica-east1",
+        region: REGION,
         document: "appointments/{appointmentId}"
     },
     async (event: FirestoreEvent<Change<QueryDocumentSnapshot> | undefined, { appointmentId: string }>) => { // <<< Tipos v2 corrigidos >>>
@@ -1561,7 +1586,7 @@ export const sendWahaReplyOnStatusChange = onDocumentUpdated(
 
 // --- NOVA FUNÇÃO: Cancelamento Automático Agendado ---
 export const scheduledAutoCancellation = onSchedule(
-    { schedule: "every 15 minutes", region: "southamerica-east1" }, // Rodar a cada 15 min na mesma região
+    { schedule: "every 15 minutes", region: REGION }, // Rodar a cada 15 min na mesma região
     async (event: ScheduledEvent): Promise<void> => {
         const functionStartTime = Date.now();
         logger.info(`>>>>>>>>>> scheduledAutoCancellation (v: ${CODE_VERSION}) STARTED <<<<<<<<<<`);
@@ -1951,11 +1976,12 @@ export const onAppointmentArrived = onDocumentUpdated(
         // <<< END DEBUG LOGGING >>>
 
         // <<< ETAPA ADICIONADA: Atualizar o Agendamento com os IDs >>>
-        logger.info(`[onAppointmentArrived - ${appointmentId}] Updating appointment with prontuarioId and currentEpisodeId...`);
+        logger.info(`[onAppointmentArrived - ${appointmentId}] Updating appointment with prontuarioId, currentEpisodeId, and check_in_time...`); // Log atualizado
         const appointmentRef = db.collection('appointments').doc(appointmentId);
         await appointmentRef.update({
             prontuarioId: prontuarioId,
             currentEpisodeId: episodeId, // <<< Salva o ID do episódio gerado
+            check_in_time: admin.firestore.FieldValue.serverTimestamp(), // <<< ADICIONADO >>>
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
         logger.info(`[onAppointmentArrived - ${appointmentId}] Appointment updated successfully.`);
@@ -2019,7 +2045,7 @@ export const onAppointmentArrived = onDocumentUpdated(
 // << MUDANÇA: Reverter para onCall >>
 export const listSuperAdmins = https.onCall(
   {
-    region: "southamerica-east1", // Manter região
+    region: REGION, // Manter região
     cors: ["http://localhost:5173", "https://petfacil.app"], // <<< Adicionar CORS aqui para onCall >>>
     // enforceAppCheck: false, // Adicionar se usar App Check
   },
@@ -2070,7 +2096,7 @@ export const listSuperAdmins = https.onCall(
 
 export const createSuperAdmin = https.onCall(
   {
-    region: "southamerica-east1",
+    region: REGION,
     cors: ["http://localhost:5173", "https://petfacil.app"]
   },
   async (request: https.CallableRequest) => {
@@ -2084,7 +2110,7 @@ export const createSuperAdmin = https.onCall(
 
 export const deleteSuperAdmin = https.onCall(
   {
-    region: "southamerica-east1",
+    region: REGION,
     cors: ["http://localhost:5173", "https://petfacil.app"]
   },
   async (request: https.CallableRequest) => {
@@ -2100,7 +2126,7 @@ export const deleteSuperAdmin = https.onCall(
 // --- NOVA FUNÇÃO: UPC/GTIN Lookup Proxy (Usando Cosmos) ---
 export const lookupBarcode = https.onRequest(
   {
-    region: 'southamerica-east1',
+    region: REGION,
     timeoutSeconds: 30,
     memory: '128MiB'
   },
@@ -2245,7 +2271,7 @@ export const processPayment = onCall<
   Promise<{ success: boolean; message: string; chargeId?: string; transactionId?: string }>
 >(
   {
-    region: "southamerica-east1",
+    region: REGION,
     cors: ["http://localhost:5173", "https://petfacil.app"],
     enforceAppCheck: false, 
   },
@@ -2663,7 +2689,7 @@ async function addItemsToPendingCharge(
 // Gatilho para quando um Agendamento (CLÍNICO OU PETSHOP) é atualizado para concluído
 export const onAppointmentCompletedCreateCharge = onDocumentUpdated(
   {
-    region: "southamerica-east1",
+    region: REGION,
     document: "appointments/{appointmentId}", 
     memory: "256MiB",
     timeoutSeconds: 60,
@@ -2894,7 +2920,7 @@ export const onAppointmentCompletedCreateCharge = onDocumentUpdated(
 // --- NOVA FUNÇÃO: Gerar Número da OS --- 
 export const generateOsNumber = https.onCall(
   {
-    region: "southamerica-east1", // Mantenha sua região
+    region: REGION, // Mantenha sua região
     cors: ["http://localhost:5173", "https://petfacil.app"], // <-- ADICIONADO CORS AQUI
   },
   async (request) => {
@@ -2937,7 +2963,7 @@ export const createContinuedOrderService = onCall<
   Promise<{ success: boolean; message?: string; osId?: string; osNumber?: string }>
 >(
   {
-    region: "southamerica-east1",
+    region: REGION,
     cors: ["http://localhost:5173", "https://petfacil.app"],
     memory: "128MiB", // Pode ser menor
   },
@@ -3018,7 +3044,7 @@ export const deleteEmptyCashierOs = onCall<
   Promise<{ success: boolean; deleted: boolean; message?: string }>
 >(
   {
-    region: "southamerica-east1",
+    region: REGION,
     cors: ["http://localhost:5173", "https://petfacil.app"],
     memory: "128MiB",
   },
@@ -3090,7 +3116,7 @@ export const deleteEmptyCashierOs = onCall<
 // <<< NOVA FUNÇÃO: Cancelar um item específico de uma charge >>>
 export const cancelChargeItem = onCall<CancelChargeItemData>(
   { // <<< Adicionar opções v2 aqui se necessário (region, cors, etc.) >>>
-    region: "southamerica-east1", // Exemplo
+    region: REGION, // Exemplo
     cors: ["http://localhost:5173", "https://petfacil.app"],
   },
   async (request: CallableRequest<CancelChargeItemData>) => {
@@ -3106,10 +3132,10 @@ export const cancelChargeItem = onCall<CancelChargeItemData>(
         "Usuário não autenticado."
       );
     }
-    const tenantId = request.auth.token.tenantId;
+    const tenantId = request.auth.token.tenant_id;
     if (!tenantId) {
       // <<< ADICIONAR LOG ANTES DE LANÇAR ERRO >>>
-      logger.error(`[cancelChargeItem v2] Tenant ID check failed: tenantId is missing from token for UID ${request.auth.uid}. Token data:`, request.auth.token);
+      logger.error(`[cancelChargeItem v2] Tenant ID check failed: tenant_id is missing from token for UID ${request.auth.uid}. Token data:`, request.auth.token);
       throw new HttpsError(
         "failed-precondition",
         "Tenant ID não encontrado no token de autenticação."
@@ -3279,3 +3305,69 @@ export const setCustomUserClaimsUtil = onCall<SetClaimsData>(
 // ==============================================
 // MAIN FUNCTIONS (continue from here...)
 // ==============================================
+
+// <<< NOVA FUNÇÃO: Adicionar Motivo de Cancelamento >>>
+interface AddCancellationReasonData {
+  reasonText: string;
+}
+
+export const addCancellationReason = onCall<AddCancellationReasonData>(
+  { region: REGION, enforceAppCheck: false }, // TODO: Considerar enforceAppCheck em produção
+  async (request) => {
+    logger.info(`[addCancellationReason v: ${CODE_VERSION}] Iniciando...`, { auth: request.auth?.token.email });
+
+    if (!request.auth) {
+      logger.warn("[addCancellationReason] Usuário não autenticado.");
+      throw new HttpsError("unauthenticated", "Usuário não autenticado.");
+    }
+    if (!request.auth.token.tenant_id) {
+      logger.error("[addCancellationReason] Claim tenant_id ausente no token.", { uid: request.auth.uid });
+      throw new HttpsError("failed-precondition", "Tenant ID não encontrado no token.");
+    }
+    if (!request.data.reasonText || typeof request.data.reasonText !== 'string' || request.data.reasonText.trim().length === 0) {
+      logger.warn("[addCancellationReason] reasonText inválido ou ausente.", { data: request.data });
+      throw new HttpsError("invalid-argument", "O motivo do cancelamento (reasonText) é obrigatório.");
+    }
+
+    const tenantId = request.auth.token.tenant_id;
+    const userId = request.auth.uid;
+    const newReasonText = request.data.reasonText.trim();
+    const reasonsCollectionRef = db.collection('tenants').doc(tenantId).collection('cancellation_reasons');
+
+    logger.info(`[addCancellationReason] Parâmetros: tenantId=${tenantId}, userId=${userId}, reasonText="${newReasonText}"`);
+
+    try {
+      // 1. Verificar se um motivo com o mesmo texto (case-insensitive) já existe
+      // Infelizmente, Firestore não suporta queries case-insensitive diretamente.
+      // Vamos buscar todos e comparar no backend. Para poucos motivos, isso é aceitável.
+      // Para muitos motivos, uma solução mais complexa (ex: salvar versão lower-case) seria necessária.
+      const existingReasonsSnapshot = await reasonsCollectionRef.get();
+      const alreadyExists = existingReasonsSnapshot.docs.some(doc => 
+        doc.data().reasonText?.toLowerCase() === newReasonText.toLowerCase()
+      );
+
+      if (alreadyExists) {
+        logger.warn(`[addCancellationReason] Motivo "${newReasonText}" já existe para o tenant ${tenantId}.`);
+        // Retornar sucesso mesmo se já existe, para não bloquear o fluxo do modal
+        return { success: true, message: "Motivo já existente." }; 
+      }
+
+      // 2. Adicionar o novo motivo
+      logger.info(`[addCancellationReason] Adicionando novo motivo "${newReasonText}" para o tenant ${tenantId}.`);
+      await reasonsCollectionRef.add({
+        reasonText: newReasonText,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdBy: userId,
+        isActive: true // Opcional: campo para desativar motivos
+      });
+
+      logger.info(`[addCancellationReason] Motivo "${newReasonText}" adicionado com sucesso.`);
+      return { success: true };
+
+    } catch (error) {
+      logger.error("[addCancellationReason] Erro ao adicionar motivo:", error);
+      throw new HttpsError("internal", "Erro interno ao salvar o motivo do cancelamento.", error);
+    }
+  }
+);
+// <<< FIM NOVA FUNÇÃO >>>

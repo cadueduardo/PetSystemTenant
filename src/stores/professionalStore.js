@@ -69,7 +69,7 @@ const useProfessionalStore = create((set, get) => ({
     const employeesQuery = query(
       collection(db, 'colaboradores'),
       where("tenantId", "==", tenantId),
-      where("status", "==", "ativo") // Listen only to active employees
+      where("status", "==", true) // Buscar onde o status é booleano true
     );
 
     unsubscribeProfessionalListener = onSnapshot(employeesQuery, async (snapshot) => {

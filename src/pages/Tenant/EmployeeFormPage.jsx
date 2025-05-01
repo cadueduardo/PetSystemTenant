@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, addDoc, collection, query, where, onSnapshot, serverTimestamp, getDocs, limit, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, addDoc, collection, query, where, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useTenant } from '@/components/tenant/TenantContext';
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,7 @@ console.log("--- MODULE LOAD: src/pages/Tenant/EmployeeFormPage.jsx ---");
 // const OTHER_SPECIALTY_DISPLAY_VALUE = "Outros (Especificar)";
 
 // Função para criar convite
-const sendEmployeeInviteCallable = httpsCallable(functions, 'sendEmployeeInvite');
+const sendEmployeeInviteCallable = httpsCallable(functions, 'sendCustomInvite');
 // Função para resetar senha (se aplicável)
 // const resetEmployeePasswordCallable = httpsCallable(functions, 'resetEmployeePassword');
 
@@ -344,35 +344,7 @@ function EmployeeFormPage() {
       return;
     }
 
-    // Email existence check (unchanged)
-    if (!isEditing) {
-        console.log(`[EmployeeFormPage] Checking if email ${formData.email} exists for tenant ${currentTenantId}...`);
-        const q = query(
-            collection(db, "colaboradores"),
-            where("tenantId", "==", currentTenantId),
-            where("email", "==", formData.email),
-            limit(1)
-        );
-        try {
-            const querySnapshot = await getDocs(q);
-            if (!querySnapshot.empty) {
-                console.warn("[EmployeeFormPage] Email already exists.");
-                setPageError("Este e-mail já está cadastrado para outro colaborador nesta loja.");
-                setSubmitting(false);
-                setLoading(false);
-                return;
-            }
-            console.log("[EmployeeFormPage] Email is unique.");
-        } catch (checkError) {
-            console.error("[EmployeeFormPage] Error checking email existence:", checkError);
-            setPageError("Erro ao verificar e-mail. Tente novamente.");
-            setSubmitting(false);
-            setLoading(false);
-            return;
-        }
-    }
-
-    // Prepare dataToSave (unchanged)
+    // Prepare dataToSave (Manter esta parte, mas sem adicionar ao DB aqui)
     const dataToSave = {
       nome: formData.nome.trim(),
       email: formData.email.trim().toLowerCase(),
@@ -398,8 +370,6 @@ function EmployeeFormPage() {
     console.log("[EmployeeFormPage] Data prepared for saving:", dataToSave);
 
     try {
-      let employeeDocId = employeeId;
-
       if (isEditing) {
         console.log(`[EmployeeFormPage] Updating collaborator ${employeeId}...`);
         const employeeDocRef = doc(db, 'colaboradores', employeeId);
@@ -408,37 +378,49 @@ function EmployeeFormPage() {
         console.log("[EmployeeFormPage] Collaborator updated successfully.");
         toast({ title: "Sucesso!", description: "Colaborador atualizado." });
       } else {
+        // --- REMOVER CRIAÇÃO LOCAL DO COLABORADOR ---
+        /*
         console.log("[EmployeeFormPage] Creating new collaborator...");
         const createData = { ...dataToSave, created_at: serverTimestamp() };
         const docRef = await addDoc(collection(db, 'colaboradores'), createData);
         employeeDocId = docRef.id;
         console.log("[EmployeeFormPage] addDoc completed. New ID:", employeeDocId);
         console.log(`[EmployeeFormPage] New collaborator created with ID: ${employeeDocId}`);
+        */
+       // --- FIM REMOÇÃO CRIAÇÃO LOCAL ---
         
-        console.log(`[EmployeeFormPage] Attempting to send invite to ${createData.email}...`);
+        // Chamar a função backend diretamente com os dados preparados
+        console.log(`[EmployeeFormPage] Attempting to send invite to ${dataToSave.email}...`);
         try {
            const result = await sendEmployeeInviteCallable({
-            email: createData.email,
-            displayName: createData.nome,
-            tenantId: currentTenantId, 
-            storeName: tenantContext.currentTenant?.company_name || 'sua loja'
+            email: dataToSave.email, // Usar dados de dataToSave
+            collaboratorName: dataToSave.nome, // Usar dados de dataToSave
+            profileId: dataToSave.perfilId // Usar dados de dataToSave
           });
           console.log("[EmployeeFormPage] Invite function result:", result);
           if (result.data.success) {
-            toast({ title: "Convite Enviado!", description: `Convite enviado para ${createData.email}.` });
+            // A função backend agora cria o colaborador, então a mensagem de sucesso é só do convite
+            toast({ title: "Convite Enviado!", description: `Convite enviado para ${dataToSave.email}. O colaborador será listado após aceitar.` });
           } else {
-            throw new Error(result.data.error || 'Falha no envio do convite pela função.');
+            // Se a função falhar (ex: email já existe verificado no backend), o erro vem aqui
+            throw new Error(result.data.message || result.data.error || 'Falha no envio do convite pela função.');
           }
         } catch (inviteError) {
           console.error("[EmployeeFormPage] Error sending invite:", inviteError);
+          // Usar a mensagem de erro retornada pela função, se houver
+          const errorMessage = inviteError.message || inviteError.toString(); 
+          setPageError(`Erro ao enviar convite: ${errorMessage}`); // Mostrar erro na página
           toast({
             variant: "destructive",
             title: "Erro no Convite",
-            description: `Não foi possível enviar o convite (${inviteError.message || inviteError}). O colaborador foi criado.`,
+            description: `Não foi possível enviar o convite: ${errorMessage}`,
             duration: 7000
           });
+          // Como a função falhou, não navegar e parar o submitting
+          setSubmitting(false);
+          setLoading(false);
+          return; // Impede a navegação e a mensagem de sucesso genérica
         }
-        toast({ title: "Sucesso!", description: "Colaborador criado." });
       }
 
       navigate('/tenant/colaboradores');

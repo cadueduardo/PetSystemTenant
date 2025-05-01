@@ -8,10 +8,48 @@ import { AlertCircle, PlusCircle, Pencil, Trash2, ToggleLeft, ToggleRight } from
 import { useNavigate } from 'react-router-dom';
 import { useTenant } from '@/components/tenant/TenantContext';
 import { useToast } from "@/components/ui/use-toast";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 // --- Log para verificar se o módulo JS está sendo carregado --- 
 console.log("--- MODULE LOAD: src/pages/Tenant/EmployeesPage.jsx (Restoring Firestore Query) ---");
 // -------------------------------------------------------------
+
+// --- Objeto para mapear status e estilos --- 
+const statusConfig = {
+  convite_pendente: { text: 'Aguard. Conf.', variant: 'warning' },
+  ativo: { text: 'Ativo', variant: 'success' }, // Usar variant 'success' (precisa definir no CSS ou usar classes)
+  inativo: { text: 'Inativo', variant: 'secondary' },
+  convite_expirado: { text: 'Expirado', variant: 'destructive' },
+  erro_no_convite: { text: 'Erro Convite', variant: 'destructive' },
+  erro_email_ja_existente: { text: 'Email Existe', variant: 'destructive' },
+  default: { text: 'Desconhecido', variant: 'outline' }
+};
+
+// --- Função auxiliar para obter display do status ---
+const getEmployeeStatusDisplay = (employee) => {
+  const statusValue = employee.status;
+  const hasAuthUid = !!employee.authUid; // Verifica se já aceitou o convite
+
+  if (statusValue === 'convite_pendente' && !hasAuthUid) {
+    return statusConfig.convite_pendente;
+  } else if (hasAuthUid && statusValue === true) {
+    return statusConfig.ativo;
+  } else if (hasAuthUid && statusValue === false) {
+    return statusConfig.inativo;
+  } else if (statusValue === 'convite_expirado') {
+    return statusConfig.convite_expirado;
+  } else if (statusValue === 'erro_no_convite') {
+    return statusConfig.erro_no_convite;
+  } else if (statusValue === 'erro_email_ja_existente') {
+    return statusConfig.erro_email_ja_existente;
+  } else {
+    // Fallback para status desconhecidos ou booleanos sem authUid
+    console.warn(`[EmployeesPage] Status desconhecido ou inconsistente para colaborador ${employee.id}:`, statusValue, `Has authUid: ${hasAuthUid}`);
+    return statusConfig.default;
+  }
+};
 
 function EmployeesPage() {
   const [employees, setEmployees] = useState([]);
@@ -280,9 +318,43 @@ function EmployeesPage() {
                       <TableCell>{employee.email}</TableCell>
                       <TableCell>{profilesMap[employee.perfilId] || 'Carregando...'}</TableCell>
                       <TableCell>
-                        <Badge variant={employee.status ? 'default' : 'destructive'}>
-                          {employee.status ? 'Ativo' : 'Inativo'}
-                        </Badge>
+                        {(() => { // IIFE para usar a lógica de status
+                          const display = getEmployeeStatusDisplay(employee);
+                          // Definir classes de cor diretamente se a variant não for suficiente ou customizada
+                          let badgeClass = "";
+                          if (display.variant === 'warning') badgeClass = 'bg-yellow-100 text-yellow-800 border-yellow-300';
+                          else if (display.variant === 'success') badgeClass = 'bg-green-100 text-green-800 border-green-300';
+                          else if (display.variant === 'secondary') badgeClass = 'bg-gray-100 text-gray-600 border-gray-300';
+                          else if (display.variant === 'destructive') badgeClass = 'bg-red-100 text-red-800 border-red-300';
+                          else badgeClass = 'bg-white text-gray-500 border-gray-300'; // outline/default
+                          
+                          return (
+                            <div className="flex items-center space-x-2">
+                              <Badge className={cn("border", badgeClass)}>{display.text}</Badge>
+                              
+                              {/* Mostrar Switch apenas se status for 'ativo' ou 'inativo' */}
+                              {(employee.authUid && (employee.status === true || employee.status === false)) && (
+                                <TooltipProvider delayDuration={100}>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                        {/* Envolver o Switch para Tooltip */}
+                                        <div> 
+                                            <Switch
+                                                checked={employee.status === true} // Checked se for ativo
+                                                onCheckedChange={() => handleToggleStatus(employee.id, employee.status)}
+                                                aria-label={employee.status === true ? "Desativar colaborador" : "Ativar colaborador"}
+                                            />
+                                        </div>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                        <p>{employee.status === true ? "Clique para desativar" : "Clique para ativar"}</p>
+                                        </TooltipContent>
+                                    </Tooltip>
+                                </TooltipProvider>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-right space-x-1">
                          {/* Botões restaurados e conectados aos handlers */}
