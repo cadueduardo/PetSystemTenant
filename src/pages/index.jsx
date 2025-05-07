@@ -98,6 +98,7 @@ import EmployeeFormPage from './Tenant/EmployeeFormPage';
 import AcceptInvitationPage from './Public/AcceptInvitationPage';
 import AgendaPage from './Tenant/AgendaPage';
 import IntegrationsPage from './Tenant/IntegrationsPage';
+import NFeSetupPage from './Tenant/NFeSetupPage'; // <<< ADICIONAR IMPORT NOVO
 // Remover import desnecessário
 // import PasswordSetupPage from './PasswordSetupPage'; 
 // --- FIM NOVAS IMPORTAÇÕES ---
@@ -286,6 +287,7 @@ function PagesContent() {
                 <Route path="integracoes" element={<IntegrationsPage />} /> 
                 {/* --- FIM ROTA INTEGRAÇÕES --- */}
                 
+                <Route path="integracoes/nfe-setup" element={<NFeSetupPage />} /> {/* <<< ADICIONAR NOVA ROTA AQUI */}
               </Route>
             </Route>
             

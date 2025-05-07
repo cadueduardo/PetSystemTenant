@@ -22,6 +22,8 @@ import {
   MessageSquare 
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 const safeApiCall = async (apiFunction, params, fallback = []) => {
   try {
@@ -42,15 +44,13 @@ export default function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [activeTab, setActiveTab] = useState("visual");
   const [tenant, setTenant] = useState(null);
+  const [isSearchingCep, setIsSearchingCep] = useState(false);
   const [customization, setCustomization] = useState({
     company_logo_url: "",
     primary_color: "#3B82F6",
     secondary_color: "#1E40AF",
     use_logo_in_header: false,
     company_info: {
-      address: "",
-      phone: "",
-      email: "",
       social_media: {
         facebook: "",
         instagram: "",
@@ -124,26 +124,13 @@ export default function Settings() {
           const results = await safeApiCall(Customization.filter, filter, []);
           if (results && results.length > 0) {
             let customizationData = results[0];
-            customizationData = {
-              ...customizationData,
-              company_info: customizationData.company_info || {
-                address: "",
-                phone: "",
-                email: "",
-                social_media: {
-                  facebook: "",
-                  instagram: "",
-                  whatsapp: ""
-                }
-              }
+            customizationData.company_info = customizationData.company_info || {};
+            customizationData.company_info.social_media = customizationData.company_info.social_media || {
+              facebook: "",
+              instagram: "",
+              whatsapp: ""
             };
-            if (!customizationData.company_info.social_media) {
-              customizationData.company_info.social_media = {
-                facebook: "",
-                instagram: "",
-                whatsapp: ""
-              };
-            }
+            
             customizationData.operating_hours = {
               ...(customization.operating_hours),
               ...(customizationData.operating_hours || {}),
@@ -169,9 +156,32 @@ export default function Settings() {
         }
       };
       
-      const createNewCustomization = async (data) => {
+      const createNewCustomization = async (tenantId) => {
         try {
-          const newCustomization = await safeApiCall(Customization.create, data, null);
+          const newCustomizationData = {
+            tenant_id: tenantId,
+            company_logo_url: "",
+            primary_color: "#3B82F6",
+            secondary_color: "#1E40AF",
+            use_logo_in_header: false,
+            company_info: {
+              social_media: {
+                facebook: "",
+                instagram: "",
+                whatsapp: ""
+              }
+            },
+            layout_preferences: {
+              show_hero: true,
+              show_featured_products: true,
+              show_categories: true,
+              show_testimonials: true
+            },
+            operating_hours: customization.operating_hours,
+            messaging_settings: customization.messaging_settings,
+            is_setup_complete: false
+          };
+          const newCustomization = await safeApiCall(Customization.create, newCustomizationData, null);
           if (newCustomization) {
             setCustomization(newCustomization);
             return true;
@@ -205,31 +215,7 @@ export default function Settings() {
         if (!customizationLoaded) {
           await new Promise(resolve => setTimeout(resolve, 500));
           
-          await createNewCustomization({
-            tenant_id: currentTenant.id,
-            company_logo_url: "",
-            primary_color: "#3B82F6",
-            secondary_color: "#1E40AF",
-            company_info: {
-              address: "",
-              phone: "",
-              email: "",
-              social_media: {
-                facebook: "",
-                instagram: "",
-                whatsapp: ""
-              }
-            },
-            layout_preferences: {
-              show_hero: true,
-              show_featured_products: true,
-              show_categories: true,
-              show_testimonials: true
-            },
-            operating_hours: customization.operating_hours,
-            messaging_settings: customization.messaging_settings,
-            is_setup_complete: false
-          });
+          await createNewCustomization(currentTenant.id);
         }
       } else {
         const tenantId = localStorage.getItem('current_tenant');
@@ -254,32 +240,7 @@ export default function Settings() {
         const customizationLoaded = await loadCustomization({ tenant_id: currentTenant.id });
 
         if (!customizationLoaded) {
-          await createNewCustomization({
-            tenant_id: currentTenant.id,
-            company_logo_url: "",
-            primary_color: "#3B82F6",
-            secondary_color: "#1E40AF",
-            use_logo_in_header: false,
-            company_info: {
-              address: "",
-              phone: "",
-              email: "",
-              social_media: {
-                facebook: "",
-                instagram: "",
-                whatsapp: ""
-              }
-            },
-            layout_preferences: {
-                show_hero: true,
-                show_featured_products: true,
-                show_categories: true,
-                show_testimonials: true
-            },
-            operating_hours: customization.operating_hours,
-            messaging_settings: customization.messaging_settings,
-            is_setup_complete: false
-          });
+          await createNewCustomization(currentTenant.id);
         }
       }
     } catch (error) {
@@ -317,10 +278,10 @@ export default function Settings() {
   };
 
   const handleSaveSettings = async () => {
-    if (!customization.id) {
+    if (!customization.id && !tenant?.id) {
       toast({
         title: "Erro",
-        description: "ID da customização não encontrado.",
+        description: "ID da customização ou do tenant não encontrado.",
         variant: "destructive"
       });
       return;
@@ -328,36 +289,49 @@ export default function Settings() {
 
     setIsSaving(true);
     try {
+      const updatedTenantData = {
+        company_name: tenant.company_name || "",
+        legal_name: tenant.legal_name || "",
+        document_type: tenant.document_type || "cnpj",
+        document: tenant.document || "",
+        email: tenant.email || "",
+        phone: tenant.phone || "",
+        address: {
+          cep: tenant.address?.cep || "",
+          street: tenant.address?.street || "",
+          number: tenant.address?.number || "",
+          complement: tenant.address?.complement || "",
+          neighborhood: tenant.address?.neighborhood || "",
+          city: tenant.address?.city || "",
+          state: tenant.address?.state || ""
+        },
+      };
+      
       const updatedCustomization = {
         ...customization,
         tenant_id: tenant?.id || null,
-        company_logo_url: customization.company_logo_url || "",
-        primary_color: customization.primary_color || "#3B82F6",
-        secondary_color: customization.secondary_color || "#1E40AF",
         company_info: {
-          address: customization.company_info?.address || "",
-          phone: customization.company_info?.phone || "",
-          email: customization.company_info?.email || "",
           social_media: {
             facebook: customization.company_info?.social_media?.facebook || "",
             instagram: customization.company_info?.social_media?.instagram || "",
             whatsapp: customization.company_info?.social_media?.whatsapp || ""
           }
         },
-        layout_preferences: {
-          show_hero: true,
-          show_featured_products: true,
-          show_categories: true,
-          show_testimonials: true
-        },
-        operating_hours: customization.operating_hours || {},
         messaging_settings: {
           ...(customization.messaging_settings || {}),
           cancel_if_unconfirmed_hours_before: parseInt(String(customization.messaging_settings?.cancel_if_unconfirmed_hours_before || 3)) || 3,
         }
       };
 
-      await fetchWithRetry(() => Customization.update(customization.id, updatedCustomization));
+      const promises = [];
+      if (tenant?.id) {
+        promises.push(fetchWithRetry(() => Tenant.update(tenant.id, tenant)));
+      }
+      if (customization?.id) {
+        promises.push(fetchWithRetry(() => Customization.update(customization.id, updatedCustomization)));
+      }
+
+      await Promise.all(promises);
 
       toast({
         title: "Sucesso",
@@ -375,6 +349,74 @@ export default function Settings() {
       });
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // Nova função para lidar com mudanças nos campos diretos do tenant
+  const handleTenantChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setTenant(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value
+    }));
+  };
+
+  // Nova função para lidar com mudanças nos campos de endereço do tenant
+  const handleTenantAddressChange = (e) => {
+    const { name, value } = e.target;
+    setTenant(prev => ({
+      ...prev,
+      address: {
+        ...prev.address,
+        [name]: value
+      }
+    }));
+    
+    if (name === 'cep' && value.replace(/[^0-9]/g, "").length === 8) {
+      searchAddressByCepInSettings(value.replace(/[^0-9]/g, ""));
+    }
+  };
+
+  // Nova função para buscar CEP dentro de Settings.jsx
+  const searchAddressByCepInSettings = async (cep) => {
+    if (cep.length !== 8) return;
+    
+    setIsSearchingCep(true);
+    try {
+      const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+      const data = await response.json();
+      
+      if (!data.erro) {
+        setTenant(prev => ({
+          ...prev,
+          address: {
+            ...prev.address,
+            cep: cep, // Mantém o CEP digitado pelo usuário
+            street: data.logradouro || prev.address.street || "",
+            neighborhood: data.bairro || prev.address.neighborhood || "",
+            city: data.localidade || prev.address.city || "",
+            state: data.uf || prev.address.state || "",
+            // number e complement não são preenchidos pelo ViaCEP, manter os atuais ou vazios
+            number: prev.address.number || "",
+            complement: prev.address.complement || ""
+          }
+        }));
+      } else {
+        toast({
+          title: "CEP não encontrado",
+          description: "Não foi possível encontrar o CEP informado. Por favor, verifique.",
+          variant: "warning"
+        });
+      }
+    } catch (error) {
+      console.error("Erro ao buscar CEP:", error);
+      toast({
+        title: "Erro ao buscar CEP",
+        description: "Ocorreu um problema ao tentar buscar o CEP. Tente novamente.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsSearchingCep(false);
     }
   };
 
@@ -552,57 +594,272 @@ export default function Settings() {
             <CardHeader>
               <CardTitle>Informações da Empresa</CardTitle>
               <CardDescription>
-                Adicione os dados de contato da sua empresa
+                Edite os dados cadastrais e fiscais da sua empresa.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
-                <Label>Endereço</Label>
+                <Label htmlFor="settings_company_name">Nome Fantasia *</Label>
                 <Input
-                  value={customization?.company_info?.address || ""}
-                  onChange={(e) => setCustomization(prev => ({
-                    ...prev,
-                    company_info: {
-                      ...prev.company_info,
-                      address: e.target.value
-                    }
-                  }))}
-                  placeholder="Endereço completo"
+                  id="settings_company_name"
+                  name="company_name"
+                  value={tenant?.company_name || ""}
+                  onChange={handleTenantChange}
+                  required
+                />
+              </div>
+              
+              <div>
+                <Label htmlFor="settings_legal_name">Razão Social</Label>
+                <Input
+                  id="settings_legal_name"
+                  name="legal_name"
+                  value={tenant?.legal_name || ""}
+                  onChange={handleTenantChange}
+                />
+              </div>
+              
+              <div>
+                <Label>Tipo de Documento *</Label>
+                <RadioGroup 
+                  value={tenant?.document_type || "cnpj"} 
+                  onValueChange={(newValue) => setTenant(prev => ({ ...prev, document_type: newValue }))}
+                  className="flex space-x-4 mt-1"
+                >
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="cpf" id="settings_cpf" />
+                    <Label htmlFor="settings_cpf">CPF</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="cnpj" id="settings_cnpj" />
+                    <Label htmlFor="settings_cnpj">CNPJ</Label>
+                  </div>
+                </RadioGroup>
+              </div>
+              
+              <div>
+                <Label htmlFor="settings_document">{tenant?.document_type === "cpf" ? "CPF" : "CNPJ"} *</Label>
+                <Input
+                  id="settings_document"
+                  name="document"
+                  value={tenant?.document || ""}
+                  onChange={handleTenantChange}
+                  placeholder={tenant?.document_type === "cpf" ? "000.000.000-00" : "00.000.000/0000-00"}
+                  required
+                />
+              </div>
+              
+              <div>
+                <Label htmlFor="settings_responsible_name">Nome do Responsável *</Label>
+                <Input
+                  id="settings_responsible_name"
+                  name="responsible_name"
+                  value={tenant?.responsible_name || ""}
+                  onChange={handleTenantChange}
+                  required
                 />
               </div>
 
-              <div>
-                <Label>Telefone</Label>
-                <Input
-                  value={customization?.company_info?.phone || ""}
-                  onChange={(e) => setCustomization(prev => ({
-                    ...prev,
-                    company_info: {
-                      ...prev.company_info,
-                      phone: e.target.value
-                    }
-                  }))}
-                  placeholder="(00) 0000-0000"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="settings_email">Email (Contato Geral) *</Label>
+                  <Input
+                    id="settings_email"
+                    name="email"
+                    type="email"
+                    value={tenant?.email || ""}
+                    onChange={handleTenantChange}
+                    required
+                  />
+                </div>
+                
+                <div>
+                  <Label htmlFor="settings_phone">Telefone *</Label>
+                  <Input
+                    id="settings_phone"
+                    name="phone"
+                    value={tenant?.phone || ""}
+                    onChange={handleTenantChange}
+                    required
+                  />
+                </div>
               </div>
 
-              <div>
-                <Label>Email</Label>
-                <Input
-                  value={customization?.company_info?.email || ""}
-                  onChange={(e) => setCustomization(prev => ({
-                    ...prev,
-                    company_info: {
-                      ...prev.company_info,
-                      email: e.target.value
-                    }
-                  }))}
-                  placeholder="contato@empresa.com"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="settings_inscricao_estadual">Inscrição Estadual</Label>
+                  <Input
+                    id="settings_inscricao_estadual"
+                    name="inscricao_estadual"
+                    value={tenant?.inscricao_estadual || ""}
+                    onChange={handleTenantChange}
+                    placeholder="IE (apenas números ou ISENTO)"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="settings_inscricao_municipal">Inscrição Municipal</Label>
+                  <Input
+                    id="settings_inscricao_municipal"
+                    name="inscricao_municipal"
+                    value={tenant?.inscricao_municipal || ""}
+                    onChange={handleTenantChange}
+                    placeholder="IM (apenas números ou ISENTO)"
+                  />
+                </div>
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="settings_cnae_principal">CNAE Principal</Label>
+                  <Input
+                    id="settings_cnae_principal"
+                    name="cnae_principal"
+                    value={tenant?.cnae_principal || ""}
+                    onChange={handleTenantChange}
+                    placeholder="Ex: 4789004 (apenas números)"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="settings_regime_tributario">Regime Tributário</Label>
+                  <Select
+                    value={tenant?.regime_tributario || ""}
+                    onValueChange={(newValue) => setTenant(prev => ({ ...prev, regime_tributario: newValue }))}
+                  >
+                    <SelectTrigger id="settings_regime_tributario">
+                      <SelectValue placeholder="Selecione o regime" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="simples_nacional">Simples Nacional</SelectItem>
+                      <SelectItem value="simples_nacional_excesso">Simples Nacional - excesso de sublimite</SelectItem>
+                      <SelectItem value="lucro_presumido">Lucro Presumido</SelectItem>
+                      <SelectItem value="lucro_real">Lucro Real</SelectItem>
+                      <SelectItem value="mei">MEI - Microempreendedor Individual</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <h3 className="text-lg font-medium pt-4 border-t mt-6 mb-2">Endereço Fiscal</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="settings_cep">CEP *</Label>
+                  <div className="flex">
+                    <Input
+                      id="settings_cep"
+                      name="cep"
+                      value={tenant?.address?.cep || ""}
+                      onChange={handleTenantAddressChange}
+                      maxLength={8}
+                      required
+                    />
+                    {isSearchingCep && (
+                      <div className="ml-2 flex items-center">
+                        <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              
               <div>
-                <Label>Redes Sociais</Label>
+                <Label htmlFor="settings_street">Logradouro *</Label>
+                <Input
+                  id="settings_street"
+                  name="street"
+                  value={tenant?.address?.street || ""}
+                  onChange={handleTenantAddressChange}
+                  required
+                />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="settings_number">Número *</Label>
+                  <Input
+                    id="settings_number"
+                    name="number"
+                    value={tenant?.address?.number || ""}
+                    onChange={handleTenantAddressChange}
+                    required
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="settings_complement">Complemento</Label>
+                  <Input
+                    id="settings_complement"
+                    name="complement"
+                    value={tenant?.address?.complement || ""}
+                    onChange={handleTenantAddressChange}
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <Label htmlFor="settings_neighborhood">Bairro *</Label>
+                <Input
+                  id="settings_neighborhood"
+                  name="neighborhood"
+                  value={tenant?.address?.neighborhood || ""}
+                  onChange={handleTenantAddressChange}
+                  required
+                />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="settings_city">Cidade *</Label>
+                  <Input
+                    id="settings_city"
+                    name="city"
+                    value={tenant?.address?.city || ""}
+                    onChange={handleTenantAddressChange}
+                    required
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="settings_state">Estado *</Label>
+                  <Select 
+                    value={tenant?.address?.state || ""} 
+                    onValueChange={(value) => handleTenantAddressChange({ target: { name: "state", value } })}
+                  >
+                    <SelectTrigger id="settings_state">
+                      <SelectValue placeholder="Selecione o estado" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="AC">Acre</SelectItem>
+                      <SelectItem value="AL">Alagoas</SelectItem>
+                      <SelectItem value="AP">Amapá</SelectItem>
+                      <SelectItem value="AM">Amazonas</SelectItem>
+                      <SelectItem value="BA">Bahia</SelectItem>
+                      <SelectItem value="CE">Ceará</SelectItem>
+                      <SelectItem value="DF">Distrito Federal</SelectItem>
+                      <SelectItem value="ES">Espírito Santo</SelectItem>
+                      <SelectItem value="GO">Goiás</SelectItem>
+                      <SelectItem value="MA">Maranhão</SelectItem>
+                      <SelectItem value="MT">Mato Grosso</SelectItem>
+                      <SelectItem value="MS">Mato Grosso do Sul</SelectItem>
+                      <SelectItem value="MG">Minas Gerais</SelectItem>
+                      <SelectItem value="PA">Pará</SelectItem>
+                      <SelectItem value="PB">Paraíba</SelectItem>
+                      <SelectItem value="PR">Paraná</SelectItem>
+                      <SelectItem value="PE">Pernambuco</SelectItem>
+                      <SelectItem value="PI">Piauí</SelectItem>
+                      <SelectItem value="RJ">Rio de Janeiro</SelectItem>
+                      <SelectItem value="RN">Rio Grande do Norte</SelectItem>
+                      <SelectItem value="RS">Rio Grande do Sul</SelectItem>
+                      <SelectItem value="RO">Rondônia</SelectItem>
+                      <SelectItem value="RR">Roraima</SelectItem>
+                      <SelectItem value="SC">Santa Catarina</SelectItem>
+                      <SelectItem value="SP">São Paulo</SelectItem>
+                      <SelectItem value="SE">Sergipe</SelectItem>
+                      <SelectItem value="TO">Tocantins</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="pt-6 border-t mt-6">
+                <Label className="text-lg font-medium">Redes Sociais</Label>
                 <div className="space-y-2 mt-2">
                   <Input
                     value={customization?.company_info?.social_media?.facebook || ""}
@@ -762,7 +1019,6 @@ export default function Settings() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* Habilitar Envio Automático */}
               <div className="flex items-center space-x-2">
                   <Switch
                     id="auto-send-confirmation"
@@ -777,7 +1033,6 @@ export default function Settings() {
                   </Label>
               </div>
 
-              {/* Tempo de Antecedência */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
                 <Label htmlFor="send-before-hours">Enviar automaticamente</Label>
                 <div className="flex items-center gap-2">
@@ -797,7 +1052,6 @@ export default function Settings() {
                 </div>
               </div>
 
-              {/* Habilitar Reenvio */}
               <div className="flex items-center space-x-2 pt-4 border-t">
                   <Switch
                     id="retry-enabled"
@@ -813,7 +1067,6 @@ export default function Settings() {
                   </Label>
               </div>
 
-              {/* Tempo de Reenvio */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
                  <Label htmlFor="retry-after-hours">Repetir após</Label>
                  <div className="flex items-center gap-2">
@@ -833,7 +1086,6 @@ export default function Settings() {
                  </div>
               </div>
 
-              {/* --- INÍCIO: Configuração de Cancelamento Automático --- */}
               <div className="pt-6 border-t">
                 <Label className="text-lg font-semibold">Cancelamento Automático</Label>
                 <p className="text-sm text-muted-foreground mb-4">Cancele automaticamente agendamentos que não foram confirmados pelo cliente.</p>
@@ -852,7 +1104,6 @@ export default function Settings() {
                   </Label>
                 </div>
 
-                {/* Limite de Horas Antes */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center mb-4">
                   <Label htmlFor="cancel-before-hours">Cancelar automaticamente se não confirmado</Label>
                   <div className="flex items-center gap-2">
@@ -872,7 +1123,6 @@ export default function Settings() {
                   </div>
                 </div>
 
-                {/* Template Mensagem Cancelamento Automático */}
                 <div className="space-y-1">
                   <Label htmlFor="template-auto-cancel">Mensagem de Cancelamento Automático</Label>
                    <p className="text-xs text-muted-foreground">
@@ -892,16 +1142,13 @@ export default function Settings() {
                   />
                 </div>
               </div>
-              {/* --- FIM: Configuração de Cancelamento Automático --- */}
 
-              {/* Templates de Mensagem */}
               <div className="space-y-4 pt-4 border-t">
                   <Label className="font-semibold">Modelos de Mensagem</Label>
                   <p className="text-xs text-muted-foreground">
                     Variáveis disponíveis: <code>{'{cliente}'}</code>, <code>{'{clinica}'}</code>, <code>{'{pet}'}</code>, <code>{'{data_hora}'}</code>.
                   </p>
                   
-                  {/* Template Confirmação Inicial */}
                   <div className="space-y-1">
                     <Label htmlFor="template-confirmation">Mensagem de Confirmação Inicial</Label>
                     <Textarea
@@ -917,7 +1164,6 @@ export default function Settings() {
                     />
                   </div>
 
-                  {/* Template Resposta Confirmado */}
                   <div className="space-y-1">
                     <Label htmlFor="template-confirmed-reply">Resposta Automática (Confirmado)</Label>
                     <Textarea
@@ -933,7 +1179,6 @@ export default function Settings() {
                     />
                   </div>
 
-                  {/* Template Resposta Cancelado */}
                   <div className="space-y-1">
                     <Label htmlFor="template-canceled-reply">Resposta Automática (Cancelado)</Label>
                     <Textarea

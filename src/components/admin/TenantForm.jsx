@@ -61,6 +61,10 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
       city: "",
       state: ""
     },
+    inscricao_estadual: "",
+    inscricao_municipal: "",
+    cnae_principal: "",
+    regime_tributario: "",
     business_type: "both",
     selected_modules: ["clinic_management", "petshop"],
     access_url: "",
@@ -96,6 +100,10 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
           city: "",
           state: ""
         },
+        inscricao_estadual: tenant.inscricao_estadual || "",
+        inscricao_municipal: tenant.inscricao_municipal || "",
+        cnae_principal: tenant.cnae_principal || "",
+        regime_tributario: tenant.regime_tributario || "",
         business_type: tenant.business_type || "both",
         selected_modules: tenant.selected_modules || ["clinic_management", "petshop"],
         access_url: tenant.access_url || "",
@@ -129,6 +137,10 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
           city: "",
           state: ""
         },
+        inscricao_estadual: "",
+        inscricao_municipal: "",
+        cnae_principal: "",
+        regime_tributario: "",
         business_type: "both",
         selected_modules: ["clinic_management", "petshop"],
         access_url: "",
@@ -505,6 +517,60 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
                         onChange={handleChange}
                         required
                       />
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="inscricao_estadual">Inscrição Estadual</Label>
+                      <Input
+                        id="inscricao_estadual"
+                        name="inscricao_estadual"
+                        value={formData.inscricao_estadual}
+                        onChange={handleChange}
+                        placeholder="IE (apenas números ou ISENTO)"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="inscricao_municipal">Inscrição Municipal</Label>
+                      <Input
+                        id="inscricao_municipal"
+                        name="inscricao_municipal"
+                        value={formData.inscricao_municipal}
+                        onChange={handleChange}
+                        placeholder="IM (apenas números ou ISENTO)"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="cnae_principal">CNAE Principal</Label>
+                      <Input
+                        id="cnae_principal"
+                        name="cnae_principal"
+                        value={formData.cnae_principal}
+                        onChange={handleChange}
+                        placeholder="Ex: 4789004 (apenas números)"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="regime_tributario">Regime Tributário</Label>
+                      <Select
+                        value={formData.regime_tributario}
+                        onValueChange={(value) => setFormData(prev => ({ ...prev, regime_tributario: value }))}
+                      >
+                        <SelectTrigger id="regime_tributario">
+                          <SelectValue placeholder="Selecione o regime" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="simples_nacional">Simples Nacional</SelectItem>
+                          <SelectItem value="simples_nacional_excesso">Simples Nacional - excesso de sublimite</SelectItem>
+                          <SelectItem value="lucro_presumido">Lucro Presumido</SelectItem>
+                          <SelectItem value="lucro_real">Lucro Real</SelectItem>
+                          <SelectItem value="mei">MEI - Microempreendedor Individual</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
                   
