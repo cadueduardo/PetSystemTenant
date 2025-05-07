@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Appointment, Pet, Customer, Service, Consultation, Product /*, MedicalRecord */ } from "@/api/entities";
-import { petService } from "@/api/firebase/petService";
 import { DiagnosticAgent } from '@/lib/DiagnosticAgent';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -18,7 +17,7 @@ import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { medicationTaskService } from '@/api/firebase/medicationTaskService';
 import { addPendingItems } from '@/api/mock/chargeableItemService';
-import { collectionGroup, query, where, getDocs, orderBy, limit, collection, doc, getDoc, updateDoc, Timestamp } from "firebase/firestore";
+import { collectionGroup, query, where, getDocs, orderBy, limit, collection, doc, getDoc, updateDoc, Timestamp, writeBatch } from "firebase/firestore";
 import { db } from '@/lib/firebaseConfig';
 // <<< ADICIONAR IMPORTS PARA COMBOBOX >>>
 import { ChevronsUpDown } from "lucide-react";
@@ -109,16 +108,46 @@ export default function LiveVetConsulta() {
   // <<< NOVO ESTADO e FUNÇÕES para Modal de Histórico >>>
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [selectedHistoryEpisode, setSelectedHistoryEpisode] = useState(null);
+  const [historyPrescriptionItems, setHistoryPrescriptionItems] = useState([]); // <<< NOVO: Estado para itens do histórico
+  const [isLoadingHistoryItems, setIsLoadingHistoryItems] = useState(false); // <<< NOVO: Loading state
+  const [historyItemsError, setHistoryItemsError] = useState(null); // <<< NOVO: Error state
 
-  const handleOpenHistoryModal = (episode) => {
+  const handleOpenHistoryModal = async (episode) => { // <<< Transformar em async
     console.log("[handleOpenHistoryModal] Abrindo detalhes para:", episode);
+    if (!episode || !episode.id) {
+      console.error("[handleOpenHistoryModal] Tentativa de abrir histórico sem dados válidos do episódio.");
+      toast({ title: "Erro", description: "Não foi possível carregar os dados do episódio selecionado.", variant: "destructive" });
+      return;
+    }
+
     setSelectedHistoryEpisode(episode);
     setIsHistoryModalOpen(true);
+    setIsLoadingHistoryItems(true); // <<< Iniciar loading
+    setHistoryPrescriptionItems([]); // <<< Limpar itens anteriores
+    setHistoryItemsError(null); // <<< Limpar erros anteriores
+
+    try {
+      const itemsCollectionRef = collection(db, `consultations/${episode.id}/consultation_prescription_items`);
+      const itemsQuery = query(itemsCollectionRef, orderBy("order", "asc")); // Ordenar pela ordem salva
+      const itemsSnapshot = await getDocs(itemsQuery);
+      const fetchedItems = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log(`[handleOpenHistoryModal] Itens da prescrição do histórico (${episode.id}) carregados:`, fetchedItems);
+      setHistoryPrescriptionItems(fetchedItems);
+    } catch (error) {
+      console.error(`[handleOpenHistoryModal] Erro ao buscar itens da prescrição do histórico (${episode.id}):`, error);
+      setHistoryItemsError("Falha ao carregar itens da prescrição.");
+      toast({ title: "Erro", description: "Não foi possível carregar os itens da prescrição para este episódio.", variant: "destructive" });
+    } finally {
+      setIsLoadingHistoryItems(false); // <<< Finalizar loading
+    }
   };
 
   const handleCloseHistoryModal = () => {
     setIsHistoryModalOpen(false);
-    setSelectedHistoryEpisode(null); // Limpa ao fechar
+    setSelectedHistoryEpisode(null);
+    setHistoryPrescriptionItems([]); // <<< Limpar itens ao fechar
+    setIsLoadingHistoryItems(false);
+    setHistoryItemsError(null);
   };
   // <<< FIM: Modal de Histórico >>>
 
@@ -323,69 +352,118 @@ export default function LiveVetConsulta() {
         console.log('[useEffect Main] Agendamento carregado:', apptData);
         setAppointment(apptData);
 
-        if (queueIdFromUrl) {
-          try {
-            console.log(`[useEffect Main] É um retorno (Fila ID: ${queueIdFromUrl}). Buscando detalhes das tarefas administradas para Appt ID: ${appointmentId}...`);
-            const administeredTasks = await medicationTaskService.filter({
-              appointment_id: appointmentId, 
-              status: 'administrada',
-            });
-            
-            const followUpRequiredTasks = administeredTasks.filter(task => task.requires_follow_up === true);
-
-            if (followUpRequiredTasks.length > 0) {
-              const taskDetails = followUpRequiredTasks.map(task => ({
-                id: task.id,
-                medicationName: task.medication_name || 'Nome não encontrado',
-                details: task.details || 'Sem detalhes',
-                observations: task.observations || ''
-              }));
-              console.log('[useEffect Main] Detalhes das tarefas de retorno encontradas:', taskDetails);
-              setFollowUpTaskDetails(taskDetails);
-            } else {
-              console.warn('[useEffect Main] Retorno detectado, mas nenhuma tarefa de medicação administrada COM requires_follow_up encontrada.');
-              setFollowUpTaskDetails([]);
-            }
-          } catch (medError) {
-            console.error('[useEffect Main] Erro ao buscar tarefas de medicação para retorno:', medError);
-            setFollowUpTaskDetails([]); 
-          }
-        }
-
-        // <<< Buscar produtos usáveis (allowInternalUse: true) >>>
-        const tenantIdForProducts = currentApptData.tenant_id; // Pega tenantId do agendamento
-        if (tenantIdForProducts) {
-          try {
-            console.log(`[LiveVetConsulta] Buscando produtos usáveis para tenant: ${tenantIdForProducts}`);
-            const productsData = await Product.filter({
-              tenant_id: tenantIdForProducts,
-              allowInternalUse: true // Filtro chave!
-            });
-            console.log("[LiveVetConsulta] Produtos usáveis carregados:", productsData);
-            setUsableProducts(productsData || []);
-          } catch (productError) {
-            console.error("[LiveVetConsulta] Erro ao buscar produtos usáveis:", productError);
-            toast({ title: "Aviso", description: "Não foi possível carregar a lista de produtos para adicionar.", variant: "warning" });
-            setUsableProducts([]);
-          }
-        } else {
-          console.warn("[LiveVetConsulta] Tenant ID não disponível no agendamento para buscar produtos.");
-          setUsableProducts([]);
-        }
-        // <<< FIM: Buscar produtos >>>
+        // <<< MOVER A LÓGICA DE BUSCA DE PRODUTOS PARA DENTRO DO try/catch PRINCIPAL, APÓS O AGENDAMENTO SER CARREGADO >>>
 
       } catch (err) {
         console.error("[useEffect Main] ERRO DETALHADO no catch principal:", err);
         setError(`Erro ao carregar dados: ${err.message}`);
         toast({ title: "Erro", description: "Não foi possível carregar os dados da consulta.", variant: "destructive" });
-      } finally {
-         console.log('[useEffect Main] Definindo isLoading = false (final).');
-         setIsLoading(false);
-         setIsLoadingProducts(false); // <<< Finalizar carregamento de produtos
-      }
-    };
+        // Definir loading como false mesmo em erro para não travar a UI
+        setIsLoading(false);
+        setIsLoadingProducts(false); // Finaliza loading de produtos em caso de erro geral
+        setUsableProducts([]); // Limpa produtos em caso de erro
+        // Encerrar a execução da função aqui se houve erro crítico
+        return; 
+      } 
+      
+      // <<< INÍCIO: LÓGICA DE BUSCA DE PRODUTOS (AGORA DENTRO DO FLUXO PRINCIPAL, APÓS CARREGAR appointment) >>>
+      setIsLoadingProducts(true);
+      let tenantIdForProducts = null;
 
-    loadConsultationData();
+      // Prioridade 1: Tentar obter do estado 'appointment' que acabamos de definir/atualizar
+      if (appointment?.tenant_id) { 
+        tenantIdForProducts = appointment.tenant_id;
+        console.log("[useEffect Main Products] Tentando usar tenant_id do estado 'appointment':", tenantIdForProducts);
+      } else {
+        // Prioridade 2: Fallback para localStorage
+        tenantIdForProducts = localStorage.getItem('current_tenant');
+        console.log("[useEffect Main Products] Tentando usar tenant_id do localStorage (fallback):", tenantIdForProducts);
+      }
+
+      // <<< LOG ADICIONAL 1: Verificar o valor final de tenantIdForProducts >>>
+      console.log("[useEffect Main Products] Valor final de tenantIdForProducts ANTES do IF:", tenantIdForProducts);
+
+      if (tenantIdForProducts) {
+        // <<< LOG ADICIONAL 2: Confirmar entrada no IF >>>
+        console.log("[useEffect Main Products] Tenant ID válido encontrado, entrando no bloco para buscar produtos...");
+        try {
+          // <<< LOG ADICIONAL 3: Confirmar início do TRY >>>
+          console.log(`[useEffect Main Products] Iniciando TRY para buscar produtos com tenant: ${tenantIdForProducts}`);
+          const productsData = await Product.filter({
+            tenant_id: tenantIdForProducts,
+            allowInternalUse: true // Filtro chave!
+          });
+          console.log("[useEffect Main Products] Produtos usáveis carregados:", productsData);
+          setUsableProducts(productsData || []);
+        } catch (productError) {
+          console.error("[useEffect Main Products] Erro específico ao buscar produtos usáveis:", productError); // <<< LOG MAIS ESPECÍFICO
+          toast({ title: "Aviso", description: "Não foi possível carregar a lista de produtos para adicionar.", variant: "warning" });
+          setUsableProducts([]);
+        }
+      } else {
+        console.warn("[useEffect Main Products] Tenant ID não encontrado (nem no appointment, nem no localStorage). Não foi possível buscar produtos.");
+        setUsableProducts([]);
+      }
+      setIsLoadingProducts(false); // <<< Finalizar carregamento de produtos APÓS a tentativa de busca >>>
+      // <<< FIM: LÓGICA DE BUSCA DE PRODUTOS >>>
+
+      // <<< MOVER isLoading para o finally para garantir que seja chamado >>>
+      // setIsLoading(false); // <<<< REMOVER DAQUI
+
+      // <<< Lógica de busca de tarefas de retorno (pode continuar aqui ou ser movida se fizer mais sentido) >>>
+      if (queueIdFromUrl) {
+        try {
+          console.log(`[useEffect Main] É um retorno (Fila ID: ${queueIdFromUrl}). Buscando detalhes das tarefas administradas para Appt ID: ${appointmentId}...`);
+          // ... (resto da lógica de busca de tarefas de retorno inalterada) ...
+           const administeredTasks = await medicationTaskService.filter({
+             appointment_id: appointmentId, 
+             status: 'administrada',
+           });
+           
+           const followUpRequiredTasks = administeredTasks.filter(task => task.requires_follow_up === true);
+
+           if (followUpRequiredTasks.length > 0) {
+             const taskDetails = followUpRequiredTasks.map(task => ({
+               id: task.id,
+               medicationName: task.medication_name || 'Nome não encontrado',
+               details: task.details || 'Sem detalhes',
+               observations: task.observations || ''
+             }));
+             console.log('[useEffect Main] Detalhes das tarefas de retorno encontradas:', taskDetails);
+             setFollowUpTaskDetails(taskDetails);
+           } else {
+             console.warn('[useEffect Main] Retorno detectado, mas nenhuma tarefa de medicação administrada COM requires_follow_up encontrada.');
+             setFollowUpTaskDetails([]);
+           }
+         } catch (medError) {
+           console.error('[useEffect Main] Erro ao buscar tarefas de medicação para retorno:', medError);
+           setFollowUpTaskDetails([]); 
+         }
+      }
+
+      // <<< MOVER O isLoading PARA O BLOCO finally >>>
+      // setIsLoading(false); // <<<< REMOVER DAQUI também
+
+      // <<< Bloco Finally para garantir que isLoading seja setado >>>
+      // Este finally não existe na estrutura original, vamos adicioná-lo ao redor do try/catch principal se necessário,
+      // ou simplesmente garantir que setIsLoading(false) seja chamado ao final do fluxo normal.
+      // No nosso caso, a estrutura já tinha um finally, vamos usá-lo corretamente.
+
+      // } catch (err) { ... } 
+      // <<< O finally JÁ EXISTE ABAIXO, VAMOS AJUSTÁ-LO >>>
+      // finally {
+      //    console.log('[useEffect Main] Definindo isLoading = false (final).');
+      //    setIsLoading(false); // <<< ESTE É O LUGAR CORRETO PARA isLoading >>>
+      //    // setIsLoadingProducts(false); // <<< REMOVIDO Daqui, já tratado acima >>>
+      // }
+
+    }; // Fim de loadConsultationData
+
+    loadConsultationData().finally(() => {
+       console.log('[useEffect Main] Definindo isLoading = false (no finally de loadConsultationData).');
+       setIsLoading(false); 
+    });
+
 
     return () => {
       console.log('[useEffect Main] Limpeza ao desmontar ou antes de re-rodar.');
@@ -393,7 +471,7 @@ export default function LiveVetConsulta() {
           handleStopStreamingRecording();
       }
     };
-  }, [appointmentId, location.search, handleStopStreamingRecording]); // << MANTER DEPENDÊNCIAS ORIGINAIS
+  }, [appointmentId, location.search, handleStopStreamingRecording, toast]); // << ADICIONAR toast COMO DEPENDÊNCIA JÁ QUE É USADO
 
   const handleStartStreamingRecording = useCallback(async () => {
     if (isStreaming) return;
@@ -669,54 +747,100 @@ export default function LiveVetConsulta() {
 
   const saveProgressAndUpdateHistory = async () => {
       console.log('[saveProgressAndUpdateHistory] Iniciando...');
-      if (!appointment || !pet || !customer) {
-          toast({ title: "Erro", description: "Dados essenciais faltando para salvar.", variant: "destructive" });
+      if (!appointment || !pet || !customer || !tenant?.id) { // <<< MODIFICADO: Adicionado check de tenant.id
+          toast({ title: "Erro", description: "Dados essenciais (agendamento, pet, cliente ou tenant) faltando para salvar.", variant: "destructive" });
           return;
       }
       setIsSaving(true);
+      const batch = writeBatch(db); // <<< NOVO: Criar batch
+      let consultationId = null; // <<< NOVO: Variável para guardar o ID
+
       try {
+          // <<< NOTE: Consultation.filter pode não ser compatível com a nova estrutura se ele espera 'prescriptionItems'. Será ajustado depois, se necessário. >>>
           const existingConsultations = await Consultation.filter({ appointmentId: appointment.id });
           const interactionDataForRAG = generateInteractionDataForRAG();
 
+          // Payload SEM prescriptionItems
           const consultationDataPayload = {
               appointmentId: appointment.id,
               petId: pet.id,
               ownerId: customer.id,
-              vetId: 'vet-default',
+              vetId: 'vet-default', // Considerar pegar do usuário logado
               date: new Date().toISOString(),
               reason: service?.name || appointment.notes || 'Consulta Clínica',
               anamnesis: { notes: anamnesisNotes },
               clinicalExam: clinicalExamNotes,
               diagnosis: diagnosisNotes,
               treatment: treatmentNotes,
-              prescriptionItems: currentPrescriptionItems, 
-              prescriptionObservations: currentPrescriptionObservations, 
-              requiresFollowUp: currentRequiresFollowUp, 
-              consumedItems: consumedItems, // Adiciona os itens consumidos aqui
-              tenant_id: appointment.tenant_id,
-              fullInteraction: interactionDataForRAG
+              // prescriptionItems: currentPrescriptionItems, <<< REMOVIDO
+              prescriptionObservations: currentPrescriptionObservations,
+              requiresFollowUp: currentRequiresFollowUp,
+              consumedItems: consumedItems,
+              tenant_id: tenant.id, // <<< MODIFICADO: Usar tenant.id garantido pelo check inicial
+              fullInteraction: interactionDataForRAG,
+              updatedAt: Timestamp.now() // <<< NOVO/MODIFICADO: Adicionar/Atualizar timestamp
           };
 
-          let savedConsultation;
-          if (existingConsultations.length > 0) {
-              console.log('[saveProgressAndUpdateHistory] Atualizando consulta existente:', existingConsultations[0].id);
-              savedConsultation = await Consultation.update(existingConsultations[0].id, consultationDataPayload);
-          } else {
-              console.log('[saveProgressAndUpdateHistory] Criando nova consulta...');
-              savedConsultation = await Consultation.create(consultationDataPayload);
-          }
-          console.log("[saveProgressAndUpdateHistory] Consulta salva/atualizada:", savedConsultation);
-          setCurrentEpisodeData(savedConsultation);
-          toast({ title: "Progresso Salvo", description: "Suas anotações foram salvas com sucesso." });
+          let consultationRef;
+          let savedConsultationData;
 
+          if (existingConsultations.length > 0) {
+              consultationId = existingConsultations[0].id;
+              console.log('[saveProgressAndUpdateHistory] Preparando atualização da consulta existente:', consultationId);
+              consultationRef = doc(db, 'consultations', consultationId);
+              batch.update(consultationRef, consultationDataPayload); // <<< MODIFICADO: Usar batch.update
+              // Simula os dados que seriam salvos (sem ler novamente do batch)
+              savedConsultationData = { id: consultationId, ...existingConsultations[0], ...consultationDataPayload };
+          } else {
+              console.log('[saveProgressAndUpdateHistory] Preparando criação de nova consulta...');
+              // Gera uma referência com ID antes para usar na subcoleção
+              consultationRef = doc(collection(db, 'consultations'));
+              consultationId = consultationRef.id;
+              const payloadWithTimestamps = {
+                  ...consultationDataPayload,
+                  createdAt: Timestamp.now() // <<< NOVO: Adicionar timestamp de criação
+              };
+              batch.set(consultationRef, payloadWithTimestamps); // <<< MODIFICADO: Usar batch.set
+              // Simula os dados que seriam salvos
+              savedConsultationData = { id: consultationId, ...payloadWithTimestamps };
+          }
+
+          // Adicionar itens da prescrição à subcoleção usando o batch
+          if (currentPrescriptionItems && currentPrescriptionItems.length > 0 && consultationId) {
+              const itemsCollectionRef = collection(db, `consultations/${consultationId}/consultation_prescription_items`);
+              currentPrescriptionItems.forEach((item, index) => {
+                  // Garante que o item é um objeto e não está vazio antes de salvar
+                  if (item && typeof item === 'object' && Object.keys(item).length > 0 && item.itemName?.trim()) {
+                      const cleanedItem = { ...item, order: index }; // Adiciona ordem
+                      delete cleanedItem.id; // <<< DESCOMENTAR: Remove o campo 'id' potencialmente problemático
+                      const itemDocRef = doc(itemsCollectionRef); // Novo doc para cada item
+                      batch.set(itemDocRef, cleanedItem);
+                  } else {
+                      console.warn('[saveProgressAndUpdateHistory] Item de prescrição inválido ou vazio ignorado:', item);
+                  }
+              });
+              console.log(`[saveProgressAndUpdateHistory] Preparado ${currentPrescriptionItems.filter(item => item && typeof item === 'object' && Object.keys(item).length > 0 && item.itemName?.trim()).length} itens de prescrição válidos para adicionar via batch.`);
+          }
+
+          // Commit a operação em batch
+          await batch.commit(); // <<< NOVO: Commit!
+
+          console.log("[saveProgressAndUpdateHistory] Batch commit bem-sucedido. Consulta salva/atualizada. ID:", consultationId);
+          // Atualiza estado local com os dados salvos (sem ler novamente, para performance)
+          // Nota: savedConsultationData não terá os 'prescriptionItems', pois foram para subcoleção.
+          setCurrentEpisodeData(savedConsultationData);
+          toast({ title: "Progresso Salvo", description: "Suas anotações e prescrição foram salvas com sucesso." });
+
+          // Atualizar histórico do Pet (mantido como estava)
+          // <<< Bloco de atualização do Pet.consultationHistory inalterado >>>
           try {
             const petId = interactionDataForRAG.petInfo?.id;
-            if (petId) {
+            if (petId && consultationId) { // <<< Adicionado check consultationId
               console.log(`[saveProgressAndUpdateHistory] Atualizando histórico para o pet ID: ${petId}`);
-              const currentPetData = await Pet.get(petId);
+              const currentPetData = await Pet.get(petId); // Assumindo que Pet.get funciona
               if (currentPetData) {
                  const historySummary = {
-                   consultationId: savedConsultation?.id || 'unknown-' + Date.now(), // ID mais robusto
+                   consultationId: consultationId, // <<< Usar o ID obtido do batch
                    appointmentId: interactionDataForRAG.appointmentId,
                    date: interactionDataForRAG.reportGeneratedAt,
                    serviceName: interactionDataForRAG.serviceInfo?.name || 'Serviço Desconhecido',
@@ -724,18 +848,22 @@ export default function LiveVetConsulta() {
                    chiefComplaint: interactionDataForRAG.fullTranscript?.substring(0, 50) + (interactionDataForRAG.fullTranscript?.length > 50 ? '...' : '') || 'N/A'
                  };
                  const updatedHistory = [...(currentPetData.consultationHistory || []), historySummary];
-                 const uniqueHistory = updatedHistory.filter((item, index, self) => index === self.findIndex((t) => (t.consultationId === item.consultationId)));
-                 await petService.update(petId, { consultationHistory: uniqueHistory });
+                 // Garante unicidade baseado no consultationId
+                 const uniqueHistory = Array.from(new Map(updatedHistory.map(item => [item.consultationId, item])).values());
+
+                 // Atualização do Pet fora do batch principal
+                 await Pet.update(petId, { consultationHistory: uniqueHistory });
                  console.log(`[saveProgressAndUpdateHistory] Histórico do pet ${petId} atualizado.`);
               } else { console.warn(`[saveProgressAndUpdateHistory] Pet ${petId} não encontrado.`); }
-            } else { console.warn('[saveProgressAndUpdateHistory] ID do Pet não encontrado nos dados.'); }
+            } else { console.warn('[saveProgressAndUpdateHistory] ID do Pet ou ConsultationId não encontrado nos dados para atualizar histórico.'); }
           } catch (historyError) {
              console.error("[saveProgressAndUpdateHistory] Erro ao atualizar histórico:", historyError);
              toast({ title: "Aviso", description: "Não foi possível atualizar o histórico no prontuário.", variant: "warning" });
           }
 
       } catch (err) {
-          console.error("[saveProgressAndUpdateHistory] Erro:", err);
+          console.error("[saveProgressAndUpdateHistory] Erro no batch ou operação:", err);
+          console.error("Detalhes do erro:", err); // <<< ADICIONAR ESTE LOG
           toast({ title: "Erro ao Salvar", description: `Não foi possível salvar o progresso: ${err.message}`, variant: "destructive"});
       } finally {
           setIsSaving(false);
@@ -766,10 +894,61 @@ export default function LiveVetConsulta() {
 
     try {
       // 1. Salvar dados da consulta
-      await saveProgressAndUpdateHistory(); 
+      // <<< GUARDA O RESULTADO DA CONSULTA SALVA >>>
+      const savedConsultationResult = await saveProgressAndUpdateHistory(); 
+      // <<< ADICIONADO LOG PARA VERIFICAR >>>
+      console.log("[saveConsultationDataAndComplete] Resultado de saveProgressAndUpdateHistory:", savedConsultationResult);
+      // <<< ADICIONADO CHECK PARA GARANTIR QUE TEMOS currentPrescriptionItems >>>
+      console.log("[saveConsultationDataAndComplete] Verificando currentPrescriptionItems ANTES de criar tarefas:", currentPrescriptionItems);
+
+      // <<< INÍCIO: Lógica para criar Medication Tasks >>>
+      if (currentPrescriptionItems && currentPrescriptionItems.length > 0) {
+        console.log(`[saveConsultationDataAndComplete] Encontrados ${currentPrescriptionItems.length} itens na prescrição. Verificando uso interno...`);
+        const internalItems = currentPrescriptionItems.filter(item => item.usage === 'interno');
+        console.log(`[saveConsultationDataAndComplete] ${internalItems.length} itens marcados para uso interno.`);
+
+        if (internalItems.length > 0) {
+          const taskPromises = internalItems.map(item => {
+            const taskData = {
+              tenant_id: tenant.id,
+              pet_id: pet.id,
+              appointment_id: appointment.id,
+              medication_name: item.itemName,
+              details: item.details,
+              status: 'pendente', // Status inicial
+              requires_follow_up: currentRequiresFollowUp || false, // Usa o flag geral da prescrição
+              created_at: Timestamp.now(),
+              // Adicionar outros campos relevantes se necessário (ex: ID do produto original, via, dose)
+              original_product_id: item.id || null 
+            };
+            console.log(`[saveConsultationDataAndComplete] Criando Medication Task para: ${item.itemName}`, taskData);
+            return medicationTaskService.create(taskData).catch(err => {
+               console.error(`Erro ao criar tarefa de medicação para ${item.itemName}:`, err);
+               // Retornar null ou um objeto de erro para identificar falhas
+               return { error: true, itemName: item.itemName, message: err.message }; 
+            });
+          });
+
+          const taskResults = await Promise.allSettled(taskPromises);
+          const failedTasks = taskResults.filter(result => result.status === 'rejected' || (result.status === 'fulfilled' && result.value?.error));
+
+          if (failedTasks.length > 0) {
+            console.error("[saveConsultationDataAndComplete] Falha ao criar algumas tarefas de medicação:", failedTasks);
+            toast({ 
+              title: "Aviso", 
+              description: `Não foi possível criar ${failedTasks.length} tarefa(s) de medicação interna. Verifique o console.`, 
+              variant: "warning",
+              duration: 7000
+            });
+          } else {
+            console.log("[saveConsultationDataAndComplete] Todas as tarefas de medicação interna criadas com sucesso.");
+          }
+        }
+      }
+      // <<< FIM: Lógica para criar Medication Tasks >>>
 
       // 2. Concluir o agendamento
-      console.log("[saveConsultationDataAndComplete] Concluindo agendamento:", appointment.id); 
+      console.log("[saveConsultationDataAndComplete] Concluindo agendamento:", appointment.id);
       
       const appointmentRef = doc(db, "appointments", appointment.id);
       const appointmentToUpdate = await getDoc(appointmentRef);
@@ -907,68 +1086,19 @@ export default function LiveVetConsulta() {
   };
 
   const handleSavePrescription = async (prescriptionData) => {
-    console.log("[handleSavePrescription] Salvando prescrição:", prescriptionData);
-    setIsSaving(true);
-    try {
-      // 1. Salva localmente (opcional)
-      setCurrentPrescriptionItems(prescriptionData.items);
+    console.log("Dados da prescrição recebidos no LiveVetConsulta:", prescriptionData);
 
-      // 2. Criar MedicationTasks para itens de uso interno
-      // console.log("[handleSavePrescription] Verificando items ANTES do filtro:", JSON.stringify(prescriptionData.items, null, 2)); // Remover log
-      
-      const internalMedicationItems = prescriptionData.items.filter(item => {
-        // console.log(`[handleSavePrescription] Filtrando item.usage: '${item.usage}', Comparando com: 'interno', Resultado: ${item.usage === 'interno'}`); // Remover log
-        return item.usage === 'interno'; // <<< CORRIGIDO para comparar com 'interno' (Português)
-      });
-      // console.log("[handleSavePrescription] Itens internos para criar tasks (APÓS filtro):", internalMedicationItems); // Remover log
+    // Atualiza os estados locais que serão usados em saveProgressAndUpdateHistory
+    setCurrentPrescriptionItems(prescriptionData.items || []);
+    setCurrentPrescriptionObservations(prescriptionData.observations || '');
+    setCurrentRequiresFollowUp(prescriptionData.requiresFollowUp || false);
 
-      if (internalMedicationItems.length > 0) {
-        const tenantId = localStorage.getItem('current_tenant');
-        const tasksPromises = internalMedicationItems.map(item =>
-          medicationTaskService.create({
-            tenant_id: tenantId,
-            pet_id: pet?.id,
-            appointment_id: appointmentId,
-            medication_name: item.itemName, // Corrigido para usar itemName
-            details: item.details,          // Corrigido para usar details diretamente
-            scheduled_time: new Date().toISOString(), 
-            status: 'Pendente',
-            // <<< Adicionar campos da prescrição >>>
-            observations: prescriptionData.observations,
-            requires_follow_up: prescriptionData.requiresFollowUp 
-            // <<< Fim da adição >>>
-          })
-        );
-        await Promise.all(tasksPromises);
-        console.log(`[handleSavePrescription] ${internalMedicationItems.length} MedicationTasks criadas.`);
-        
-        // <<< Atualiza os estados com dados da prescrição salva >>>
-        setCurrentPrescriptionObservations(prescriptionData.observations);
-        setCurrentRequiresFollowUp(prescriptionData.requiresFollowUp);
-
-        // <<< MARCAR O AGENDAMENTO SE NECESSITAR RETORNO >>>
-        if (prescriptionData.requiresFollowUp) {
-          try {
-            console.log(`[handleSavePrescription] Marcando agendamento ${appointmentId} como necessitando retorno de medicação.`);
-            await Appointment.update(appointmentId, { requires_medication_follow_up: true });
-          } catch (apptUpdateError) {
-            console.error(`[handleSavePrescription] Erro ao marcar retorno no agendamento ${appointmentId}:`, apptUpdateError);
-            toast({ title: "Aviso", description: "Não foi possível marcar o agendamento como necessitando retorno.", variant: "warning" });
-          }
-        }
-
-        toast({ title: "Tarefas de Medicação Criadas", description: "Itens de uso interno foram adicionados à fila.", });
-      }
-
-      toast({ title: "Prescrição Salva", description: "A prescrição foi registrada com sucesso.", });
-      setIsPrescriptionModalOpen(false);
-
-    } catch (error) {
-      console.error("[handleSavePrescription] Erro GERAL ao salvar prescrição:", error);
-      toast({ title: "Erro ao Salvar", description: `Falha ao registrar prescrição: ${error.message}`, variant: "destructive" });
-    } finally {
-      setIsSaving(false);
-    }
+    toast({
+      title: "Prescrição Pronta",
+      description: "Itens da prescrição atualizados. Clique em 'Salvar Progresso' ou 'Finalizar' para gravar.",
+    });
+     setIsPrescriptionModalOpen(false); // Fecha o modal após "salvar" no estado local
+     // Não salva no Firestore aqui diretamente, espera o saveProgressAndUpdateHistory
   };
 
   // <<< ADICIONAR useEffect para IMPRIMIR >>>
@@ -1551,16 +1681,14 @@ export default function LiveVetConsulta() {
 
         {/* <<< INÍCIO: Modal de Detalhes do Histórico >>> */}
         <Dialog open={isHistoryModalOpen} onOpenChange={setIsHistoryModalOpen}>
-          {/* <<< AUMENTAR TAMANHO DO MODAL E AJUSTAR CONTEÚDO >>> */}
-          <DialogContent className="max-w-4xl w-[95%] max-h-[90vh]"> 
+          <DialogContent className="max-w-4xl w-[95%] max-h-[90vh]">
             <DialogHeader>
               <DialogTitle>Detalhes do Episódio {selectedHistoryEpisode?.episodeNumber ? `(${selectedHistoryEpisode.episodeNumber})` : `(ID: ${selectedHistoryEpisode?.id})`}</DialogTitle>
               <DialogDescription>
                 Atendimento realizado em {selectedHistoryEpisode?.createdAt?.toDate ? format(selectedHistoryEpisode.createdAt.toDate(), 'dd/MM/yyyy HH:mm', { locale: ptBR }) : 'Data inválida'}.
               </DialogDescription>
             </DialogHeader>
-            {/* Scroll apenas no conteúdo */}
-            <div className="space-y-4 py-4 px-1 max-h-[calc(90vh-180px)] overflow-y-auto"> 
+            <div className="space-y-4 py-4 px-1 max-h-[calc(90vh-180px)] overflow-y-auto">
               {selectedHistoryEpisode ? (
                 <>
                   <p><strong>Serviço/Motivo Principal:</strong> {selectedHistoryEpisode.serviceName || selectedHistoryEpisode.reason || 'N/A'}</p>
@@ -1575,41 +1703,51 @@ export default function LiveVetConsulta() {
                     <p><strong>Tratamento / Conduta:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.treatment || selectedHistoryEpisode.treatment || 'N/A'}</p>
                     <p><strong>Diagnóstico Final Confirmado:</strong> {selectedHistoryEpisode.fullInteraction?.confirmedDiagnosis || 'Não confirmado'}</p>
                   </div>
-                  
-                  {/* Itens de Prescrição */}
-                  {(selectedHistoryEpisode.prescriptionItems && selectedHistoryEpisode.prescriptionItems.length > 0) && (
+
+                  {/* Itens de Prescrição - MODIFICADO para usar estado local e mostrar loading/erro */}
+                  <Separator />
+                  <h4 className="font-semibold text-base pt-2">Prescrição</h4>
+                  {isLoadingHistoryItems ? (
+                    <div className="flex items-center justify-center p-4">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                      <p className="ml-2 text-sm text-muted-foreground">Carregando itens...</p>
+                    </div>
+                  ) : historyItemsError ? (
+                    <p className="text-sm text-destructive pl-2">{historyItemsError}</p>
+                  ) : historyPrescriptionItems.length > 0 ? (
                     <>
-                      <Separator />
-                      <h4 className="font-semibold text-base pt-2">Prescrição</h4>
                       <ul className="list-disc space-y-1 pl-6 text-sm">
-                        {selectedHistoryEpisode.prescriptionItems.map((item, index) => (
-                          <li key={index}>
+                        {historyPrescriptionItems.map((item) => ( // <<< MODIFICADO: Usar historyPrescriptionItems
+                          <li key={item.id}> {/* <<< MODIFICADO: Usar item.id como chave */}
                             {item.itemName} ({item.details}) - Uso: {item.usage || 'N/A'}
-                            {item.observations && <span className="block text-xs text-muted-foreground">Obs: {item.observations}</span>}
+                            {item.notes && <span className="block text-xs text-muted-foreground">Obs: {item.notes}</span>} {/* <<< MODIFICADO: Usar item.notes */}
                           </li>
                         ))}
                       </ul>
-                       {selectedHistoryEpisode.prescriptionObservations && (
-                         <p className="text-sm mt-2 pl-2"><strong>Observações Gerais Prescrição:</strong> {selectedHistoryEpisode.prescriptionObservations}</p>
-                       )}
+                      {/* Observações gerais ainda vêm do episódio principal */}
+                      {selectedHistoryEpisode.prescriptionObservations && (
+                        <p className="text-sm mt-2 pl-2"><strong>Observações Gerais Prescrição:</strong> {selectedHistoryEpisode.prescriptionObservations}</p>
+                      )}
                     </>
+                  ) : (
+                    <p className="text-sm text-muted-foreground pl-2">Nenhum item de prescrição encontrado para este episódio.</p>
                   )}
-                  
-                  {/* Itens Consumidos (se registrados no histórico) */}
+                  {/* Fim da seção de Prescrição modificada */} 
+
+                  {/* Itens Consumidos (inalterado) */}
                   {(selectedHistoryEpisode.consumedItems && selectedHistoryEpisode.consumedItems.length > 0) && (
                     <>
                       <Separator />
                       <h4 className="font-semibold text-base pt-2">Itens Consumidos</h4>
                       <ul className="list-disc space-y-1 pl-6 text-sm">
                         {selectedHistoryEpisode.consumedItems.map((item, index) => (
-                          <li key={index || item.id}> 
+                          <li key={index || item.id}>
                             {item.quantity}x {item.name}
                           </li>
                         ))}
                       </ul>
                     </>
                   )}
-
                 </>
               ) : (
                 <p>Carregando detalhes...</p>

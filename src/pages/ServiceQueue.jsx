@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 // import { useNavigate } from "react-router-dom"; // Remover
-import { format, /* isBefore, isAfter, addMinutes, */ differenceInMinutes, parseISO, isSameDay } from "date-fns"; // Remover não usados
+import { format, /* isBefore, isAfter, addMinutes, */ differenceInMinutes, parseISO, /* isSameDay, */ startOfDay, endOfDay } from "date-fns"; // Remover não usados
 import { ptBR } from "date-fns/locale";
 import { QueueService, Pet, Customer, Service, Appointment, /* CancellationReason */ } from "@/api/entities"; // Remover CancellationReason
-import { db } from '@/lib/firebaseConfig'; // Importar db para onSnapshot
-import { collection, query, where, onSnapshot, Timestamp } from "firebase/firestore"; // Importar funções do Firestore
+// import { db } from '@/lib/firebaseConfig'; // <<< REMOVER db
+import { Timestamp, collection, query, where, orderBy, limit, getDocs, startAfter, endBefore } from "firebase/firestore"; // <<< ADICIONAR imports firestore
 // import { useTenant } from "@/components/tenant/TenantContext"; // Remover
 import {
   Card,
@@ -42,6 +42,7 @@ import {
   ClipboardList,
   Trophy,
   UserCheck,
+  RefreshCcw, // <<< MANTER RefreshCcw
   // Dog, // Remover
   // Cat // Remover
 } from "lucide-react";
@@ -72,29 +73,23 @@ import PetAvatar from "@/components/pets/PetAvatar";
 import RemoveFromQueueModal from '../components/queue/RemoveFromQueueModal';
 import { addRemovalReason } from '@/api/mockData';
 import { addPendingItems } from "@/api/mock/chargeableItemService";
+import { db } from "@/lib/firebaseConfig"; // <<< ADICIONAR db
+import PaginationControls from "@/components/ui/PaginationControls"; // <<< ADICIONAR PaginationControls
 // import { Checkbox } from "@/components/ui/checkbox"; // Remover
-import {
-  // Play, // Remover
-  // Pause, // Remover
-  // CheckCircle, // Remover
-  // Ban, // Remover
-  // MoreHorizontal, // Remover
-  // CalendarDays, // Remover
-  // Edit2, // Remover
-  // X, // Remover
-  // Info, // Remover
-} from "lucide-react"; // Remover bloco inteiro se vazio
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+// import { Play, Pause, CheckCircle, Ban, MoreHorizontal, CalendarDays, Edit2, X, Info, } from "lucide-react"; // <<< REMOVER Bloco Lucide não usado
+// import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"; // <<< REMOVER Tooltip (se não usado em outro lugar)
+import { AlertCircle } from "lucide-react";
 
 export default function ServiceQueue() {
   const [queueItems, setQueueItems] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [currentView, setCurrentView] = useState("list");
   const [selectedService, setSelectedService] = useState(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
-  const [filterStatus, setFilterStatus] = useState("waiting");
+  const [filterStatus, setFilterStatus] = useState("all");
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [notes, setNotes] = useState("");
   const [showAddNotesDialog, setShowAddNotesDialog] = useState(false);
@@ -102,255 +97,160 @@ export default function ServiceQueue() {
   const [itemToRemove, setItemToRemove] = useState(null);
   const { toast } = useToast();
 
-  // Define fetchQueueData FORA do useEffect para ser acessível por outros handlers
-  const fetchQueueData = async () => {
-      setIsLoading(true);
+  // <<< ESTADOS DE PAGINAÇÃO >>>
+  const [pageSize, setPageSize] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [lastVisibleDoc, setLastVisibleDoc] = useState(null);
+  const [firstVisibleDoc, setFirstVisibleDoc] = useState(null);
+  const [isLoadingPage, setIsLoadingPage] = useState(false); // Loading específico da página
+  const [sortField, setSortField] = useState('entry_time'); // Ordenar por hora de entrada?
+  const [sortDirection, setSortDirection] = useState('asc');
+  // const [totalItems, setTotalItems] = useState(0); // Opcional
+
+  const fetchQueueData = useCallback(async (direction = 'current', newPageSize = pageSize) => {
+      console.log(`[ServiceQueue Fetch] Direction: ${direction}, Size: ${newPageSize}, Page: ${currentPage}, Date: ${selectedDate.toDateString()}, Status Filter: ${filterStatus}`);
+      setIsLoadingPage(true);
+      if (direction === 'current' && newPageSize === pageSize) setIsLoading(true); // Loading inicial
+
       try {
-        const startOfDay = new Date(selectedDate);
-        startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(selectedDate);
-        endOfDay.setHours(23, 59, 59, 999);
         const currentTenant = localStorage.getItem('current_tenant');
+        if (!currentTenant) throw new Error("Tenant não identificado.");
 
-        // Busca os itens da QueueService usando .list()
-        const queueItemsFromDB = await QueueService.list({
-          // Filtro por data (ajustar se necessário para a implementação exata de .list)
-          /* 
-          appointment_date: {
-            $gte: startOfDay.toISOString(),
-            $lte: endOfDay.toISOString()
-          },
-          */
-          tenant_id: currentTenant,
-          // Pedir explicitamente os status relevantes para esta tela
-          status: ['waiting', 'scheduled', 'in_progress', 'paused', 'completed']
-        });
-        // console.log('[ServiceQueue] Itens brutos da QueueService:', queueItemsFromDB); // Comentado - Muita informação
+        const queueCollectionRef = collection(db, 'queueEntries');
+        
+        // Definir Timestamps para o início e fim do dia selecionado
+        const dayStart = startOfDay(selectedDate);
+        const dayEnd = endOfDay(selectedDate);
+        const dayStartTimestamp = Timestamp.fromDate(dayStart);
+        const dayEndTimestamp = Timestamp.fromDate(dayEnd);
+        
+        // Construir a query base
+        let conditions = [
+          where('tenant_id', '==', currentTenant),
+          where('module', '==', 'petshop'), // <<< FILTRAR APENAS PETSHOP AQUI? >>>
+          // Adicionar filtro de data (PRECISA DE ÍNDICE!)
+          // Assumindo que `appointment_date_ts` é um campo Timestamp no documento da fila
+          // Se o campo for outro (ex: `entry_time`), ajuste aqui.
+          where('entry_time_ts', '>=', dayStartTimestamp), // <<< PRECISA TER ESSE CAMPO ou similar
+          where('entry_time_ts', '<=', dayEndTimestamp)  // <<< PRECISA TER ESSE CAMPO ou similar
+        ];
 
-        // Mapeia e popula os dados corretamente
-        const populatedAppointmentsPromises = queueItemsFromDB.map(async (item) => {
-            try {
-                if (!item.pet_id || !item.customer_id || !item.service_id) { 
-                    console.warn("Item da fila com IDs faltando:", item); // Manter - Importante para dados inválidos
-                    return { 
-                        ...item, 
-                        pet: { name: "Pet Inválido" }, 
-                        customer: { full_name: "Cliente Inválido" },
-                        service: { name: "Serviço Inválido" }
-                    };
-                 }
+        // Adicionar filtro de status se não for "all"
+        if (filterStatus !== "all") {
+          conditions.push(where('status', '==', filterStatus));
+        }
+
+        let q = query(queueCollectionRef, ...conditions, orderBy(sortField, sortDirection), limit(newPageSize));
+
+        // Aplicar cursores de paginação
+        if (direction === 'next' && lastVisibleDoc) {
+          q = query(q, startAfter(lastVisibleDoc));
+        } else if (direction === 'prev' && firstVisibleDoc) {
+          // Query reversa para "previous"
+          const reversedOrderBy = sortDirection === 'asc' ? 'desc' : 'asc';
+          q = query(queueCollectionRef, ...conditions, orderBy(sortField, reversedOrderBy), endBefore(firstVisibleDoc), limit(newPageSize));
+        }
+
+        const documentSnapshots = await getDocs(q);
+        let queueDocs = documentSnapshots.docs;
+
+        if (direction === 'prev') {
+            queueDocs.reverse(); // Reverte a ordem para ficar correta
+        }
+
+        // Popular dados APENAS para os itens da página atual
+        const populatedItemsPromises = queueDocs.map(async (docSnapshot) => {
+            const item = { id: docSnapshot.id, ...docSnapshot.data() };
+             try {
+                if (!item.pet_id || !item.customer_id || !item.service_id) return null;
                  
-                // Busca os dados relacionados em paralelo, incluindo o Appointment
                 const [pet, customer, service, appointment] = await Promise.all([
-                    Pet.get(item.pet_id).catch(e => { console.error(`Erro Pet ${item.pet_id}:`, e); return null; }), // Manter erro
-                    Customer.get(item.customer_id).catch(e => { console.error(`Erro Customer ${item.customer_id}:`, e); return null; }), // Manter erro
-                    Service.get(item.service_id).catch(e => { console.error(`Erro Service ${item.service_id}:`, e); return null; }), // Manter erro
-                    // Adiciona a busca pelo Appointment usando appointment_id
-                    item.appointment_id 
-                        ? Appointment.get(item.appointment_id).catch(e => { console.error(`Erro Appointment ${item.appointment_id}:`, e); return null; }) // Manter erro
-                        : Promise.resolve(null) // Resolve para null se não houver appointment_id
+                    Pet.get(item.pet_id).catch(() => null),
+                    Customer.get(item.customer_id).catch(() => null),
+                    Service.get(item.service_id).catch(() => null),
+                    item.appointment_id ? Appointment.get(item.appointment_id).catch(() => null) : Promise.resolve(null)
                 ]);
                 
-                // Retorna o item populado, incluindo osNumber do appointment
+                if (!pet || !customer || !service) return null; // Ignora se dados essenciais falharam
+                 
                 return {
                     ...item,
-                    pet: pet || { name: "Pet não encontrado" },
-                    customer: customer || { full_name: "Cliente não encontrado" },
-                    service: service || { name: "Serviço não encontrado" },
-                    // Adiciona osNumber do appointment, se existir
-                    osNumber: appointment ? appointment.osNumber : null 
+                    pet: pet,
+                    customer: customer,
+                    service: service,
+                    osNumber: appointment ? appointment.osNumber : null,
                 };
             } catch (error) {
-                console.error("Erro ao popular item da fila:", item.id, error); // Manter erro
-                return { 
-                    ...item, 
-                    pet: { name: "Erro Pet" }, 
-                    customer: { full_name: "Erro Cliente" },
-                    service: { name: "Erro Serviço" }
-                };
+                console.error("Erro ao popular item da fila:", item.id, error);
+                return null;
             }
-        }); // Fim do .map
-
-        // Aguarda todas as promises do map serem resolvidas
-        const populatedAppointments = await Promise.all(populatedAppointmentsPromises);
-
-        // Filtrar para incluir apenas itens cujo serviço seja do módulo 'petshop'
-        const filteredPetshopAppointments = populatedAppointments.filter(item => {
-          // Verifica se o serviço foi carregado e se pertence ao módulo 'petshop'
-          // TODO: Confirmar se 'module' é o campo correto para identificar serviços de petshop
-          return item.service && item.service.module === 'petshop';
         });
+        
+        const populatedItems = (await Promise.all(populatedItemsPromises)).filter(item => item !== null);
 
-        // Log para verificar as datas antes de setar o estado (usar lista filtrada)
-        // Comentado - Muita informação para debug atual
-        // filteredPetshopAppointments.forEach(appt => {
-        //     console.log(`[ServiceQueue Debug] ID: ${appt.id}, appointment_date: ${JSON.stringify(appt.appointment_date)}, typeof: ${typeof appt.appointment_date}`);
-        // });
+        setQueueItems(populatedItems);
 
-        // Define o estado com a lista filtrada
-        setQueueItems(filteredPetshopAppointments);
+        // Atualizar cursores e página
+        const newLastVisible = queueDocs[queueDocs.length - 1];
+        const newFirstVisible = queueDocs[0];
+        setLastVisibleDoc(newLastVisible || null);
+        setFirstVisibleDoc(newFirstVisible || null);
+
+        if (direction === 'next') setCurrentPage(prev => prev + 1);
+        else if (direction === 'prev') setCurrentPage(prev => Math.max(1, prev - 1));
+        else if (direction === 'current') setCurrentPage(1); // Reset
 
       } catch (error) {
-           console.error("Erro ao carregar fila:", error); // Manter erro principal
-           toast({
-             title: "Erro",
-             description: "Não foi possível carregar a fila de atendimento.",
-             variant: "destructive"
-           });
+           console.error("Erro ao carregar fila:", error);
+            if (error.code === 'failed-precondition') {
+                setError("Erro: Índice do Firestore ausente para esta consulta/ordenação. Verifique o console para detalhes e crie o índice necessário.");
+                toast({ title: "Erro de Índice", description: "Índice do Firestore necessário para filtrar/ordenar a fila. Crie o índice indicado no console do navegador.", variant: "destructive", duration: 10000 });
+            } else {
+                setError("Não foi possível carregar a fila de atendimento.");
+                toast({ title: "Erro", description: "Não foi possível carregar a fila de atendimento.", variant: "destructive" });
+            }
+           setQueueItems([]); // Limpa em caso de erro
       } finally {
           setIsLoading(false);
+          setIsLoadingPage(false);
       }
-  };
+  }, [selectedDate, toast, pageSize, sortField, sortDirection, filterStatus, lastVisibleDoc, firstVisibleDoc, currentPage]);
 
-  // Listener em tempo real para a fila
+  // <<< useEffect para carregar na montagem E QUANDO FILTROS MUDAM >>>
   useEffect(() => {
-    setIsLoading(true);
-    const currentTenant = localStorage.getItem('current_tenant');
-    if (!currentTenant) {
-      console.error("[ServiceQueue Realtime] Tenant ID not found.");
-      setIsLoading(false);
-      setQueueItems([]);
-      toast({ title: "Erro", description: "Tenant não identificado.", variant: "destructive" });
-      return () => {}; // Retorna função vazia para cleanup
-    }
+    console.log("[ServiceQueue] Triggering initial load or filter change.");
+    // Reseta paginação antes de carregar com novos filtros
+    setLastVisibleDoc(null);
+    setFirstVisibleDoc(null);
+    setCurrentPage(1);
+    fetchQueueData('current', pageSize);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate, filterStatus, sortField, sortDirection]); // Recarrega se data, status ou ordenação mudar
 
-    console.log(`[ServiceQueue Realtime] Setting up listener for tenant: ${currentTenant}`);
-
-    // Status relevantes para buscar na fila
-    const relevantStatuses = ['waiting', 'scheduled', 'in_progress', 'paused', 'completed', 'cancelled'];
-
-    const q = query(
-      collection(db, "queueEntries"),
-      where("tenant_id", "==", currentTenant),
-      where("status", "in", relevantStatuses) // Busca todos os status relevantes de uma vez
-      // Não filtramos por data aqui, pois a data vem do Appointment relacionado
-    );
-
-    const unsubscribe = onSnapshot(q, async (querySnapshot) => {
-      console.log("[ServiceQueue Realtime] Snapshot received.");
-      const queueItemsFromDB = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-      // Lógica de Mapeamento e População (adaptada de fetchQueueData)
-      const populatedAppointmentsPromises = queueItemsFromDB.map(async (item) => {
-          try {
-              if (!item.pet_id || !item.customer_id || !item.service_id) {
-                  console.warn("Item da fila com IDs faltando (Realtime):", item);
-                  return null; // Ignorar itens inválidos completamente
-              }
-
-              const [pet, customer, service, appointment] = await Promise.all([
-                  Pet.get(item.pet_id).catch(e => { console.error(`Erro Pet ${item.pet_id}:`, e); return null; }),
-                  Customer.get(item.customer_id).catch(e => { console.error(`Erro Customer ${item.customer_id}:`, e); return null; }),
-                  Service.get(item.service_id).catch(e => { console.error(`Erro Service ${item.service_id}:`, e); return null; }),
-                  item.appointment_id
-                      ? Appointment.get(item.appointment_id).catch(e => { console.error(`Erro Appointment ${item.appointment_id}:`, e); return null; })
-                      : Promise.resolve(null)
-              ]);
-
-              // Validar se dados essenciais foram carregados
-              if (!pet || !customer || !service) {
-                 console.warn("Dados essenciais (Pet, Customer, Service) não carregados para item:", item.id);
-                 return null; // Ignorar se dados essenciais falharam
-              }
-
-              return {
-                  ...item,
-                  pet: pet,
-                  customer: customer,
-                  service: service,
-                  osNumber: appointment ? appointment.osNumber : null,
-                  // Adiciona a data do agendamento populada para filtro posterior
-                  populated_appointment_date: appointment?.start_time // Guarda o timestamp ou ISO string
-              };
-          } catch (error) {
-              console.error("Erro ao popular item da fila (Realtime):", item.id, error);
-              return null; // Ignorar itens com erro de população
-          }
-      });
-
-      const populatedItemsRaw = (await Promise.all(populatedAppointmentsPromises)).filter(item => item !== null);
-
-      // Filtrar por Módulo Petshop
-      const petshopItems = populatedItemsRaw.filter(item => item.service && item.service.module === 'petshop');
-
-      // Filtrar pela Data Selecionada (usando a data populada do agendamento)
-      const finalFilteredItems = petshopItems.filter(item => {
-         if (!item.populated_appointment_date) return false; // Ignora se não tem data do agendamento
-         try {
-             let appointmentDate;
-             if (item.populated_appointment_date instanceof Timestamp) {
-                 appointmentDate = item.populated_appointment_date.toDate();
-             } else if (typeof item.populated_appointment_date === 'string') {
-                 appointmentDate = parseISO(item.populated_appointment_date);
-             } else {
-                 return false; // Não consegue determinar a data
-             }
-             return isSameDay(appointmentDate, selectedDate);
-         } catch (dateError) {
-             console.error("Erro ao comparar datas (Realtime):", item.id, item.populated_appointment_date, dateError);
-             return false;
-      }
-      });
-
-      console.log(`[ServiceQueue Realtime] Setting ${finalFilteredItems.length} items for date ${selectedDate.toDateString()}`);
-      setQueueItems(finalFilteredItems);
-      setIsLoading(false); // Desativa o loading após o primeiro processamento bem-sucedido
-
-    }, (error) => { // Tratamento de erro do listener
-      console.error("[ServiceQueue Realtime] Listener error:", error);
-      setIsLoading(false);
-      setQueueItems([]);
-      toast({ title: "Erro de Conexão", description: "Falha ao carregar atualizações da fila.", variant: "destructive" });
-    });
-
-    // Função de cleanup para remover o listener
-    return () => {
-        console.log("[ServiceQueue Realtime] Cleaning up listener.");
-        unsubscribe();
-    };
-  }, [selectedDate, toast]);
-
-  /* // Remover função checkUpcomingServices não usada
-  const checkUpcomingServices = () => {
-    const now = new Date();
-    const soon = addMinutes(now, 15);
-    
-    const upcomingSoon = queueItems.filter(item => {
-      const appointmentTime = new Date(item.appointment_date);
-      return item.status === "scheduled" && 
-             isAfter(appointmentTime, now) && 
-             isBefore(appointmentTime, soon);
-    });
-    
-    if (upcomingSoon.length > 0) {
-      upcomingSoon.forEach(item => {
-        toast({
-          title: "Serviço em breve",
-          description: `${item.pet?.name} está agendado para ${format(new Date(item.appointment_date), "HH:mm")}`,
-          duration: 5000
-        });
-      });
-    }
-    
-    const delayed = queueItems.filter(item => {
-      const appointmentTime = new Date(item.appointment_date);
-      const tenMinutesAgo = addMinutes(now, -10);
-      return item.status === "scheduled" && 
-             isBefore(appointmentTime, tenMinutesAgo);
-    });
-    
-    if (delayed.length > 0) {
-      delayed.forEach(item => {
-        toast({
-          title: "Atendimento atrasado",
-          description: `${item.pet?.name} está aguardando há mais de 10 minutos`,
-          variant: "destructive",
-          duration: 5000
-        });
-      });
-    }
+  // <<< FUNÇÕES HANDLER PARA PAGINAÇÃO >>>
+  const handlePageChange = (direction) => {
+    fetchQueueData(direction, pageSize);
   };
-  */
+
+  const handlePageSizeChange = (newPageSize) => {
+    setPageSize(newPageSize);
+    // Reseta para a primeira página ao mudar o tamanho
+    setLastVisibleDoc(null); 
+    setFirstVisibleDoc(null);
+    setCurrentPage(1);
+    fetchQueueData('current', newPageSize); 
+  };
+
+  // <<< ADICIONAR HANDLER PARA ORDENAÇÃO (Exemplo) >>>
+  const handleSort = (field) => {
+      if (sortField === field) {
+        setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+      } else {
+        setSortField(field);
+        setSortDirection('asc');
+      }
+      // O useEffect [selectedDate, filterStatus, sortField, sortDirection] vai recarregar
+  };
 
   const handleStatusChange = async (itemId, newStatus, additionalData = {}) => {
     // console.log(`[handleStatusChange] ID: ${itemId}, Novo Status: ${newStatus}`); // Comentado - Informativo
@@ -481,7 +381,7 @@ export default function ServiceQueue() {
         });
       }
       
-      fetchQueueData();
+      fetchQueueData('current', pageSize);
     } catch (error) {
       console.error("Erro ao atualizar status:", error); // Manter erro principal
       toast({
@@ -514,7 +414,7 @@ export default function ServiceQueue() {
         description: "As observações foram salvas com sucesso!"
       });
       setShowAddNotesDialog(false);
-      fetchQueueData();
+      fetchQueueData('current', pageSize);
     } catch (error) {
       console.error("Erro ao salvar observações:", error); // Manter erro principal
       toast({
@@ -657,7 +557,7 @@ export default function ServiceQueue() {
         description: `O atendimento de ${itemToRemove.pet?.name || 'Pet'} foi removido da fila.`
       });
       
-      fetchQueueData();
+      fetchQueueData('current', pageSize);
       handleCloseRemoveModal();
       
     } catch (error) {
@@ -674,6 +574,16 @@ export default function ServiceQueue() {
     return (
       <div className="flex justify-center items-center h-full p-8">
         <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+      </div>
+    );
+  }
+
+  // <<< ADICIONAR RENDERIZAÇÃO DE ERRO >>>
+  if (error) {
+    return (
+      <div className="flex justify-center items-center h-full p-8 text-red-600">
+        <AlertCircle className="h-6 w-6 mr-2" />
+        <span>{error}</span>
       </div>
     );
   }
@@ -725,6 +635,23 @@ export default function ServiceQueue() {
                   />
                 </PopoverContent>
               </Popover>
+              <div className="flex items-center gap-2 ml-2">
+                 <span className="text-sm text-muted-foreground hidden md:inline">
+                    Não encontrou? Atualize a lista.
+                 </span>
+                 <Button 
+                    variant="outline" 
+                    size="icon" 
+                    onClick={() => {
+                      console.log("[ServiceQueue] Refresh button clicked. Calling debouncedFetchData...");
+                      fetchQueueData('current', pageSize);
+                    }}
+                    disabled={isLoadingPage}
+                 >
+                    <RefreshCcw className={`h-4 w-4 ${isLoadingPage ? 'animate-spin' : ''}`} />
+                    <span className="sr-only">Atualizar Lista</span>
+                 </Button>
+               </div>
             </div>
           </div>
 
@@ -761,21 +688,23 @@ export default function ServiceQueue() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[100px]">Horário</TableHead>
-                        <TableHead>Pet</TableHead>
+                        <TableHead><button onClick={() => handleSort('entry_time')}>Horário</button></TableHead>
+                        <TableHead><button onClick={() => handleSort('pet.name')}>Pet</button></TableHead>
                         <TableHead>OS</TableHead>
-                        <TableHead>Cliente</TableHead>
-                        <TableHead>Serviço</TableHead>
-                        <TableHead>Status</TableHead>
+                        <TableHead><button onClick={() => handleSort('customer.full_name')}>Cliente</button></TableHead>
+                        <TableHead><button onClick={() => handleSort('service.name')}>Serviço</button></TableHead>
+                        <TableHead><button onClick={() => handleSort('status')}>Status</button></TableHead>
                         <TableHead>Tempo</TableHead>
                         <TableHead className="text-right">Ações</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredItems.length === 0 ? (
+                      {isLoadingPage ? (
+                         <TableRow><TableCell colSpan={8} className="text-center py-8"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+                      ) : filteredItems.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={8} className="text-center py-8 text-gray-500">
-                            Nenhum atendimento encontrado com os filtros selecionados.
+                            {queueItems.length === 0 ? 'Nenhum atendimento para esta data/filtros.' : 'Nenhum atendimento encontrado com o termo de busca nesta página.'}
                           </TableCell>
                         </TableRow>
                       ) : (
@@ -853,6 +782,16 @@ export default function ServiceQueue() {
                     </TableBody>
                   </Table>
                 </div>
+                <PaginationControls 
+                   currentPage={currentPage}
+                   pageSize={pageSize}
+                   hasNextPage={queueItems.length === pageSize}
+                   hasPreviousPage={currentPage > 1}
+                   itemCountOnPage={queueItems.length}
+                   onPageChange={handlePageChange}
+                   onPageSizeChange={handlePageSizeChange}
+                   isLoading={isLoadingPage}
+                />
               </CardContent>
             </Card>
           </TabsContent>

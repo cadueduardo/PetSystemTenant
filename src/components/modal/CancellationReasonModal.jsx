@@ -22,12 +22,13 @@ import { collection, query, getDocs, orderBy } from 'firebase/firestore';
 import { db, functions } from '@/lib/firebaseConfig';
 import { useTenant } from '@/components/tenant/TenantContext';
 import { httpsCallable } from "firebase/functions";
+import PropTypes from 'prop-types';
 
 // Props esperadas:
 // - isOpen: boolean
 // - onClose: () => void
-// - onConfirm: (originalItemId: string, originalDocumentId: string, reason: string) => Promise<void>
-// - item: { cartItemId: string, id: string, name: string, originalDocumentId: string, ... } (Objeto do item do carrinho com id original)
+// - onConfirm: (reason: string) => Promise<void>
+// - item: { cartItemId: string, id: string, name: string, originalDocumentId: string, parentChargeId: string | null, ... } (Objeto do item do carrinho)
 export default function CancellationReasonModal({ isOpen, onClose, onConfirm, item }) {
   const { currentTenant } = useTenant();
   const [reasonsList, setReasonsList] = useState([]);
@@ -63,7 +64,7 @@ export default function CancellationReasonModal({ isOpen, onClose, onConfirm, it
         { id: 'other', reasonText: 'Outros...' }
       ];
       const combined = [...standardOptions, ...fetchedReasons.map(r => ({ id: r.id, reasonText: r.reasonText }))];
-      const uniqueReasons = Array.from(new Map(combined.map(item => [item.reasonText, item])).values());
+      const uniqueReasons = combined;
 
       setReasonsList(uniqueReasons);
     } catch (error) {
@@ -135,8 +136,8 @@ export default function CancellationReasonModal({ isOpen, onClose, onConfirm, it
         await saveOtherReason(reasonToAdd);
       }
 
-      console.log(`[CancellationReasonModal] Chamando onConfirm com: item.id=${item.id}, originalDocumentId=${item.originalDocumentId}, reason="${finalReason}"`);
-      await onConfirm(item.id, item.originalDocumentId, finalReason);
+      console.log(`[CancellationReasonModal] Chamando onConfirm com a razão: "${finalReason}"`);
+      await onConfirm(finalReason);
       
       setSelectedReason('');
       setOtherReasonText('');
@@ -176,7 +177,7 @@ export default function CancellationReasonModal({ isOpen, onClose, onConfirm, it
         <DialogHeader>
           <DialogTitle>Cancelar Item da Cobrança</DialogTitle>
           <DialogDescription>
-            Insira um motivo para remover o item <strong>"{item.name}"</strong> da cobrança original. Esta ação não pode ser desfeita facilmente.
+            Insira um motivo para remover o item <strong>&apos;{item?.name || 'Selecionado'}&apos;</strong> da cobrança original. Esta ação não pode ser desfeita facilmente.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
@@ -237,4 +238,17 @@ export default function CancellationReasonModal({ isOpen, onClose, onConfirm, it
       </DialogContent>
     </Dialog>
   );
-} 
+}
+
+CancellationReasonModal.propTypes = {
+  isOpen: PropTypes.bool.isRequired,
+  onClose: PropTypes.func.isRequired,
+  onConfirm: PropTypes.func.isRequired,
+  item: PropTypes.shape({
+    cartItemId: PropTypes.string,
+    id: PropTypes.string,
+    name: PropTypes.string,
+    originalDocumentId: PropTypes.string,
+    parentChargeId: PropTypes.string,
+  }),
+}; 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Product, /* Service, */ Customer, Pet } from "@/api/entities";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,8 @@ import {
   X,
   User,
   ShoppingBag, // Adicionar ícone para continuar comprando
-  Badge
+  Badge,
+  RefreshCcw
 } from "lucide-react";
 import CustomerDialog from "../components/sales/CustomerDialog"; 
 import ProductForm from "../components/products/ProductForm"; 
@@ -23,22 +24,30 @@ import PaymentDialog from "../components/sales/PaymentDialog";
 // import { addRemovalReason } from '@/api/mockData'; // <<< REMOVER IMPORT MOCK
 
 // TODO: Importar funções e tipos do Firestore quando implementar a busca real de 'charges'
-// import { collection, query, where, onSnapshot, Timestamp, doc, getDoc } from 'firebase/firestore'; // <<< DESCOMENTAR IMPORTS FIRESTORE
-import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore'; // <<< MANTER APENAS OS USADOS AQUI
+import { collection, query, where, /* onSnapshot, */ /* Timestamp, */ doc, getDoc, getDocs, orderBy, deleteDoc } from 'firebase/firestore'; // <<< REMOVER onSnapshot e Timestamp >>>
 import { db } from '@/lib/firebaseConfig'; // <<< DESCOMENTAR IMPORT DB
 import { useTenant } from '@/components/tenant/TenantContext'; // <<< DESCOMENTAR IMPORT
 // <<< Remover imports de Dialog se não usados diretamente aqui (estão nos componentes filhos?) >>>
-// import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import QuickSaleModal from "../components/sales/QuickSaleModal";
 // <<< IMPORTAR MODAL DE CANCELAMENTO >>>
 import CancellationReasonModal from '@/components/modal/CancellationReasonModal'; 
 // Importar httpsCallable e functions
 import { httpsCallable } from "firebase/functions";
 import { functions } from "@/lib/firebaseConfig"; 
-// <<< IMPORTAR doc, getDoc do Firestore SDK >>>
-import { doc, getDoc } from 'firebase/firestore'; 
-// <<< IMPORTAR UUID >>>
 import { v4 as uuidv4 } from 'uuid'; 
+
+// <<< ADICIONAR Função Debounce >>>
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
 
 export default function CashierPage() { 
   const navigate = useNavigate();
@@ -79,135 +88,32 @@ export default function CashierPage() {
   const [itemToCancel, setItemToCancel] = useState(null);
   // <<< FIM ESTADOS MODAL >>>
 
+  // <<< NOVO ESTADO PARA IDs de OS carregadas >>>
+  const [currentLoadedOsIds, setCurrentLoadedOsIds] = useState([]);
+
+  // <<< Definir constante Debounce >>>
+  const DEBOUNCE_DELAY = 1500; // 1.5 segundos
+
   useEffect(() => {
-    // <<< Só carregar produtos/serviços se o tenant estiver carregado e existir >>>
     if (!isLoadingTenant && currentTenant?.id) {
-       loadProductsAndServices(); 
+       loadProductsAndServices();
     } else if (!isLoadingTenant && !currentTenant) {
-        // Se terminou de carregar e não tem tenant, limpa e para loading de produtos
         console.warn("[CashierPage] Tenant não carregado ou inexistente após carregamento do contexto. Não é possível carregar produtos/serviços.");
         setProducts([]);
-        setIsLoadingProducts(false); // <<< Parar loading de produtos aqui >>>
+        setIsLoadingProducts(false);
     }
-  }, [isLoadingTenant, currentTenant]); // <<< Depender de isLoadingTenant também >>>
+  }, [isLoadingTenant, currentTenant]);
 
+  // <<< REMOVIDO: useEffect com onSnapshot >>>
+  /*
   useEffect(() => {
     let unsubscribeCharges = () => {};
-    let unsubscribeOrderServices = () => {}; // <<< Novo unsub para OS >>>
+    let unsubscribeOrderServices = () => {};
 
     if (!isLoadingTenant && currentTenant?.id) {
-      const tenantId = currentTenant.id;
-      console.log(`[CashierPage] Tenant ${tenantId} carregado. Configurando listeners para itens pendentes...`);
-      setIsLoadingPendingItems(true);
-      
-      // --- Listener 1: Charges Pendentes --- 
-      const chargesQuery = query(
-        collection(db, 'tenants', tenantId, 'charges'), 
-        where('status', 'in', ['pending', 'partially_paid']),
-        orderBy('createdAt', 'asc') // <<< ORDENAR POR CRIAÇÃO >>>
-      );
-
-      // --- Listener 2: Order Services Pendentes no Caixa --- 
-      const osQuery = query(
-        collection(db, 'tenants', tenantId, 'order_services'),
-        where('status', '==', 'pending_cashier'), // <<< FILTRAR PELO STATUS CORRETO >>>
-        orderBy('createdAt', 'asc')
-      );
-
-      let chargesData = [];
-      let osData = [];
-      let combinedError = null;
-
-      const processCombinedData = () => {
-        if (combinedError) {
-            console.error("[CashierPage] Erro em um dos listeners:", combinedError);
-            toast({ title: "Erro", description: "Falha ao buscar alguns itens pendentes.", variant: "destructive" });
-            setPendingItems([]);
-            setIsLoadingPendingItems(false);
-            return;
-        }
-        
-        // Mapear charges para formato comum
-        const formattedCharges = chargesData.map(charge => ({
-            ...charge,
-            itemType: 'charge', 
-            customerId: charge.tutorId, // Padronizar para customerId
-            totalAmount: charge.totalAmount || 0, // Garantir valor
-        }));
-        
-        // Mapear OS para formato comum
-        const formattedOs = osData.map(os => ({
-            ...os, 
-            itemType: 'order_service',
-            tutorId: os.customerId, // Mapear customerId para tutorId se necessário no agrupamento?
-            totalAmount: os.totalValue || 0, // Padronizar para totalAmount
-            // Adicionar outros campos se necessário (pet, etc)
-        }));
-        
-        // Combinar e ordenar (já ordenado pelas queries, mas pode re-ordenar se necessário)
-        const combinedItems = [...formattedCharges, ...formattedOs];
-        combinedItems.sort((a, b) => {
-            const timeA = a.createdAt?.seconds ?? 0;
-            const timeB = b.createdAt?.seconds ?? 0;
-            return timeA - timeB; // Mais antigo primeiro
-        });
-        
-        console.log("[CashierPage] Itens pendentes COMBINADOS e ORDENADOS:", combinedItems);
-        setPendingItems(combinedItems);
-        setIsLoadingPendingItems(false);
-      };
-
-      // Iniciar listener de Charges
-      unsubscribeCharges = onSnapshot(chargesQuery, async (snapshot) => {
-        console.log(`[CashierPage / Charges Listener] Snapshot recebido (size: ${snapshot.size}).`);
-        const fetchedCharges = await Promise.all(snapshot.docs.map(async (docSnapshot) => {
-          const charge = { id: docSnapshot.id, ...docSnapshot.data() };
-          let customer = null, pet = null;
-          try {
-            if (charge.tutorId) customer = await Customer.get(charge.tutorId);
-            if (charge.petId) pet = await Pet.get(charge.petId);
-          } catch (err) { console.error(`Erro ao buscar cliente/pet para charge ${charge.id}`, err); }
-          return { ...charge, customer, pet };
-        }));
-        chargesData = fetchedCharges; // Atualiza dados das charges
-        processCombinedData(); // Processa e atualiza estado combinado
-      }, (error) => {
-        console.error("[CashierPage / Charges Listener] Erro:", error);
-        combinedError = error; // Guarda o erro
-        processCombinedData(); // Processa mesmo com erro para mostrar o que conseguiu
-      });
-
-      // Iniciar listener de Order Services
-      unsubscribeOrderServices = onSnapshot(osQuery, async (snapshot) => {
-        console.log(`[CashierPage / OS Listener] Snapshot recebido (size: ${snapshot.size}).`);
-        const fetchedOs = await Promise.all(snapshot.docs.map(async (docSnapshot) => {
-          const os = { id: docSnapshot.id, ...docSnapshot.data() };
-          let customer = null, pet = null;
-          try {
-            if (os.customerId) customer = await Customer.get(os.customerId);
-            if (os.petId) pet = await Pet.get(os.petId);
-          } catch (err) { console.error(`Erro ao buscar cliente/pet para OS ${os.id}`, err); }
-          return { ...os, customer, pet };
-        }));
-        osData = fetchedOs; // Atualiza dados das OS
-        processCombinedData(); // Processa e atualiza estado combinado
-      }, (error) => {
-        console.error("[CashierPage / OS Listener] Erro:", error);
-        combinedError = error; // Guarda o erro
-        processCombinedData(); // Processa mesmo com erro para mostrar o que conseguiu
-      });
-
-    } else if (!isLoadingTenant && !currentTenant) {
-       console.warn("[CashierPage] Tenant não carregado. Não é possível buscar itens pendentes.");
-       setIsLoadingPendingItems(false); 
-       setPendingItems([]); 
-    } else if (isLoadingTenant) {
-        console.log("[CashierPage] Aguardando TenantContext carregar...");
-        setIsLoadingPendingItems(true);
-        setPendingItems([]);
+       // ... lógica onSnapshot ...
     }
     
-    // Função de limpeza: desinscrever ambos os listeners
     return () => {
         console.log("[CashierPage] Limpando listeners de charges e OS.");
         unsubscribeCharges();
@@ -215,23 +121,161 @@ export default function CashierPage() {
     };
 
   }, [isLoadingTenant, currentTenant]);
-
-  // <<< DEBUG: Adicionar useEffect para monitorar isAnonymousSaleActive >>>
-  useEffect(() => {
-    console.log(`[CashierPage DEBUG] isAnonymousSaleActive state changed to: ${isAnonymousSaleActive}`);
-  }, [isAnonymousSaleActive]);
-  // <<< FIM DEBUG >>>
-
-  // <<< Remover useEffect que filtrava produtos (não necessário mais aqui) >>>
-  /* 
-  useEffect(() => {
-    setFilteredProducts(
-      products.filter((product) =>
-        product.name.toLowerCase().includes(searchTerm.toLowerCase())
-      )
-    );
-  }, [products, searchTerm]);
   */
+  
+  // <<< NOVA FUNÇÃO fetchPendingItems >>>
+  const fetchPendingItems = useCallback(async () => {
+      if (!currentTenant?.id) {
+          console.log("[fetchPendingItems] Abortado: Tenant ID não disponível.");
+          setIsLoadingPendingItems(false); // Garantir que o loading pare se não houver tenant
+          setPendingItems([]); // Limpar itens
+          return []; // <<< RETORNAR ARRAY VAZIO EM CASO DE ERRO >>>
+      }
+      
+      const tenantId = currentTenant.id;
+      console.log(`[fetchPendingItems] Iniciando busca para tenant ${tenantId}...`);
+      setIsLoadingPendingItems(true);
+      setPendingItems([]); // Limpar antes de buscar
+      
+      try {
+          // --- Query 1: Charges Pendentes ---
+          const chargesQuery = query(
+              collection(db, 'tenants', tenantId, 'charges'),
+              where('status', 'in', ['pending', 'partially_paid']),
+              orderBy('createdAt', 'asc')
+          );
+          const chargesSnapshot = await getDocs(chargesQuery);
+          console.log(`[fetchPendingItems] Charges encontradas: ${chargesSnapshot.size}`);
+          const chargesData = await Promise.all(chargesSnapshot.docs.map(async (docSnapshot) => {
+              const charge = { id: docSnapshot.id, ...docSnapshot.data() };
+              let customer = null, pet = null;
+              // <<< INÍCIO: Buscar Itens da Subcoleção >>>
+              let chargeItemsData = [];
+              try {
+                  const itemsCollectionRef = collection(db, 'tenants', tenantId, 'charges', charge.id, 'charge_items');
+                  const itemsSnapshot = await getDocs(itemsCollectionRef);
+                  chargeItemsData = itemsSnapshot.docs.map(itemDoc => ({
+                      // Incluir o ID do DOCUMENTO do item, crucial para cancelamento
+                      chargeItemDocId: itemDoc.id, 
+                      ...itemDoc.data() 
+                  }));
+                  console.log(`[fetchPendingItems] Charge ${charge.id}: Found ${chargeItemsData.length} items in subcollection.`);
+              } catch (itemsError) {
+                  console.error(`Erro ao buscar itens para charge ${charge.id}`, itemsError);
+                  // Continuar mesmo se itens falharem? Ou tratar o erro? Decidi continuar.
+              }
+              // <<< FIM: Buscar Itens da Subcoleção >>>
+
+              try {
+                  if (charge.tutorId) customer = await Customer.get(charge.tutorId);
+                  if (charge.petId) pet = await Pet.get(charge.petId);
+              } catch (err) { console.error(`Erro ao buscar cliente/pet para charge ${charge.id}`, err); }
+              return { 
+                  ...charge, 
+                  // <<< SUBSTITUIR items antigos pelos da subcoleção >>>
+                  items: chargeItemsData, // Armazenar os itens buscados aqui
+                  customer, 
+                  pet,
+                  itemType: 'charge',
+                  customerId: charge.tutorId, // Padronizar
+                  // <<< O totalAmount agora é lido direto da charge pai (atualizado pelo backend) >>>
+                  totalAmount: charge.totalAmount || 0, 
+              };
+          }));
+          
+          // --- Query 2: Order Services Pendentes no Caixa ---
+          const osQuery = query(
+              collection(db, 'tenants', tenantId, 'order_services'),
+              where('status', '==', 'pending_cashier'),
+              orderBy('createdAt', 'asc')
+          );
+          const osSnapshot = await getDocs(osQuery);
+          console.log(`[fetchPendingItems] OS Pendentes no Caixa encontradas: ${osSnapshot.size}`);
+          const osData = await Promise.all(osSnapshot.docs.map(async (docSnapshot) => {
+              const os = { id: docSnapshot.id, ...docSnapshot.data() };
+              let customer = null;
+
+              // <<< INÍCIO: Buscar itens da subcoleção os_items >>>
+              let osItemsData = [];
+              try {
+                  const itemsCollectionRef = collection(db, 'tenants', tenantId, 'order_services', os.id, 'os_items');
+                  const itemsSnapshot = await getDocs(itemsCollectionRef);
+                  osItemsData = itemsSnapshot.docs.map(itemDoc => ({ 
+                      osItemId: itemDoc.id, // Guardar ID do documento do item
+                      ...itemDoc.data() 
+                  }));
+                  console.log(`[fetchPendingItems] OS ${os.id} - Itens da subcoleção (${osItemsData.length}):`, osItemsData);
+              } catch (err) {
+                  console.error(`[fetchPendingItems] Erro ao buscar itens da subcoleção para OS ${os.id}:`, err);
+                  // Continuar mesmo se falhar em buscar itens?
+              }
+              // <<< FIM: Buscar itens da subcoleção os_items >>>
+
+              if (os.customerId) {
+                try {
+                  const customerDocRef = doc(db, 'tenants', tenantId, 'customers', os.customerId);
+                  const customerDoc = await getDoc(customerDocRef);
+                  if (customerDoc.exists()) {
+                    customer = { id: customerDoc.id, ...customerDoc.data() };
+                  }
+                } catch (err) {
+                  console.error(`[fetchPendingItems] Erro ao buscar cliente ${os.customerId} para OS ${os.id}:`, err);
+                }
+              }
+              // <<< INÍCIO: Calcular Total da OS a partir dos itens >>>
+              const calculatedOsTotal = osItemsData.reduce((sum, item) => sum + (item.totalPrice || 0), 0);
+              // <<< FIM: Calcular Total da OS >>>
+              
+              // <<< Incluir itens da subcoleção e TOTAL CALCULADO no objeto retornado >>>
+              return { 
+                  ...os, 
+                  customer, 
+                  items: osItemsData, 
+                  itemType: 'order_service', 
+                  // <<< USAR TOTAL CALCULADO >>>
+                  totalAmount: calculatedOsTotal 
+              }; 
+          }));
+
+          // Combinar e ordenar
+          const combinedItems = [...chargesData, ...osData];
+          combinedItems.sort((a, b) => {
+              const timeA = a.createdAt?.seconds ?? 0;
+              const timeB = b.createdAt?.seconds ?? 0;
+              return timeA - timeB; // Mais antigo primeiro
+          });
+
+          console.log("[fetchPendingItems] Itens pendentes COMBINADOS e ORDENADOS:", combinedItems);
+          setPendingItems(combinedItems);
+          return combinedItems; // <<< RETORNAR A LISTA COMBINADA >>>
+
+      } catch (error) {
+          console.error("[fetchPendingItems] Erro ao buscar itens pendentes:", error);
+          toast({ title: "Erro", description: "Falha ao buscar itens pendentes.", variant: "destructive" });
+          setPendingItems([]); // Limpar em caso de erro
+          setIsLoadingPendingItems(false);
+          return []; // <<< RETORNAR ARRAY VAZIO EM CASO DE ERRO >>>
+      } finally {
+          setIsLoadingPendingItems(false); // <<< MOVIDO PARA FINALLY >>>
+      }
+  }, [currentTenant]); // <<< REMOVIDO setPendingItems, setIsLoadingPendingItems da lista de dependências (se estiverem lá) >>>
+
+  // <<< NOVO useEffect para chamar fetchPendingItems na montagem >>>
+  useEffect(() => {
+    if (!isLoadingTenant && currentTenant?.id) {
+        console.log("[CashierPage Mount] Tenant carregado, chamando fetchPendingItems pela primeira vez.");
+        fetchPendingItems();
+    } else {
+        console.log("[CashierPage Mount] Aguardando tenant carregar ou tenant não encontrado.");
+        // Garante que o estado inicial de loading esteja correto se não houver tenant
+        if (!isLoadingTenant && !currentTenant) {
+            setIsLoadingPendingItems(false);
+            setPendingItems([]);
+        }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoadingTenant, currentTenant]); // <<< Depender SÓ de isLoadingTenant e currentTenant para rodar quando o tenant mudar/carregar >>>
+  // Não incluir fetchPendingItems aqui para evitar loop se ele se recriar
 
   const loadProductsAndServices = async () => {
     // <<< Usar isLoadingProducts aqui >>>
@@ -240,9 +284,10 @@ export default function CashierPage() {
       // <<< A verificação do tenant já acontece antes de chamar esta função agora >>>
       // if (!currentTenant?.id) { ... } // REMOVIDO
       console.log(`[CashierPage] Carregando produtos para o tenant: ${currentTenant.id}`);
-      const productsData = await Product.getAllByTenant(currentTenant.id);
-      console.log("[CashierPage] Produtos carregados:", productsData);
-      setProducts(productsData || []);
+      const productsResponse = await Product.getAllByTenant(currentTenant.id); // RENAMED to productsResponse
+      // console.log("[CashierPage] Produtos carregados:", productsData); // Log anterior
+      console.log("[CashierPage] Resposta de Produtos:", productsResponse); // Log da resposta completa
+      setProducts(productsResponse.products || []); // CORRECTED: Extract products array
     } catch (error) {
       console.error("Erro ao carregar produtos:", error);
       toast({ title: "Erro", description: "Não foi possível carregar produtos.", variant: "destructive"});
@@ -385,6 +430,8 @@ export default function CashierPage() {
     setActiveContinuedOsId(null); // <<< Limpar OS ativa >>>
     setShowPaymentDialog(false);
     toast({ title: "Sucesso", description: "Pagamento registrado." });
+    // <<< ADICIONADO: Chamar fetch para atualizar a lista de pendentes >>>
+    fetchPendingItems(); 
   };
 
   // <<< Ajustar handleNewAnonymousOrder para ABRIR O MODAL >>>
@@ -421,79 +468,184 @@ export default function CashierPage() {
   };
 
   // <<< RENOMEADO E ADAPTADO: Função para carregar itens PENDENTES (charges e OS) no carrinho >>>
-  const handleLoadCustomerItemsToCart = (itemsToLoad) => {
-    if (!itemsToLoad || itemsToLoad.length === 0) {
-      console.warn("[CashierPage] Tentativa de carregar itens vazios.");
-      return;
-    }
-    console.log(`[CashierPage] Carregando ${itemsToLoad.length} itens pendentes para o carrinho...`, itemsToLoad.map(i => `${i.itemType}:${i.id}`));
+  const handleLoadCustomerItemsToCart = async (itemsToLoadFromState) => {
+    // <<< TODO: Adicionar consulta final getDocs aqui >>>
+    const firstItemFromState = itemsToLoadFromState?.[0];
+    const customerId = firstItemFromState?.customerId || firstItemFromState?.tutorId;
 
-    // 1. Limpar estado anterior (igual antes)
+    if (!customerId) {
+       console.error("[handleLoadCustomerItemsToCart] ID do cliente não encontrado nos itens do estado!");
+       toast({ title: "Erro", description: "Não foi possível identificar o cliente para buscar os dados mais recentes.", variant: "destructive"});
+       return;
+     }
+     
+     console.log(`[handleLoadCustomerItemsToCart] Iniciando. Buscando dados frescos para cliente ${customerId}...`);
+     setIsLoadingPendingItems(true); // <<< Mostrar loading durante a busca final >>>
+
+     let freshItems = [];
+     try {
+       // --- Consulta Final Charges ---
+       const freshChargesQuery = query(
+          collection(db, 'tenants', currentTenant.id, 'charges'),
+          where('tutorId', '==', customerId), // <<< FILTRO PELO CLIENTE >>>
+          where('status', 'in', ['pending', 'partially_paid'])
+       );
+       const freshChargesSnap = await getDocs(freshChargesQuery);
+       const freshChargesData = freshChargesSnap.docs.map(d => ({ id: d.id, ...d.data(), itemType: 'charge' }));
+       
+       // --- Consulta Final OS ---
+       const freshOsQuery = query(
+          collection(db, 'tenants', currentTenant.id, 'order_services'),
+          where('customerId', '==', customerId), // <<< FILTRO PELO CLIENTE >>>
+          where('status', '==', 'pending_cashier')
+       );
+       const freshOsSnap = await getDocs(freshOsQuery);
+       const freshOsData = freshOsSnap.docs.map(d => ({ id: d.id, ...d.data(), itemType: 'order_service' }));
+       
+       freshItems = [...freshChargesData, ...freshOsData];
+       console.log(`[handleLoadCustomerItemsToCart] Dados frescos encontrados para ${customerId}:`, freshItems);
+
+       if (freshItems.length === 0) {
+          console.warn(`[handleLoadCustomerItemsToCart] Nenhum item pendente encontrado para ${customerId} na busca final. O estado pode estar inconsistente ou o pagamento já ocorreu.`);
+          toast({ title: "Aviso", description: "Nenhum item pendente encontrado para este cliente.", variant: "warning"});
+          handleDeselectCustomerOrCharge(); // Limpar seleção atual
+          setIsLoadingPendingItems(false); // Parar loading
+          // Possivelmente chamar fetchPendingItems() para atualizar a lista geral?
+          await fetchPendingItems(); // <<< Tentar atualizar a lista geral >>>
+          return; // Abortar o carregamento no carrinho
+        }
+
+     } catch (finalQueryError) {
+        console.error(`[handleLoadCustomerItemsToCart] Erro ao buscar dados frescos para ${customerId}:`, finalQueryError);
+        toast({ title: "Erro", description: "Não foi possível verificar os itens pendentes mais recentes.", variant: "destructive"});
+        setIsLoadingPendingItems(false); // Parar loading
+        return; // Abortar
+     }
+
+    // <<< USAR freshItems (os dados frescos) em vez de itemsToLoadFromState daqui em diante >>>
+    console.log(`[handleLoadCustomerItemsToCart] Carregando ${freshItems.length} itens FRESCOS para o carrinho...`);
+
+    // 1. Limpar estado anterior (mantido)
     setCart([]);
     setSelectedCustomer(null);
-    setCurrentLoadedChargeId(null); // Ainda limpar o singular?
-    setCurrentLoadedChargeIds([]); // Limpar o array de IDs
+    setCurrentLoadedChargeId(null);
+    setCurrentLoadedChargeIds([]);
+    setCurrentLoadedOsIds([]); // <<< Limpar OS IDs também >>>
+    setActiveContinuedOsId(null);
     setIsAnonymousSaleActive(false);
-    setActiveContinuedOsId(null); // Garantir que nenhuma OS de caixa está ativa
 
     try {
-      // 2. Obter cliente (da primeira charge, igual antes)
-      const firstItem = itemsToLoad[0];
-      const customer = firstItem?.customer;
-
-      if (!customer && (firstItem?.customerId || firstItem?.tutorId)) {
-          console.warn(`[CashierPage] Cliente não pré-carregado para ${firstItem?.customerId || firstItem?.tutorId}.`);
+      // 2. Obter cliente (tentar popular novamente com base nos dados frescos, se necessário)
+      let customer;
+      // Tentar pegar dos dados já populados na lista PENDENTE (pode estar desatualizado mas evita re-fetch)
+      const existingCustomerData = itemsToLoadFromState.find(i => i.customerId === customerId || i.tutorId === customerId)?.customer;
+      if (existingCustomerData) {
+        customer = existingCustomerData;
+      } else if (customerId) {
+          console.log(`[handleLoadCustomerItemsToCart] Populando cliente ${customerId} (não encontrado nos dados do estado)`);
+          customer = await Customer.get(customerId).catch(e => { console.error("Erro ao buscar cliente", e); return null;});
       }
 
-      // 3. Mapear e achatar TODOS os itens de TODOS os documentos (charges e OS)
-      const allCartItems = itemsToLoad.flatMap(doc => {
-        const docType = doc.itemType; // 'charge' or 'order_service'
+      if (!customer) {
+        console.warn(`[handleLoadCustomerItemsToCart] Cliente ${customerId} não pôde ser carregado.`);
+      }
+      
+      // <<< USAR freshItems para mapear >>>
+      const allCartItemsPromises = freshItems.flatMap(async (doc) => {
+        const docType = doc.itemType;
         const docId = doc.id;
-        const itemsArray = doc.items || []; // Pegar array de itens do documento
         
-        // Mapear cada item DENTRO do documento para o formato do carrinho
+        let itemsArray = [];
+        if (docType === 'charge') {
+            try {
+                console.log(`[handleLoadCustomerItemsToCart / map] Buscando itens da subcoleção charge_items para charge: ${docId}`);
+                const itemsCollectionRef = collection(db, 'tenants', currentTenant.id, 'charges', docId, 'charge_items');
+                const itemsSnapshot = await getDocs(itemsCollectionRef);
+                itemsArray = itemsSnapshot.docs.map(itemDoc => ({ 
+                    chargeItemDocId: itemDoc.id, 
+                    ...itemDoc.data()
+                }));
+                console.log(`[handleLoadCustomerItemsToCart / map] Charge ${docId} - Itens da subcoleção (${itemsArray.length}):`, itemsArray);
+            } catch (err) {
+                console.error(`[handleLoadCustomerItemsToCart / map] Erro ao buscar charge_items para charge ${docId}:`, err);
+            }
+        } else if (docType === 'order_service') {
+             // <<< INÍCIO: Buscar itens da subcoleção os_items >>>
+             try {
+                console.log(`[handleLoadCustomerItemsToCart / map] Buscando itens da subcoleção os_items para OS: ${docId}`);
+                const itemsCollectionRef = collection(db, 'tenants', currentTenant.id, 'order_services', docId, 'os_items');
+                const itemsSnapshot = await getDocs(itemsCollectionRef);
+                itemsArray = itemsSnapshot.docs.map(itemDoc => ({ 
+                    osItemId: itemDoc.id, // Guardar ID do documento do item OS
+                    ...itemDoc.data()
+                }));
+                console.log(`[handleLoadCustomerItemsToCart / map] OS ${docId} - Itens da subcoleção (${itemsArray.length}):`, itemsArray);
+            } catch (err) {
+                console.error(`[handleLoadCustomerItemsToCart / map] Erro ao buscar os_items para OS ${docId}:`, err);
+            }
+            // <<< FIM: Buscar itens da subcoleção os_items >>>
+        } else {
+             console.warn(`[handleLoadCustomerItemsToCart / map] Tipo de documento desconhecido encontrado: ${docType} (ID: ${docId})`);
+        }
+
+        if (!itemsArray || itemsArray.length === 0) {
+            console.log(`[handleLoadCustomerItemsToCart / map] Documento ${docId} (${docType}) não possui itens ou falha ao buscar. Pulando.`);
+            return []; // Retorna array vazio se não houver itens
+        }
+
+        // Mapear itens INTERNOS
         return itemsArray.map(item => ({
-          cartItemId: uuidv4(), // <<< GERAR UUID ÚNICO PARA CADA ITEM NO CARRINHO >>>
-          id: item.itemId || item.sourceId || `item-${Math.random()}`, 
+          cartItemId: uuidv4(), 
+          id: item.itemId || item.sourceId || item.osItemId || item.chargeItemDocId || `item-${Math.random()}`,
           name: item.description || 'Item sem descrição',
-          price: item.unitPrice, 
+          price: item.unitPrice,
           unitPrice: item.unitPrice,
           quantity: item.quantity || 1,
           totalPrice: item.totalPrice,
-          type: item.itemType === 'clinic' ? 'service' : (item.itemType === 'petshop' ? 'service' : 'product'),
-          originalDocumentId: docId,
-          originalDocumentType: docType, 
-          episodeId: docType === 'charge' ? doc.episodeId : null, 
-          osNumber: doc.osNumber,
-          prontuarioId: docType === 'charge' ? doc.prontuarioId : null 
+          type: item.itemType === 'clinic' ? 'service' : (item.itemType === 'petshop' ? 'service' : 'product'), // Ajustar se necessário
+          isCancellable: docType === 'charge', // <<< ADD THIS LINE TO SET CANCELLABLE FLAG
+          // <<< AJUSTE AQUI: Usar ID do item da subcoleção (osItemId ou chargeItemDocId) >>>
+          originalDocumentId: docType === 'charge' ? item.chargeItemDocId : item.osItemId,
+          originalDocumentType: docType,
+          parentChargeId: docType === 'charge' ? docId : null,
+          // <<< ADICIONAR parentOsId se necessário para identificação >>>
+          parentOsId: docType === 'order_service' ? docId : null,
+          episodeId: docType === 'charge' ? doc.episodeId : null,
+          osNumber: docType === 'charge' ? doc.osNumber : null, // Vem da charge ou OS
+          prontuarioId: docType === 'charge' ? doc.prontuarioId : null,
+          customerId: doc.customerId,
         }));
       });
       
-      console.log("[CashierPage] Itens consolidados para o carrinho:", allCartItems);
+      // Achatar o array de arrays resultante das Promises
+      const allCartItemsNested = await Promise.all(allCartItemsPromises);
+      const allCartItems = allCartItemsNested.flat();
 
-      // 4. Identificar os IDs dos DOCUMENTOS (charges E OS) a serem pagos
-      const documentIdsToPay = itemsToLoad.map(doc => doc.id);
-      console.log("[CashierPage] IDs dos documentos a serem pagos:", documentIdsToPay);
+      console.log("[handleLoadCustomerItemsToCart] Itens (frescos) consolidados para o carrinho:", allCartItems);
+
+      // 4. Identificar IDs (usar freshItems)
+      const documentIdsToPay = freshItems.map(doc => doc.id);
+      console.log(`[handleLoadCustomerItemsToCart] IDs dos documentos (frescos) a serem pagos:`, documentIdsToPay);
       
-      // <<< SEPARAR IDs por tipo para passar ao PaymentDialog (se necessário) >>>
-      const chargeIdsToPay = itemsToLoad.filter(i => i.itemType === 'charge').map(i => i.id);
-      const osIdsToPay = itemsToLoad.filter(i => i.itemType === 'order_service').map(i => i.id);
-      console.log("[CashierPage] Charge IDs:", chargeIdsToPay, "OS IDs:", osIdsToPay);
-      // <<< FIM SEPARAÇÃO >>>
+      // Separação por tipo (mantida)
+      const chargeIdsToPay = freshItems.filter(i => i.itemType === 'charge').map(i => i.id);
+      const osIdsToPay = freshItems.filter(i => i.itemType === 'order_service').map(i => i.id);
+      console.log(`[handleLoadCustomerItemsToCart] Charge IDs (frescos):`, chargeIdsToPay, "OS IDs (frescos):", osIdsToPay);
 
       // 5. Atualizar estados
-      setCart(allCartItems); 
+      setCart(allCartItems);
       setSelectedCustomer(customer);
-      // <<< ATUALIZAR currentLoadedChargeIds com TODOS os IDs de documentos >>>
       setCurrentLoadedChargeIds(documentIdsToPay);
-      // O PaymentDialog precisará ser ajustado para receber os osIds também
+      setCurrentLoadedOsIds(osIdsToPay);
 
       toast({ title: "Itens Carregados", description: `Itens de ${customer?.full_name || 'Cliente'} carregados para pagamento.` });
 
     } catch (error) {
-      console.error(`[CashierPage] Erro ao carregar itens pendentes para o carrinho:`, error);
+      console.error(`[handleLoadCustomerItemsToCart] Erro ao carregar itens FRESCOS para o carrinho:`, error);
       toast({ title: "Erro", description: "Não foi possível carregar todos os itens pendentes.", variant: "destructive" });
       handleDeselectCustomerOrCharge(); // Limpa tudo em caso de erro
+    } finally {
+       setIsLoadingPendingItems(false); // <<< Parar loading >>>
     }
   };
   // <<< FIM FUNÇÃO RENOMEADA E ADAPTADA >>>
@@ -537,7 +689,17 @@ export default function CashierPage() {
     
         } catch (error) {
           console.error("[CashierPage] Erro ao chamar função createContinuedOrderService:", error);
-          const errorMessage = error.details?.originalError || error.message || "Não foi possível criar a OS.";
+          // <<< TRATAMENTO DE ERRO MAIS ROBUSTO >>>
+          let errorMessage = "Não foi possível criar a OS."; // Mensagem padrão
+          if (error instanceof Error) { // Verifica se é um objeto Error padrão
+              errorMessage = error.message; 
+          } else if (typeof error === 'string') { // Se for apenas uma string
+              errorMessage = error;
+          } else if (error && typeof error === 'object') { // Se for um objeto
+              // Tentar pegar a mensagem de erro da função, senão usar uma genérica
+              errorMessage = error.details?.message || error.message || JSON.stringify(error);
+          }
+          // <<< FIM TRATAMENTO DE ERRO >>>
           toast({
             title: "Erro ao Continuar",
             description: errorMessage,
@@ -578,7 +740,29 @@ export default function CashierPage() {
 
     return (
       <div className="p-4 flex flex-col h-full">
-        <h2 className="text-xl font-semibold mb-4 flex-shrink-0">Itens Pendentes</h2>
+        <div className="flex justify-between items-center mb-4 flex-shrink-0"> {/* Container para título e botão */}
+             <h2 className="text-xl font-semibold">Itens Pendentes</h2>
+             {/* <<< ADICIONAR BOTÃO REFRESH AQUI >>> */}
+             <div className="flex items-center gap-2">
+                 <span className="text-sm text-muted-foreground hidden md:inline">
+                     Não encontrou? Atualize.
+                 </span>
+                 {/* <<< Usar debouncedFetchPendingItems aqui >>> */}
+                 <Button 
+                     variant="outline" 
+                     size="icon" 
+                     onClick={() => {
+                         console.log("[CashierPage] Refresh Pendentes clicado.");
+                         // <<< Chamar a função debounced >>>
+                         debouncedFetchPendingItems(); 
+                     }} 
+                     disabled={isLoadingPendingItems}
+                     title="Atualizar lista de itens pendentes"
+                 >
+                     <RefreshCcw className={`h-4 w-4 ${isLoadingPendingItems ? 'animate-spin' : ''}`} />
+                 </Button>
+             </div>
+         </div>
         <ScrollArea className="flex-grow">
           <div className="space-y-4">
             {/* A lógica interna de renderização do card precisará ser ajustada depois */}
@@ -683,6 +867,12 @@ export default function CashierPage() {
     );
   };
 
+  // <<< ADICIONAR useMemo para debounce >>>
+   const debouncedFetchPendingItems = useMemo(
+      () => debounce(fetchPendingItems, DEBOUNCE_DELAY),
+      [fetchPendingItems] // Recria se a função base (fetchPendingItems) mudar
+   );
+
   // <<< FUNÇÃO PARA RENDERIZAR A COLUNA DIREITA (CAIXA) >>>
   const renderCashierColumn = () => {
     return (
@@ -707,15 +897,17 @@ export default function CashierPage() {
                     </Button>
                   </div>
                ) : !isAnonymousSaleActive && !currentLoadedChargeId ? ( // Só mostra Selecionar/Novo se NÃO for anônimo e NENHUMA charge carregada
+                 // <<< CORREÇÃO: Envolver botões adjacentes em Fragment >>>
                  <> 
-                  <Button onClick={() => setShowCustomerDialog(true)}>
+                   <Button onClick={() => setShowCustomerDialog(true)}>
                      <User className="mr-2 h-4 w-4" /> Selecionar Cliente
                    </Button>
-                   {/* <<< BOTÃO NOVO PEDIDO >>> */} 
+                   {/* <<< BOTÃO NOVO PEDIDO >>> */ } 
                    <Button variant="outline" onClick={handleNewAnonymousOrder}> 
                       <Plus className="mr-2 h-4 w-4" /> Novo Pedido
                    </Button>
                  </>
+                 // <<< FIM CORREÇÃO >>>
                ) : isAnonymousSaleActive ? ( 
                    <div className="flex items-center space-x-2">
                         <span className="text-sm font-medium text-blue-600">Venda Rápida</span>
@@ -726,7 +918,7 @@ export default function CashierPage() {
                           title="Cancelar Venda Rápida"
                          >
                             <X className="h-4 w-4 text-muted-foreground"/>
-                  </Button>
+                        </Button> { /* <<< CORREÇÃO: Fechar Button corretamente >>> */ }
                     </div>
                ) : null /* Caso de charge carregada, não mostra botões aqui */ }
            </div>
@@ -744,11 +936,13 @@ export default function CashierPage() {
              <ScrollArea className="p-4"> 
                  {cart.length === 0 ? (
                    <p className="text-center text-muted-foreground py-4">
-                     {/* <<< Mensagem ajustada para modo anônimo >>> */} 
-                     {!selectedCustomer && !isAnonymousSaleActive && !currentLoadedChargeId ? "Selecione um cliente, inicie um Novo Pedido ou carregue uma cobrança pendente." : 
-                      isAnonymousSaleActive ? "Adicione itens para a Venda Rápida." : 
-                      currentLoadedChargeId ? "Cobrança carregada. Finalize o pagamento ou use 'Continuar Comprando'." : 
-                      "Adicione produtos ou serviços."}
+                     {/* <<< CORREÇÃO: Simplificar ternário ou garantir que esteja em {} >>> */ } 
+                     {(() => {
+                       if (!selectedCustomer && !isAnonymousSaleActive && !currentLoadedChargeId) return "Selecione um cliente, inicie um Novo Pedido ou carregue uma cobrança pendente.";
+                       if (isAnonymousSaleActive) return "Adicione itens para a Venda Rápida.";
+                       if (currentLoadedChargeId) return "Cobrança carregada. Finalize o pagamento ou use 'Continuar Comprando'.";
+                       return "Adicione produtos ou serviços.";
+                     })()}
                    </p>
                 ) : (
                    <div className="space-y-2">
@@ -757,7 +951,7 @@ export default function CashierPage() {
                          <div key={item.cartItemId} className="flex items-center justify-between text-sm border-b pb-1">
                            <div>
                              <p className="font-medium">{item.name || item.description}</p> 
-                             {/* <<< EXIBIR IDs ABAIXO DO NOME >>> */}
+                             {/* <<< EXIBIR IDs ABAIXO DO NOME >>> */ } 
                              {(item.episodeId || item.osNumber) && (
                                  <p className="text-xs text-muted-foreground">
                                    {item.episodeId && `Ep: ${item.episodeId}`}
@@ -765,9 +959,9 @@ export default function CashierPage() {
                                    {item.osNumber && `OS: ${item.osNumber}`}
                                  </p>
                              )}
-                             {/* <<< FIM EXIBIÇÃO IDs >>> */} 
+                             {/* <<< FIM EXIBIÇÃO IDs >>> */ } 
                              <p className="text-xs text-muted-foreground capitalize">{item.type === 'product' ? 'Produto' : 'Serviço'}</p>
-                        </div>
+                           </div> { /* <<< CORREÇÃO: Fechar DIV corretamente >>> */ } 
                            <div className="flex items-center space-x-2">
                              <Input
                                type="number"
@@ -782,10 +976,10 @@ export default function CashierPage() {
                                variant="ghost"
                                size="icon"
                                onClick={() => {
-                                   if (item.originalDocumentType === 'charge') {
-                                       handleOpenCancellationModal(item);
+                                   if (item.isCancellable) {
+                                       handleOpenCancellationModal(item); // Abre modal para itens de charge
                                    } else {
-                                       removeFromCart(item.cartItemId);
+                                       removeFromCart(item.cartItemId); // Remove direto para itens de OS/venda
                                    }
                                }}
                                className="h-8 w-8"
@@ -808,18 +1002,21 @@ export default function CashierPage() {
              <span>Total:</span>
              <span>R$ {getCartTotal().toFixed(2)}</span>
                 </div>
-            {/* <<< BOTÃO Cadastrar Cliente >>> */} 
-           {isAnonymousSaleActive && cart.length > 0 && (
-                <Button
-                    variant="link" 
-                    className="text-sm h-auto p-0 justify-start" 
-                    onClick={() => setShowCustomerDialog(true)} // Abre o diálogo para selecionar/criar
-                >
-                    Cadastrar Cliente e Vincular Compra?
-                </Button>
-            )}
+            {/* <<< BOTÃO Cadastrar Cliente >>> */ }
+            {/* <<< CORREÇÃO: Garantir que a lógica condicional inteira esteja em chaves {} >>> */ }
+            {
+              isAnonymousSaleActive && cart.length > 0 && (
+                  <Button
+                      variant="link" 
+                      className="text-sm h-auto p-0 justify-start" 
+                      onClick={() => setShowCustomerDialog(true)} // Abre o diálogo para selecionar/criar
+                  >
+                      Cadastrar Cliente e Vincular Compra?
+                  </Button>
+              )
+            }
            {/* <<< DEBUG: Log final antes do botão >>> */}
-           {console.log(`[CashierPage DEBUG BTN] Render Button: cart.length=${cart.length}, showPaymentDialog=${showPaymentDialog}, calculated_disabled=${cart.length === 0 || showPaymentDialog}`)}
+           {/* {console.log(`[CashierPage DEBUG BTN] Render Button: cart.length=${cart.length}, showPaymentDialog=${showPaymentDialog}, calculated_disabled=${cart.length === 0 || showPaymentDialog}`)} */}
            <Button 
              onClick={() => setShowPaymentDialog(true)} 
              className="w-full" 
@@ -847,64 +1044,173 @@ export default function CashierPage() {
   };
   
   // Função para verificar/deletar OS vazia
-  const checkAndDeleteEmptyOs = async (osId) => {
-    if (!osId) return;
-    console.log(`[CashierPage] Verificando OS ${osId} para possível exclusão.`);
-
-    const tenantId = localStorage.getItem('current_tenant');
-    if (!tenantId) {
-        console.error("[CashierPage] Tenant ID não encontrado no localStorage ao verificar OS vazia!");
-        return;
-    }
+  const checkAndDeleteEmptyOs = useCallback(async (osId) => {
+    if (!osId || !currentTenant?.id) return;
+    console.log(`[CashierPage] Verificando OS ${osId} para exclusão por estar vazia...`);
 
     try {
-      const osDocRef = doc(db, 'tenants', tenantId, 'order_services', osId);
-      const osDocSnap = await getDoc(osDocRef);
+      const osRef = doc(db, 'tenants', currentTenant.id, 'order_services', osId);
+      
+      // <<< INÍCIO: Verificar contagem na subcoleção os_items >>>
+      const itemsCollectionRef = collection(osRef, 'os_items');
+      // Usar getCountFromServer para eficiência (disponível no SDK v9+)
+      // Alternativa: getDocs e verificar .size
+      const itemsSnapshot = await getDocs(itemsCollectionRef);
+      const itemCount = itemsSnapshot.size;
+      console.log(`[CashierPage] OS ${osId} possui ${itemCount} item(s) na subcoleção os_items.`);
+      // <<< FIM: Verificar contagem na subcoleção os_items >>>
 
-      if (osDocSnap.exists()) {
-        const osData = osDocSnap.data();
-        if (osData.items && osData.items.length === 0) {
-          console.log(`[CashierPage] OS ${osId} está vazia. Preparando para chamar função de exclusão.`);
-          
-          // <<< DESCOMENTAR CHAMADA DA FUNÇÃO BACKEND >>>
-          const deleteEmptyOs = httpsCallable(functions, 'deleteEmptyCashierOs');
-          try {
-            const result = await deleteEmptyOs({ osId: osId }); // <<< Passar osId no payload >>>
-            console.log(`[CashierPage] Função deleteEmptyCashierOs chamada. Resultado:`, result.data);
-            if (result.data?.deleted) {
-                 toast({ title: "OS Removida", description: "A ordem de serviço iniciada e não utilizada foi removida." });
-            } else {
-                // Log opcional se não deletou (ex: não estava vazia no backend)
-                 console.log(`[CashierPage] Backend reportou que OS ${osId} não foi deletada (motivo: ${result.data?.message})`);
-            }
-          } catch (error) {
-            console.error(`[CashierPage] Erro ao chamar deleteEmptyCashierOs para OS ${osId}:`, error);
-            toast({ title: "Erro", description: "Falha ao tentar remover OS vazia.", variant: "destructive" });
-          }
-          // <<< FIM DESCOMENTAR >>>
-
-        } else {
-          console.log(`[CashierPage] OS ${osId} contém itens ou não existe mais. Nenhuma ação de exclusão necessária.`);
-        }
+      // Deletar se não houver itens
+      if (itemCount === 0) {
+        console.log(`[CashierPage] OS ${osId} está vazia. Deletando documento...`);
+        await deleteDoc(osRef);
+        toast({ title: "OS Removida", description: `A Ordem de Serviço (${osId.substring(0,6)}...) foi removida por estar vazia.` });
+        // Refrescar lista de pendentes após exclusão
+        fetchPendingItems(); 
       } else {
-        console.warn(`[CashierPage] OS ${osId} não encontrada ao verificar para exclusão.`);
+         console.log(`[CashierPage] OS ${osId} não está vazia. Nenhuma ação necessária.`);
       }
     } catch (error) {
-      console.error(`[CashierPage] Erro ao verificar OS ${osId} para exclusão:`, error);
+      console.error(`[CashierPage] Erro ao verificar/deletar OS vazia ${osId}:`, error);
+      toast({ title: "Erro", description: "Falha ao verificar ou remover OS vazia.", variant: "destructive" });
+    }
+  }, [currentTenant?.id, fetchPendingItems]);
+
+  // Função wrapper para onClose do Modal 
+  const handleCloseQuickSaleModal = async () => { // <<< TORNAR ASYNC >>>
+    setShowQuickSaleModal(false);
+    console.log("[CashierPage] Fechando QuickSaleModal.");
+    const osIdToCheck = activeContinuedOsId; // Armazenar ID antes de limpar estado
+    setActiveContinuedOsId(null); // Limpar imediatamente
+
+    if (osIdToCheck) {
+      console.log(`[CashierPage] Verificando OS ${osIdToCheck} para exclusão por estar vazia...`);
+      await checkAndDeleteEmptyOs(osIdToCheck); // Esperar verificação/deleção
+
+      // <<< RECARREGAR ITENS PENDENTES E ATUALIZAR CARRINHO APÓS FECHAR MODAL >>>
+      console.log("[CashierPage] Refetching pending items and reloading cart after QuickSaleModal close...");
+      const updatedPendingItemsList = await fetchPendingItems(); // Esperar o fetch
+
+      // Verificar se um cliente e OSs/Charges ainda estão carregados
+      if (selectedCustomer && (currentLoadedChargeIds.length > 0 || currentLoadedOsIds.length > 0)) {
+          console.log("[CashierPage] Cliente e IDs carregados. Recarregando carrinho com dados atualizados...");
+           // Filtrar os itens atualizados que correspondem aos IDs carregados
+           const itemsToReload = updatedPendingItemsList.filter(item =>
+              (item.itemType === 'charge' && currentLoadedChargeIds.includes(item.id)) ||
+              (item.itemType === 'order_service' && currentLoadedOsIds.includes(item.id)) ||
+              (item.itemType === 'order_service' && item.id === osIdToCheck && currentLoadedOsIds.includes(osIdToCheck)) // Garante que a OS recém editada seja incluída se estava carregada
+           );
+           
+           // Garante que a OS recem fechada (osIdToCheck) seja incluida nos IDs a recarregar se ela ainda existe
+           const finalOsIdsToLoad = [...currentLoadedOsIds];
+           if(osIdToCheck && updatedPendingItemsList.some(item => item.id === osIdToCheck && item.itemType === 'order_service') && !finalOsIdsToLoad.includes(osIdToCheck)){
+               finalOsIdsToLoad.push(osIdToCheck);
+               setCurrentLoadedOsIds(finalOsIdsToLoad); // Atualiza o estado se necessário
+               // Adiciona a OS aos items a recarregar se não estiver lá
+                if(!itemsToReload.some(item => item.id === osIdToCheck)) {
+                     const osToAdd = updatedPendingItemsList.find(item => item.id === osIdToCheck);
+                     if(osToAdd) itemsToReload.push(osToAdd);
+                 }
+           }
+
+
+          // Chama a função para recarregar o carrinho com os itens filtrados
+          await reloadCartWithItems(itemsToReload);
+      } else {
+           console.log("[CashierPage] Nenhum cliente/IDs carregados, não recarregando o carrinho.");
+      }
+       // <<< FIM RECARREGAMENTO >>>
+    } else {
+       console.log("[CashierPage] QuickSaleModal fechado sem um targetOsId ativo (venda local). Nenhuma ação de recarregamento necessária.");
     }
   };
 
-  // Função wrapper para onClose do Modal 
-  const handleCloseQuickSaleModal = () => {
-    console.log("[CashierPage] Fechando QuickSaleModal.");
-    setShowQuickSaleModal(false);
-    // Se estávamos no modo "Continuar Comprando", verificar se a OS ficou vazia
-    if (activeContinuedOsId) {
-        checkAndDeleteEmptyOs(activeContinuedOsId);
-        setActiveContinuedOsId(null); // Limpar o ID ativo após fechar
-    }
+  // <<< NOVA FUNÇÃO PARA RECARREGAR O CARRINHO BASEADO NOS IDs ATUAIS >>>
+  const reloadCartWithItems = async (itemsToLoad) => {
+       if (!currentTenant?.id) {
+           console.error("[reloadCartWithItems] Tenant ID não disponível.");
+           return;
+       }
+      const tenantId = currentTenant.id;
+
+      if (!itemsToLoad || itemsToLoad.length === 0) {
+          setCart([]);
+          console.log("[reloadCartWithItems] Nenhum item para carregar, limpando carrinho.");
+          return;
+      }
+
+      console.log(`[reloadCartWithItems] Recarregando ${itemsToLoad.length} documentos (charges/OS) para o carrinho...`, itemsToLoad);
+      setIsLoadingPendingItems(true); // Reutilizar loading state? Ou adicionar um específico para o carrinho?
+      let consolidatedCartItems = [];
+      const chargeIds = [];
+      const osIds = [];
+
+      try {
+          for (const itemOrGroup of itemsToLoad) {
+              if (itemOrGroup.itemType === 'charge' && currentLoadedChargeIds.includes(itemOrGroup.id)) {
+                  chargeIds.push(itemOrGroup.id);
+                  console.log(`[reloadCartWithItems] Buscando itens para Charge ID: ${itemOrGroup.id}`);
+                  const itemsCollectionRef = collection(db, 'tenants', tenantId, 'charges', itemOrGroup.id, 'charge_items');
+                  const itemsSnapshot = await getDocs(itemsCollectionRef);
+                  itemsSnapshot.docs.forEach(itemDoc => {
+                      const itemData = itemDoc.data();
+                      if (!itemData.cancelled) {
+                          consolidatedCartItems.push({
+                              cartItemId: uuidv4(),
+                              id: itemData.itemId,
+                              name: itemData.description,
+                              price: itemData.totalPrice,
+                              unitPrice: itemData.unitPrice,
+                              quantity: itemData.quantity,
+                              type: itemData.itemType === 'clinic' || itemData.itemType === 'petshop' ? 'service' : 'product',
+                              cancellable: true,
+                              originalDocumentId: itemOrGroup.id,
+                              originalItemId: itemDoc.id
+                          });
+                      }
+                  });
+              } else if (itemOrGroup.itemType === 'order_service' && currentLoadedOsIds.includes(itemOrGroup.id)) {
+                  osIds.push(itemOrGroup.id);
+                  console.log(`[reloadCartWithItems] Buscando itens para OS ID: ${itemOrGroup.id}`);
+                  const itemsCollectionRef = collection(db, 'tenants', tenantId, 'order_services', itemOrGroup.id, 'os_items');
+                  const itemsSnapshot = await getDocs(itemsCollectionRef);
+                  itemsSnapshot.docs.forEach(itemDoc => {
+                      const itemData = itemDoc.data();
+                      // <<< ALINHAR MAPEAMENTO com handleLoadCustomerItemsToCart >>>
+                      consolidatedCartItems.push({
+                          cartItemId: uuidv4(),
+                          id: itemData.itemId || itemDoc.id, // Usa ID do produto ou fallback para ID do doc os_item
+                          name: itemData.description || 'Item sem descrição',
+                          price: itemData.unitPrice, // <<< USAR unitPrice para 'price' >>>
+                          unitPrice: itemData.unitPrice,
+                          quantity: itemData.quantity,
+                          totalPrice: itemData.totalPrice, // Mantém totalPrice lido
+                          type: 'product', // TODO: Verificar se OS pode ter 'service'
+                          isCancellable: false, // Item de OS não é cancelável diretamente aqui
+                          originalDocumentId: itemOrGroup.id, // ID da OS pai
+                          originalItemId: itemDoc.id, // ID do documento na subcoleção os_items
+                          // Adicionar outros campos relevantes se necessário (customerId, etc.)
+                          parentOsId: itemOrGroup.id, // Redundante com originalDocumentId?
+                          customerId: itemOrGroup.customerId // ID do cliente da OS pai
+                      });
+                      // <<< FIM ALINHAMENTO >>>
+                  });
+              }
+          }
+
+          console.log(`[reloadCartWithItems] Itens consolidados para o carrinho:`, consolidatedCartItems);
+
+          setCart(consolidatedCartItems);
+          // Não precisa atualizar os currentLoaded IDs aqui, eles já estão corretos
+
+      } catch (error) {
+          console.error("[reloadCartWithItems] Erro ao recarregar itens para o carrinho:", error);
+          toast({ title: "Erro", description: "Falha ao atualizar itens no carrinho.", variant: "destructive" });
+          setCart([]); // Limpar carrinho em caso de erro
+      } finally {
+          setIsLoadingPendingItems(false); // Para loading
+      }
   };
-  // <<< FIM FUNÇÃO WRAPPER >>>
 
   // <<< FUNÇÃO PLACEHOLDER para abrir modal de cancelamento >>>
   const handleOpenCancellationModal = (item) => {
@@ -1035,18 +1341,18 @@ export default function CashierPage() {
        )}
 
        {showPaymentDialog && (selectedCustomer || isAnonymousSaleActive) && (
-      <PaymentDialog
-        open={showPaymentDialog}
-        onOpenChange={setShowPaymentDialog}
-           onClose={() => setShowPaymentDialog(false)}
-           customer={isAnonymousSaleActive ? null : selectedCustomer}
-        cart={cart} 
-        totalAmount={getCartTotal()} 
-        onSuccess={handlePaymentSuccess} 
-           // MODIFICADO: Passa o array de IDs
-           chargeIds={currentLoadedChargeIds}
-           isAnonymousSale={isAnonymousSaleActive}
-         />
+            <PaymentDialog
+            open={showPaymentDialog}
+            onOpenChange={setShowPaymentDialog}
+               onClose={() => setShowPaymentDialog(false)}
+               customer={isAnonymousSaleActive ? null : selectedCustomer}
+            cart={cart}
+            totalAmount={getCartTotal()}
+            onSuccess={handlePaymentSuccess}
+               chargeIds={currentLoadedChargeIds} // <--- Já existente
+               continuedOsIds={currentLoadedOsIds} // <--- ADICIONE ESTA LINHA
+               isAnonymousSale={isAnonymousSaleActive}
+             />
        )}
         
        {showProductForm && <ProductForm onClose={() => setShowProductForm(false)} />} 
@@ -1072,16 +1378,27 @@ export default function CashierPage() {
           </div>
        )}
 
-       {/* <<< RENDERIZAR MODAL DE CANCELAMENTO >>> */} 
+       {/* <<< RENDERIZAR MODAL DE CANCELAMENTO >>> */}
        <CancellationReasonModal
            isOpen={cancellationModalOpen}
            onClose={handleCloseCancellationModal}
            // <<< AJUSTADO: Passar o id original do item (item.id) na chamada onConfirm >>>
-           onConfirm={(originalItemIdFromModal, originalDocId, cancelReason) => {
-                // A função onConfirm do modal agora passa o ID original do item diretamente.
-                // A função handleConfirmCancellation espera este ID.
-                // Não precisamos mais pegar de itemToCancel.id aqui.
-                return handleConfirmCancellation(originalItemIdFromModal, originalDocId, cancelReason);
+           // <<< CORRIGIDO: Passar ID do DOCUMENTO do item (originalDocumentId) e ID da CHARGE PAI (parentChargeId) >>>
+           onConfirm={(cancelReason) => {
+                // A função onConfirm do modal agora passa apenas a razão.
+                // Os IDs vêm do estado itemToCancel.
+                if (!itemToCancel || !itemToCancel.originalDocumentId || !itemToCancel.parentChargeId) {
+                    console.error("[CashierPage] Erro: Não foi possível obter IDs do item a ser cancelado.", itemToCancel);
+                    toast({title: "Erro Interno", description:"Não foi possível identificar o item para cancelamento.", variant:"destructive"});
+                    // Não chamar handleConfirmCancellation se os IDs estiverem faltando
+                    // Re-throw para o modal saber que falhou?
+                    throw new Error("IDs do item de cancelamento ausentes");
+                }
+                // Chama handleConfirmCancellation com:
+                // 1. ID do documento do item na subcoleção (vem de itemToCancel.originalDocumentId)
+                // 2. ID da charge pai (vem de itemToCancel.parentChargeId)
+                // 3. Razão do modal
+                return handleConfirmCancellation(itemToCancel.originalDocumentId, itemToCancel.parentChargeId, cancelReason);
             }}
            item={itemToCancel}
        />

@@ -120,6 +120,16 @@ service cloud.firestore {
           // Apenas Cloud Functions (gatilho ou callable 'processPayment') podem modificar.
           // TODO: Avaliar se Admin deveria poder cancelar (mudar status para 'canceled')?
           allow write: if false; 
+
+          // <<< INÍCIO: Regra para subcoleção charge_items >>>
+          match /charge_items/{chargeItemId} {
+            // Permite que membros do tenant leiam os itens de uma charge do seu tenant.
+            allow read: if isTenantMember(tenantId);
+            
+            // Bloqueia escrita direta pelo cliente (gerenciado pelo backend)
+            allow write: if false;
+          }
+          // <<< FIM: Regra para subcoleção charge_items >>>
         }
 
         match /transactions/{transactionId} {
@@ -159,8 +169,45 @@ service cloud.firestore {
                            
           // Criação/Exclusão bloqueadas do lado do cliente (feitas por Cloud Functions)
           allow create, delete: if false;
+
+          // +++ INÍCIO: Regras para Subcoleção os_items +++
+          match /os_items/{osItemId} {
+               // Leitura permitida para membros do tenant
+               allow read: if isTenantMember(tenantId);
+               // Permitir escrita se o usuário estiver autenticado COM um tenant
+               allow write: if isAuthenticatedTenant(); 
+               // <<< REVERTENDO REGRA DELETE PARA isTenantMember >>>
+               allow delete: if isTenantMember(tenantId);
+           }
+           // +++ FIM: Regras para Subcoleção os_items +++
         }
         // +++ FIM: Regras para Order Services (Caixa) +++
+
+        // +++ INÍCIO: Regras para Customers (Subcoleção do Tenant) +++
+        match /customers/{customerId} {
+          // Permitir leitura (get e list) para membros do tenant.
+          // A query list no frontend DEVE filtrar por tenantId (já garantido pelo path)
+          allow read: if isTenantMember(tenantId);
+
+          // Permitir criação/atualização/exclusão para membros do tenant
+          // (Garante que o tenantId implícito no path está correto)
+          // Poderia refinar para permitir write apenas para Admins (isTenantAdmin) se necessário.
+          allow write: if isTenantMember(tenantId);
+        }
+        // +++ FIM: Regras para Customers (Subcoleção do Tenant) +++
+
+        // +++ INÍCIO: Regras para Pets (Subcoleção do Tenant) +++
+        match /pets/{petId} {
+          // Permitir leitura (get e list) para membros do tenant.
+          // A query list no frontend DEVE filtrar por tenantId/ownerId (garantido pelo path/query)
+          allow read: if isTenantMember(tenantId);
+
+          // Permitir criação/atualização/exclusão para membros do tenant
+          // (Garante que o tenantId implícito no path está correto)
+          // Validações específicas (ex: owner_id existe) ficam nas regras de create/update mais granulares se necessário.
+          allow write: if isTenantMember(tenantId);
+        }
+        // +++ FIM: Regras para Pets (Subcoleção do Tenant) +++
 
       } // Fim do match /tenants/{tenantId}
 
@@ -205,25 +252,57 @@ service cloud.firestore {
     // --- FIM: Regra para Coleção de Emails ---
 
       // === Coleções Específicas do Tenant (Nível Raiz) ===
-      // ATENÇÃO: Se estas coleções também forem subcoleções de /tenants,
-      // elas precisam ser movidas para DENTRO do `match /tenants/{tenantId}` acima!
+      // <<< REMOVENDO ESTE BLOCO INTEIRO POIS ESTÁ NO LUGAR ERRADO >>>
+/*
+    // Coleção de Clientes (Raiz) - REGRA ATUALIZADA
     match /customers/{customerId} {
-        allow get: if isAuthenticatedTenant() || isSuperAdmin();
-        allow list: if request.auth != null && request.auth.token.tenant_id != null;
-        allow create, update: if isTenantMember(request.resource.data.tenant_id);
-      allow delete: if isTenantMember(resource.data.tenant_id);
-    }
+      // <<< REGRA DE DEBUG TEMPORÁRIA >>>
+      allow get: if request.auth != null; // Permite QUALQUER usuário autenticado ler
 
+      // Permitir LIST se o usuário estiver autenticado com um tenant (query DEVE filtrar por tenant_id)
+      allow list: if isAuthenticatedTenant();
+
+      // Permitir CREATE se o usuário for membro do tenant que está sendo definido no novo cliente
+      allow create: if request.resource.data.tenant_id != null &&
+                       isTenantMember(request.resource.data.tenant_id);
+
+      // Permitir UPDATE se o usuário for membro do tenant do cliente
+      // e garantir que o tenant_id não seja alterado
+      allow update: if resource.data.tenant_id != null &&
+                       isTenantMember(resource.data.tenant_id) &&
+                       request.resource.data.tenant_id == resource.data.tenant_id;
+
+      // Permitir DELETE se o usuário for membro do tenant do cliente
+      allow delete: if resource.data.tenant_id != null &&
+                       isTenantMember(resource.data.tenant_id);
+    }
+*/
+    // Coleção de Pets (Raiz) - Exemplo de como seria (MANTER REGRA EXISTENTE SE JÁ ESTIVER FUNCIONANDO)
     match /pets/{petId} {
-       allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-       allow get, read: if isTenantMember(resource.data.tenant_id);
-       allow create: if isTenantMember(request.resource.data.tenant_id)
-                      && exists(/databases/$(database)/documents/customers/$(request.resource.data.owner_id))
-                      && get(/databases/$(database)/documents/customers/$(request.resource.data.owner_id)).data.tenant_id == request.resource.data.tenant_id;
-       allow update: if isTenantMember(resource.data.tenant_id)
-                      && request.resource.data.tenant_id == resource.data.tenant_id 
-                      && request.resource.data.owner_id == resource.data.owner_id;
-       allow delete: if isTenantMember(resource.data.tenant_id);
+       // Permitir GET se o usuário for membro do tenant do pet
+       allow get: if isSuperAdmin() ||
+                     (resource.data.tenant_id != null && isTenantMember(resource.data.tenant_id));
+
+       // Permitir LIST se autenticado com tenant (query DEVE filtrar por tenant_id)
+       allow list: if isAuthenticatedTenant();
+
+       // <<< CORREÇÃO: Usar caminho da SUBCOLEÇÃO para validar o owner >>>
+       allow create: if request.resource.data.tenant_id != null &&
+                        isTenantMember(request.resource.data.tenant_id) &&
+                        request.resource.data.owner_id != null &&
+                        // Verifica se o cliente existe na SUBCOLEÇÃO do tenant atual
+                        exists(/databases/$(database)/documents/tenants/$(request.resource.data.tenant_id)/customers/$(request.resource.data.owner_id)) &&
+                        // Verifica se o tenant_id do cliente na SUBCOLEÇÃO bate com o tenant_id do pet
+                        get(/databases/$(database)/documents/tenants/$(request.resource.data.tenant_id)/customers/$(request.resource.data.owner_id)).data.tenant_id == request.resource.data.tenant_id;
+
+        // Permitir UPDATE se membro do tenant do pet e tenant_id não muda
+        allow update: if resource.data.tenant_id != null &&
+                         isTenantMember(resource.data.tenant_id) &&
+                         request.resource.data.tenant_id == resource.data.tenant_id;
+
+        // Permitir DELETE se membro do tenant do pet
+        allow delete: if resource.data.tenant_id != null &&
+                         isTenantMember(resource.data.tenant_id);
     }
 
     match /appointments/{appointmentId} {
@@ -244,9 +323,15 @@ service cloud.firestore {
       
     match /queueEntries/{entryId} { 
         // Permite listagem/query (list) apenas se filtrar pelo tenant_id do usuário
-        allow list: if request.auth != null &&
-                      request.query.limit <= 100 && // Limite opcional
-                      request.auth.token.tenant_id == request.query.resource.data.tenant_id; // Garante filtro por tenant
+        // allow list: if request.auth != null &&
+        //               request.query.limit <= 100 && // Limite opcional
+        //               request.auth.token.tenant_id == request.query.resource.data.tenant_id; // Garante filtro por tenant <<< REMOVIDO
+        
+        // <<< NOVA REGRA LIST >>>
+        // Permite listagem se o usuário estiver autenticado com um tenant
+        // (A query no código DEVE conter o filtro where('tenant_id', '==', request.auth.token.tenant_id))
+        allow list: if isAuthenticatedTenant(); 
+
        allow get, read: if isTenantMember(resource.data.tenant_id);
        allow create: if isTenantMember(request.resource.data.tenant_id);
        allow update: if isTenantMember(resource.data.tenant_id) 
@@ -256,9 +341,22 @@ service cloud.firestore {
 
     match /consultations/{consultationId} {
        allow list: if isAuthenticatedTenant() && request.auth.token.tenant_id != null;
-       allow get, read: if isTenantMember(resource.data.tenant_id); 
+       allow get, read: if isTenantMember(resource.data.tenant_id);
        allow create: if isTenantMember(request.resource.data.tenant_id);
        allow update, delete: if isTenantMember(resource.data.tenant_id);
+
+       // +++ INÍCIO: Regra para subcoleção consultation_prescription_items +++
+       match /consultation_prescription_items/{itemId} {
+         // Permitir leitura se o usuário pertence ao tenant da consulta pai
+         allow read: if request.auth != null &&
+                        isTenantMember(get(/databases/$(database)/documents/consultations/$(consultationId)).data.tenant_id);
+         // Permitir criação se o usuário pertence ao tenant (sem depender do get() no pai)
+         allow create: if isAuthenticatedTenant();
+         
+         // Negar atualização/exclusão direta por enquanto
+         allow update, delete: if false;
+       }
+       // +++ FIM: Regra para subcoleção consultation_prescription_items +++
     }
 
     match /medicalRecords/{recordId} {

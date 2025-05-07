@@ -10,6 +10,10 @@ import {
   query,
   where,
   serverTimestamp,
+  orderBy,
+  limit,
+  startAfter,
+  getCountFromServer
 } from 'firebase/firestore';
 
 const db = getFirestore();
@@ -70,27 +74,101 @@ export const productService = {
   },
 
   filter: async (filterObject) => {
-    const tenantId = filterObject?.tenant_id;
+    let tenantId = filterObject?.tenant_id;
     if (!tenantId) {
-      throw new Error("Tenant ID (tenant_id) é obrigatório no objeto de filtro para buscar produtos.");
+      console.warn("[productService.filter] Tenant ID não fornecido no filtro, tentando localStorage...");
+      tenantId = localStorage.getItem('current_tenant');
+    }
+    
+    if (!tenantId) {
+      throw new Error("Tenant ID (tenant_id) é obrigatório no objeto de filtro ou localStorage para buscar produtos.");
     }
     
     console.log("[productService.filter] Filtering for tenant:", tenantId, "with options:", filterObject);
 
-    const productsColRef = collection(db, 'tenants', tenantId, 'products');
-    const queryConstraints = [];
+    const { 
+      module: filterModule,
+      allowInternalUse: filterAllowInternalUse,
+      category: filterCategory,
+      searchTerm: _filterSearchTerm,
+      orderByField = 'name',
+      orderByDirection = 'asc',
+      limitNum,
+      startAfterDoc
+    } = filterObject;
 
-    if (filterObject.module && (filterObject.module === 'clinica' || filterObject.module === 'petshop')) {
-      console.log("[productService.filter] Adding module filter:", filterObject.module);
-      queryConstraints.push(where('module', '==', filterObject.module));
+    const productsColRef = collection(db, 'tenants', tenantId, 'products');
+    let queryConstraints = [];
+
+    if (filterModule && (filterModule === 'clinica' || filterModule === 'petshop')) {
+      console.log("[productService.filter] Adding module filter:", filterModule);
+      queryConstraints.push(where('module', '==', filterModule));
+    }
+
+    if (filterCategory && filterCategory !== 'all') {
+      console.log("[productService.filter] Adding category filter:", filterCategory);
+      queryConstraints.push(where('category', '==', filterCategory));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(filterObject, 'allowInternalUse')) {
+        console.log("[productService.filter] Adding allowInternalUse filter:", filterAllowInternalUse);
+        queryConstraints.push(where('allowInternalUse', '==', Boolean(filterAllowInternalUse)));
+    }
+
+    queryConstraints.push(orderBy(orderByField, orderByDirection));
+
+    if (startAfterDoc) {
+      queryConstraints.push(startAfter(startAfterDoc));
+    }
+
+    if (limitNum) {
+      queryConstraints.push(limit(limitNum));
     }
 
     const q = query(productsColRef, ...queryConstraints);
     const snapshot = await getDocs(q);
     
     const results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const lastVisible = snapshot.docs[snapshot.docs.length - 1];
+    
     console.log("[productService.filter] Found products:", results.length);
-    return results;
+    return { products: results, lastVisibleDoc: lastVisible };
+  },
+
+  getCount: async (filterObject) => {
+    let tenantId = filterObject?.tenant_id;
+    if (!tenantId) {
+      tenantId = localStorage.getItem('current_tenant');
+    }
+    if (!tenantId) {
+      throw new Error("Tenant ID (tenant_id) é obrigatório para getCount.");
+    }
+
+    const { 
+      module: filterModule,
+      allowInternalUse: filterAllowInternalUse,
+      category: filterCategory,
+      searchTerm: _filterSearchTerm
+    } = filterObject;
+
+    const productsColRef = collection(db, 'tenants', tenantId, 'products');
+    const queryConstraints = [];
+
+    if (filterModule && (filterModule === 'clinica' || filterModule === 'petshop')) {
+      queryConstraints.push(where('module', '==', filterModule));
+    }
+    if (filterCategory && filterCategory !== 'all') {
+      queryConstraints.push(where('category', '==', filterCategory));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(filterObject, 'allowInternalUse')) {
+      queryConstraints.push(where('allowInternalUse', '==', Boolean(filterAllowInternalUse)));
+    }
+
+    const q = query(productsColRef, ...queryConstraints);
+    const snapshot = await getCountFromServer(q);
+    console.log("[productService.getCount] Total products for filter:", snapshot.data().count, filterObject);
+    return snapshot.data().count;
   },
 
   getAllByTenant: async (tenantId) => {

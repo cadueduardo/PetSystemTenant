@@ -14,7 +14,7 @@ import {
 } from "firebase/firestore";
 // <<< Import other services for validation >>>
 import { customerService } from './customerService'; 
-import { petService } from './petService';
+import { Pet } from './petService';
 
 const appointmentsCollection = collection(db, "appointments");
 
@@ -194,15 +194,14 @@ export const appointmentService = {
         }
 
         // <<< CRUCIAL VALIDATION: Check if customer and pet belong to the tenant >>>
-        const customer = await customerService.get(customer_id); // Assumes customerService.get checks tenant
-        if (!customer) { // customerService.get returns null if not found OR not owned by tenant
+        const customer = await customerService.get(customer_id); 
+        if (!customer) { 
              console.error(`[appointmentService.create] Error: Customer ${customer_id} not found or does not belong to tenant ${tenantId}.`);
              throw new Error(`Cliente com ID ${customer_id} não encontrado ou inválido para este tenant.`);
         }
-        // No need to check customer.tenant_id === tenantId again if customerService.get does it.
         
-        const pet = await petService.get(pet_id); // Assumes petService.get checks tenant
-        if (!pet) { // petService.get returns null if not found OR not owned by tenant
+        const pet = await Pet.get(pet_id); 
+        if (!pet) { 
              console.error(`[appointmentService.create] Error: Pet ${pet_id} not found or does not belong to tenant ${tenantId}.`);
              throw new Error(`Pet com ID ${pet_id} não encontrado ou inválido para este tenant.`);
         }

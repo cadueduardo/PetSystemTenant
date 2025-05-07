@@ -37,7 +37,7 @@ import {
 
 // <<< IMPORTA OS NOVOS SERVIÇOS FIREBASE >>>
 import { customerService } from './firebase/customerService';
-import { petService } from './firebase/petService'; 
+import { Pet as PetServiceFirebase } from './firebase/petService'; 
 import { storageService } from './firebase/storageService'; 
 import { appointmentService } from './firebase/appointmentService'; 
 import { cancellationReasonService } from './firebase/cancellationReasonService'; 
@@ -53,7 +53,7 @@ import { consultationService } from './firebase/consultationService';
 
 // Exporta as entidades usando os Mocks ou Serviços Firebase
 export const Customer = customerService;
-export const Pet = petService;
+export const Pet = PetServiceFirebase;
 export const Service = serviceService; // <<< Usa Serviço Firebase
 export const Appointment = appointmentService;
 export const QueueService = queueService; // <<< Usa Serviço Firebase

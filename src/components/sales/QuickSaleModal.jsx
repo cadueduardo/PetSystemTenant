@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Loader2, Barcode, X } from "lucide-react";
-import { doc, updateDoc, arrayUnion, arrayRemove, getDoc } from 'firebase/firestore';
+import { doc, updateDoc, collection, getDocs, addDoc, query, where, deleteDoc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseConfig';
 import { toast } from "@/components/ui/use-toast";
 
@@ -27,31 +27,28 @@ export default function QuickSaleModal({ isOpen, onClose, onConfirm, products = 
             onClose();
             return;
         }
-        console.log(`[QuickSaleModal] Modo OS Ativo. Lendo itens da OS: ${targetOsId} para Tenant: ${tenantId}`);
+        console.log(`[QuickSaleModal v2] Modo OS Ativo. Lendo itens da SUBCOLEÇÃO os_items: ${targetOsId} para Tenant: ${tenantId}`);
         setIsLoadingOsItems(true);
         setItemsFromOs([]);
         setLocalCart([]);
         try {
-          const osDocRef = doc(db, "tenants", tenantId, "order_services", targetOsId);
-          const osDocSnap = await getDoc(osDocRef);
-          if (osDocSnap.exists()) {
-            const osData = osDocSnap.data();
-            console.log("[QuickSaleModal] OS data encontrada:", osData);
-            setItemsFromOs(osData.items || []);
-          } else {
-            console.error(`[QuickSaleModal] Documento OS ${targetOsId} não encontrado no tenant ${tenantId}!`);
-            toast({ title: "Erro", description: "Não foi possível carregar a Ordem de Serviço.", variant: "destructive"});
-            onClose();
-          }
+            const itemsCollectionRef = collection(db, "tenants", tenantId, "order_services", targetOsId, "os_items");
+            const itemsSnapshot = await getDocs(itemsCollectionRef);
+            const fetchedItems = itemsSnapshot.docs.map(doc => ({ 
+                osItemId: doc.id,
+                ...doc.data() 
+            }));
+            console.log(`[QuickSaleModal v2] Itens da subcoleção carregados (${fetchedItems.length}):`, fetchedItems);
+            setItemsFromOs(fetchedItems);
         } catch (error) {
-          console.error(`[QuickSaleModal] Erro ao ler itens da OS ${targetOsId} no tenant ${tenantId}:`, error);
+          console.error(`[QuickSaleModal v2] Erro ao ler itens da subcoleção os_items (OS: ${targetOsId}, Tenant: ${tenantId}):`, error);
           toast({ title: "Erro", description: "Falha ao carregar itens da OS.", variant: "destructive"});
           onClose();
         } finally {
           setIsLoadingOsItems(false);
         }
       } else if (isOpen && !targetOsId) {
-        console.log("[QuickSaleModal] Modo Local Ativo (Novo Pedido).");
+        console.log("[QuickSaleModal v2] Modo Local Ativo (Novo Pedido).");
         setLocalCart([]);
         setItemsFromOs([]);
         setIsLoadingOsItems(false);
@@ -70,8 +67,6 @@ export default function QuickSaleModal({ isOpen, onClose, onConfirm, products = 
     );
   }, [products, searchTerm]);
 
-  const currentCartItems = targetOsId ? itemsFromOs : localCart;
-
   const handleBarcodeSubmit = (e) => {
     e.preventDefault();
     const product = products.find(p => p.barcode === barcodeInput);
@@ -89,50 +84,81 @@ export default function QuickSaleModal({ isOpen, onClose, onConfirm, products = 
     if (targetOsId) {
         tenantId = localStorage.getItem('current_tenant');
         if (!tenantId) {
-            console.error("[QuickSaleModal] Tenant ID não encontrado no localStorage!");
+            console.error("[QuickSaleModal v2] Tenant ID não encontrado no localStorage!");
             toast({ title: "Erro Crítico", description: "Identificador do Tenant não encontrado. Não é possível salvar na OS.", variant: "destructive"});
             return;
         }
     }
 
-    const newItem = {
+    const newItemData = {
         itemId: product.id,
         description: product.name,
         quantity: 1,
         unitPrice: product.price,
         totalPrice: product.price,
         itemType: 'product',
+        createdAt: new Date(),
     };
 
     if (targetOsId && tenantId) {
-        console.log(`[QuickSaleModal] Adicionando item à OS ${targetOsId} (Tenant: ${tenantId}):`, newItem);
+        console.log(`[QuickSaleModal v2] Adicionando item à subcoleção os_items da OS ${targetOsId} (Tenant: ${tenantId}):`, newItemData);
         try {
-            const osDocRef = doc(db, "tenants", tenantId, "order_services", targetOsId);
-            const osDocSnap = await getDoc(osDocRef);
-            if (!osDocSnap.exists()) throw new Error(`OS Document ${targetOsId} not found in tenant ${tenantId}`);
-            const existingItems = osDocSnap.data()?.items || [];
-            const existingItemIndex = existingItems.findIndex(i => i.itemId === newItem.itemId);
+            const itemsCollectionRef = collection(db, "tenants", tenantId, "order_services", targetOsId, "os_items");
 
-            if (existingItemIndex > -1) {
-                const updatedItems = [...existingItems];
-                const currentItem = updatedItems[existingItemIndex];
-                currentItem.quantity += 1;
-                currentItem.totalPrice = currentItem.unitPrice * currentItem.quantity;
-                await updateDoc(osDocRef, { items: updatedItems, updatedAt: new Date() });
-                console.log(`[QuickSaleModal] Quantidade incrementada na OS ${targetOsId} para item ${newItem.itemId}`);
-                setItemsFromOs(updatedItems);
-            } else {
-                await updateDoc(osDocRef, {
-                    items: arrayUnion(newItem),
-                    totalValue: (osDocSnap.data()?.totalValue || 0) + newItem.totalPrice,
+            const q = query(itemsCollectionRef, where("itemId", "==", newItemData.itemId));
+            const querySnapshot = await getDocs(q);
+
+            if (!querySnapshot.empty) {
+                const existingDoc = querySnapshot.docs[0];
+                const existingData = existingDoc.data();
+                const newQuantity = (existingData.quantity || 0) + 1;
+                const newTotalPrice = (existingData.unitPrice || 0) * newQuantity;
+                
+                console.log(`[QuickSaleModal v2] Item ${newItemData.itemId} já existe (Doc ID: ${existingDoc.id}). Atualizando quantidade para ${newQuantity}`);
+                await updateDoc(existingDoc.ref, {
+                    quantity: newQuantity,
+                    totalPrice: newTotalPrice,
                     updatedAt: new Date()
                 });
-                console.log(`[QuickSaleModal] Item adicionado à OS ${targetOsId}`);
-                setItemsFromOs([...existingItems, newItem]);
+
+                const updatedItemsState = itemsFromOs.map(item => 
+                    item.osItemId === existingDoc.id 
+                    ? { ...item, quantity: newQuantity, totalPrice: newTotalPrice }
+                    : item
+                );
+                setItemsFromOs(updatedItemsState);
+                
+                const newTotalValue = updatedItemsState.reduce((sum, item) => sum + (item.totalPrice || 0), 0);
+                try {
+                    const osDocRef = doc(db, "tenants", tenantId, "order_services", targetOsId);
+                    await updateDoc(osDocRef, { totalValue: newTotalValue, updatedAt: new Date() });
+                    console.log(`[QuickSaleModal v2 Add/Update] OS Pai ${targetOsId} totalValue atualizado para: ${newTotalValue}`);
+                } catch (osUpdateError) {
+                    console.error(`[QuickSaleModal v2 Add/Update] Erro ao atualizar totalValue da OS Pai ${targetOsId}:`, osUpdateError);
+                }
+                
+                toast({ title: "Quantidade Atualizada", description: `${product.name} teve a quantidade aumentada na OS.` });
+            } else {
+                console.log(`[QuickSaleModal v2] Item ${newItemData.itemId} não existe. Adicionando novo documento.`);
+                const newDocRef = await addDoc(itemsCollectionRef, newItemData);
+                console.log(`[QuickSaleModal v2] Novo item adicionado à OS ${targetOsId} com Doc ID: ${newDocRef.id}`);
+                
+                const updatedItemsState = [...itemsFromOs, { osItemId: newDocRef.id, ...newItemData }];
+                setItemsFromOs(updatedItemsState);
+
+                const newTotalValue = updatedItemsState.reduce((sum, item) => sum + (item.totalPrice || 0), 0);
+                try {
+                    const osDocRef = doc(db, "tenants", tenantId, "order_services", targetOsId);
+                    await updateDoc(osDocRef, { totalValue: newTotalValue, updatedAt: new Date() });
+                    console.log(`[QuickSaleModal v2 Add/New] OS Pai ${targetOsId} totalValue atualizado para: ${newTotalValue}`);
+                } catch (osUpdateError) {
+                    console.error(`[QuickSaleModal v2 Add/New] Erro ao atualizar totalValue da OS Pai ${targetOsId}:`, osUpdateError);
+                }
+
+                toast({ title: "Item Adicionado", description: `${product.name} adicionado à OS.` });
             }
-            toast({ title: "Item Adicionado", description: `${product.name} adicionado à OS.` });
         } catch (error) {
-            console.error(`[QuickSaleModal] Erro ao adicionar item à OS ${targetOsId} (Tenant: ${tenantId}):`, error);
+            console.error(`[QuickSaleModal v2] Erro ao adicionar/atualizar item na subcoleção os_items (OS: ${targetOsId}, Tenant: ${tenantId}):`, error);
             toast({ title: "Erro", description: "Falha ao adicionar item na OS.", variant: "destructive" });
         }
     } else if (!targetOsId) {
@@ -143,128 +169,146 @@ export default function QuickSaleModal({ isOpen, onClose, onConfirm, products = 
               i.itemId === product.id ? { ...i, quantity: i.quantity + 1, totalPrice: product.price * (i.quantity + 1) } : i
             );
           } else {
-            return [...prevCart, {
-                itemId: product.id,
-                name: product.name,
-                description: product.name,
-                quantity: 1,
-                unitPrice: product.price,
-                totalPrice: product.price,
-                itemType: 'product',
-            }];
+            return [...prevCart, newItemData];
           }
         });
     }
   };
 
-  const handleRemoveFromCart = async (itemIdToRemove) => {
+  const handleRemoveFromCart = async (osItemIdToRemove) => {
     let tenantId = null;
     if (targetOsId) {
         tenantId = localStorage.getItem('current_tenant');
         if (!tenantId) {
-            console.error("[QuickSaleModal] Tenant ID não encontrado no localStorage!");
+            console.error("[QuickSaleModal v2] Tenant ID não encontrado no localStorage!");
             toast({ title: "Erro Crítico", description: "Identificador do Tenant não encontrado. Não é possível remover da OS.", variant: "destructive"});
             return;
         }
     }
 
-    if (targetOsId && tenantId) {
-      console.log(`[QuickSaleModal] Tentando remover item ${itemIdToRemove} da OS ${targetOsId} (Tenant: ${tenantId})`);
-      try {
-        const osDocRef = doc(db, "tenants", tenantId, "order_services", targetOsId);
-        
-        const osDocSnap = await getDoc(osDocRef); 
-        if (!osDocSnap.exists()) {
-            console.error(`[QuickSaleModal] OS Document ${targetOsId} não encontrada ao tentar remover item.`);
-            throw new Error(`OS Document ${targetOsId} not found in tenant ${tenantId}`);
-        }
-        
-        const currentItems = osDocSnap.data()?.items || [];
-        console.log(`[QuickSaleModal] Itens atuais na OS (${osDocSnap.id}) antes da remoção:`, currentItems);
-        
-        const itemToRemove = currentItems.find(i => i.itemId === itemIdToRemove);
-        console.log(`[QuickSaleModal] Item encontrado para remoção:`, itemToRemove);
+    console.log(`[QuickSaleModal v2 Remove] Parâmetro recebido osItemIdToRemove: ${osItemIdToRemove}`);
 
-        if (itemToRemove) {
-          console.log(`[QuickSaleModal] Chamando updateDoc com arrayRemove para o item encontrado.`);
-          await updateDoc(osDocRef, {
-            items: arrayRemove(itemToRemove),
-            totalValue: (osDocSnap.data()?.totalValue || 0) - (itemToRemove.totalPrice || 0), 
-            updatedAt: new Date()
-          });
-          console.log(`[QuickSaleModal] updateDoc (arrayRemove) concluído para item ${itemIdToRemove}.`);
-          setItemsFromOs(currentItems.filter(i => i.itemId !== itemIdToRemove)); 
-          toast({ title: "Item Removido" });
-        } else {
-           console.warn(`[QuickSaleModal] Item ${itemIdToRemove} não encontrado nos itens atuais da OS ${targetOsId} (Tenant: ${tenantId}) para remoção.`);
-        }
-      } catch (error) {
-        console.error(`[QuickSaleModal] Erro DENTRO DO TRY ao remover item da OS ${targetOsId} (Tenant: ${tenantId}):`, error);
-        toast({ title: "Erro", description: "Falha ao remover item da OS.", variant: "destructive" });
+    if (targetOsId && tenantId) {
+      console.log(`[QuickSaleModal v2 Remove] Tentando remover item DOC ID ${osItemIdToRemove} da subcoleção os_items (OS: ${targetOsId}, Tenant: ${tenantId})`);
+      
+      let itemDocRef = null;
+      try {
+          itemDocRef = doc(db, 'tenants', tenantId, 'order_services', targetOsId, 'os_items', osItemIdToRemove);
+          console.log(`[QuickSaleModal v2 Remove] Construída referência do documento: ${itemDocRef.path}`);
+      } catch (refError) {
+          console.error("[QuickSaleModal v2 Remove] ERRO ao construir referência do documento:", refError);
+          toast({ title: "Erro Interno", description: "Falha ao criar referência para exclusão.", variant: "destructive" });
+          return;
+      }
+
+      try {
+            setIsLoadingOsItems(true); // Indica carregamento durante a exclusão
+            await deleteDoc(itemDocRef);
+            console.log(`[QuickSaleModal v2 Remove] Chamada deleteDoc CONCLUÍDA para ${itemDocRef.path}.`);
+            
+            const updatedItemsState = itemsFromOs.filter(i => i.osItemId !== osItemIdToRemove);
+            setItemsFromOs(updatedItemsState);
+            console.log(`[QuickSaleModal v2 Remove] Estado local 'itemsFromOs' atualizado APÓS deleteDoc.`);
+
+            const newTotalValue = updatedItemsState.reduce((sum, item) => sum + (item.totalPrice || 0), 0);
+            const osDocRef = doc(db, 'tenants', tenantId, 'order_services', targetOsId);
+            await updateDoc(osDocRef, { totalValue: newTotalValue, updatedAt: new Date() });
+            console.log(`[QuickSaleModal v2 Remove] OS Pai ${targetOsId} totalValue atualizado para: ${newTotalValue}`);
+            
+            toast({ title: "Item Removido", description: "O item foi removido da ordem de serviço." });
+      
+      } catch (deleteError) {
+             console.error(`[QuickSaleModal v2 Remove] ERRO durante deleteDoc para ${itemDocRef?.path}:`, deleteError);
+             toast({ title: "Erro ao Remover Item", description: `Não foi possível remover o item do banco de dados: ${deleteError.message}`, variant: "destructive" });
+      } finally {
+            setIsLoadingOsItems(false); // Finaliza carregamento
       }
     } else if (!targetOsId) {
-      setLocalCart(prevCart => prevCart.filter(i => i.itemId !== itemIdToRemove));
+      setLocalCart(prevCart => prevCart.filter(i => i.itemId !== osItemIdToRemove));
     }
   };
 
-  const handleUpdateQuantity = async (itemIdToUpdate, quantity) => {
+  const handleUpdateQuantity = async (osItemIdToUpdate, quantity) => {
     if (quantity < 1) return;
 
     let tenantId = null;
     if (targetOsId) {
         tenantId = localStorage.getItem('current_tenant');
         if (!tenantId) {
-            console.error("[QuickSaleModal] Tenant ID não encontrado no localStorage!");
+            console.error("[QuickSaleModal v2] Tenant ID não encontrado no localStorage!");
             toast({ title: "Erro Crítico", description: "Identificador do Tenant não encontrado. Não é possível atualizar OS.", variant: "destructive"});
             return;
         }
     }
 
     if (targetOsId && tenantId) {
-       console.log(`[QuickSaleModal] Atualizando quantidade para ${quantity} do item ${itemIdToUpdate} na OS ${targetOsId} (Tenant: ${tenantId})`);
+       console.log(`[QuickSaleModal v2] Atualizando quantidade para ${quantity} do item DOC ID ${osItemIdToUpdate} na subcoleção os_items (OS: ${targetOsId}, Tenant: ${tenantId})`);
       try {
-        const osDocRef = doc(db, "tenants", tenantId, "order_services", targetOsId);
-        const osDocSnap = await getDoc(osDocRef);
-        if (!osDocSnap.exists()) throw new Error(`OS Document ${targetOsId} not found in tenant ${tenantId}`);
-        const currentItems = osDocSnap.data()?.items || [];
-        let oldTotalValue = 0;
-        let newTotalValue = 0;
+        const itemDocRef = doc(db, "tenants", tenantId, "order_services", targetOsId, "os_items", osItemIdToUpdate);
 
-        const updatedItems = currentItems.map(item => {
-           if (item.itemId === itemIdToUpdate) {
-               oldTotalValue += item.totalPrice || 0;
-               const newPrice = item.unitPrice * quantity;
-               newTotalValue += newPrice;
-               return { ...item, quantity: quantity, totalPrice: newPrice };
-           }
-           oldTotalValue += item.totalPrice || 0;
-           newTotalValue += item.totalPrice || 0;
-           return item;
-       });
+        const itemSnap = await getDoc(itemDocRef);
+        if (!itemSnap.exists()) {
+          console.error(`[QuickSaleModal v2] Documento do item ${osItemIdToUpdate} não encontrado no Firestore.`);
+          throw new Error("Documento do item não encontrado.");
+        }
+        
+        const itemData = itemSnap.data();
+        const unitPrice = itemData.unitPrice;
 
-        await updateDoc(osDocRef, {
-            items: updatedItems,
-            totalValue: newTotalValue,
-            updatedAt: new Date()
+        if (typeof unitPrice === 'undefined' || unitPrice === null) {
+          console.error(`[QuickSaleModal v2] Preço unitário (unitPrice) não encontrado nos dados do item ${osItemIdToUpdate} do Firestore.`);
+          throw new Error("Preço unitário do item não encontrado.");
+        }
+        
+        const newTotalPrice = unitPrice * quantity;
+
+        await updateDoc(itemDocRef, {
+          quantity: quantity,
+          totalPrice: newTotalPrice,
+          updatedAt: new Date()
         });
-        console.log(`[QuickSaleModal] Quantidade atualizada na OS ${targetOsId}`);
-        setItemsFromOs(updatedItems);
+        
+        const updatedItemsState = itemsFromOs.map(item => 
+            item.osItemId === osItemIdToUpdate 
+            ? { ...item, quantity: quantity, totalPrice: newTotalPrice } 
+            : item
+        );
+        setItemsFromOs(updatedItemsState);
+
+        const newTotalValue = updatedItemsState.reduce((sum, item) => sum + (item.totalPrice || 0), 0);
+        const osDocRef = doc(db, "tenants", tenantId, "order_services", targetOsId);
+        await updateDoc(osDocRef, { totalValue: newTotalValue, updatedAt: new Date() });
+        console.log(`[QuickSaleModal v2 Update] OS Pai ${targetOsId} totalValue atualizado para: ${newTotalValue}`);
+
+        toast({ title: "Quantidade Atualizada", description: "A quantidade do item foi atualizada na OS." });
+
       } catch (error) {
-         console.error(`[QuickSaleModal] Erro ao atualizar quantidade na OS ${targetOsId} (Tenant: ${tenantId}):`, error);
-         toast({ title: "Erro", description: "Falha ao atualizar quantidade na OS.", variant: "destructive" });
+        console.error(`[QuickSaleModal v2] Erro ao atualizar quantidade do item ${osItemIdToUpdate} na subcoleção os_items (OS: ${targetOsId}, Tenant: ${tenantId}):`, error);
+        toast({ title: "Erro", description: `Falha ao atualizar quantidade do item na OS. ${error.message}`, variant: "destructive" });
       }
     } else if (!targetOsId) {
-      setLocalCart(prevCart =>
-        prevCart.map(i =>
-          i.itemId === itemIdToUpdate ? { ...i, quantity, totalPrice: i.unitPrice * quantity } : i
-        )
-      );
+      const itemIdToUpdateLocal = osItemIdToUpdate;
+      setLocalCart(prevCart => {
+        const itemIndex = prevCart.findIndex(item => item.itemId === itemIdToUpdateLocal);
+        if (itemIndex === -1) return prevCart;
+        
+        const itemToUpdate = prevCart[itemIndex];
+        const newTotalPrice = (itemToUpdate.unitPrice || 0) * quantity;
+
+        const updatedCart = [...prevCart];
+        updatedCart[itemIndex] = {
+          ...itemToUpdate,
+          quantity: quantity,
+          totalPrice: newTotalPrice
+        };
+        return updatedCart;
+      });
     }
   };
 
   const getCartTotal = () => {
-    const itemsToSum = targetOsId ? itemsFromOs : localCart;
-    return itemsToSum.reduce((total, item) => total + (item.totalPrice || (item.unitPrice * item.quantity) || 0), 0);
+    const items = targetOsId ? itemsFromOs : localCart;
+    return items.reduce((total, item) => total + (item.totalPrice || 0), 0);
   };
 
   const handleConfirmClick = () => {
@@ -362,7 +406,15 @@ export default function QuickSaleModal({ isOpen, onClose, onConfirm, products = 
                                   type="number"
                                   min="1"
                                   value={item.quantity}
-                                  onChange={(e) => handleUpdateQuantity(item.itemId || item.id, parseInt(e.target.value))}
+                                  onChange={(e) => {
+                                      const idToUpdate = targetOsId ? item.osItemId : (item.itemId || item.id);
+                                      if (!idToUpdate) {
+                                          console.error("[QuickSaleModal UI] ID do item para atualização não encontrado!", item);
+                                          toast({title:"Erro Interno", description:"Não foi possível identificar o item para atualizar.", variant:"destructive"});
+                                          return;
+                                      }
+                                      handleUpdateQuantity(idToUpdate, parseInt(e.target.value));
+                                  }}
                                   className="w-14 h-7 text-xs"
                                 />
                                 <span> R$ {(item.totalPrice || (item.unitPrice * item.quantity))?.toFixed(2)}</span>
@@ -370,7 +422,11 @@ export default function QuickSaleModal({ isOpen, onClose, onConfirm, products = 
                                   variant="ghost"
                                   size="icon"
                                   className="h-7 w-7"
-                                  onClick={() => handleRemoveFromCart(item.itemId || item.id)}
+                                  onClick={() => {
+                                      const idToRemove = item.osItemId || item.itemId || item.id;
+                                      console.log(`[QuickSaleModal UI Click] Botão X clicado para remover ID: ${idToRemove}`, item);
+                                      handleRemoveFromCart(idToRemove);
+                                  }}
                                 >
                                   <X className="h-3 w-3" />
                                 </Button>

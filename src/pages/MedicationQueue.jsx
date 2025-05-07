@@ -9,9 +9,8 @@ import MedicationAdministrationModal from '@/components/medication/MedicationAdm
 
 // Adicionar importações dos serviços Firestore
 import { medicationTaskService } from '@/api/firebase/medicationTaskService';
-import { petService } from '@/api/firebase/petService';
+import { Pet } from '@/api/firebase/petService';
 import { customerService } from '@/api/firebase/customerService';
-import { medicalRecordService } from '@/api/firebase/medicalRecordService';
 
 export default function MedicationQueue() {
   const [groupedTasks, setGroupedTasks] = useState({});
@@ -61,7 +60,7 @@ export default function MedicationQueue() {
                   ownerName = 'Tutor Desconhecido';
                 } else {
                     console.log(`[MedicationQueue] Buscando Pet ID: ${currentPetId}`);
-                    pet = await petService.get(currentPetId);
+                    pet = await Pet.get(currentPetId);
                     console.log(`[MedicationQueue] Pet encontrado:`, pet);
                     petName = pet?.name || 'Pet Desconhecido';
 
@@ -136,93 +135,6 @@ export default function MedicationQueue() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleFinishAdministration = async (taskId) => {
-    console.log(`[MedicationQueue] Tentando finalizar tarefa ${taskId}`);
-    try {
-      const taskToComplete = groupedTasks[taskId]?.tasks.find(t => t.id === taskId) || await medicationTaskService.get(taskId);
-      if (!taskToComplete) {
-          throw new Error("Tarefa não encontrada para registrar no histórico.");
-      }
-      console.log("[MedicationQueue] Detalhes da tarefa para histórico:", taskToComplete);
-
-      await medicationTaskService.update(taskId, { 
-          status: 'administrada',
-          end_time: new Date().toISOString()
-      });
-      toast({
-        title: "Sucesso",
-        description: "Medicação marcada como administrada.",
-        action: <CheckCircle className="text-green-500" />,
-      });
-      
-      try {
-         await medicalRecordService.create({
-             tenant_id: taskToComplete.tenant_id,
-             pet_id: taskToComplete.pet_id,
-             record_date: new Date().toISOString(),
-             type: 'medication_administration',
-             description: `Medicação administrada: ${taskToComplete.medicationName}. Detalhes: ${taskToComplete.details || '-'}`, 
-             related_appointment_id: taskToComplete.appointmentId
-         });
-         console.log(`[MedicationQueue] Registro adicionado ao histórico do pet ${taskToComplete.pet_id}`);
-         toast({ title: "Histórico Atualizado", description: "Administração registrada no prontuário.", });
-      } catch (recordError) {
-         console.error("[MedicationQueue] Erro ao criar registro no histórico:", recordError);
-         toast({ title: "Aviso", description: "Não foi possível registrar a administração no histórico.", variant: "destructive" });
-      }
-      
-      fetchTasks(); 
-    } catch (err) {
-      console.error("[MedicationQueue] Erro ao finalizar medicação:", err);
-      toast({
-        title: "Erro",
-        description: `Não foi possível finalizar a medicação: ${err.message}`,
-        variant: "destructive",
-      });
-    }
-  };
-
-  const handleCancelTask = async (taskId) => {
-    console.log(`[MedicationQueue] Tentando cancelar tarefa ${taskId}`);
-    try {
-      await medicationTaskService.update(taskId, { status: 'cancelada' });
-      toast({
-        title: "Sucesso",
-        description: "Medicação cancelada com sucesso.",
-      });
-      fetchTasks();
-    } catch (err) {
-      console.error("[MedicationQueue] Erro ao cancelar medicação:", err);
-      toast({
-        title: "Erro",
-        description: "Não foi possível cancelar a medicação.",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const handleStartAdministration = async (taskId) => {
-    console.log(`[MedicationQueue] Tentando iniciar tarefa ${taskId}`);
-    try {
-      await medicationTaskService.update(taskId, { 
-          status: 'em_andamento',
-          start_time: new Date().toISOString()
-      });
-      toast({
-        title: "Iniciada",
-        description: "Administração da medicação iniciada.",
-      });
-      fetchTasks(); // Atualiza a lista para refletir a mudança de status
-    } catch (err) {
-      console.error("[MedicationQueue] Erro ao iniciar medicação:", err);
-      toast({
-        title: "Erro",
-        description: `Não foi possível iniciar a medicação: ${err.message}`,
-        variant: "destructive",
-      });
-    }
-  };
-
   // Função para abrir o modal com os dados do pet selecionado
   const handleStartPetAdministration = (petGroup) => {
     console.log("[MedicationQueue] Abrindo modal para:", petGroup);
@@ -242,7 +154,7 @@ export default function MedicationQueue() {
       const lowerCaseStatus = status.toLowerCase();
       
       const filteredGroups = Object.entries(groupedTasks)
-        .map(([petId, group]) => {
+        .map(([, group]) => {
           let tasksInGroup = [];
           if (lowerCaseStatus === 'pending') {
               tasksInGroup = group.tasks.filter(task => 

@@ -10,6 +10,9 @@ import {
   where,
   orderBy,
   serverTimestamp,
+  limit,
+  startAfter,
+  getCountFromServer,
   // deleteDoc // Only if you plan to hard-delete
 } from "firebase/firestore";
 
@@ -19,7 +22,7 @@ export const serviceService = {
 
   /**
    * Lists services for the current tenant based on filters.
-   * @param {object} filters - Object with filters (e.g., { module, category, is_active }). tenant_id is ignored.
+   * @param {object} filters - Object with filters (e.g., { module, category, is_active, orderByField, orderByDirection, limitNum, startAfterDoc }). tenant_id is ignored.
    * @returns {Promise<Array<object>>} - Array of service objects.
    */
   list: async (filters = {}) => {
@@ -28,31 +31,48 @@ export const serviceService = {
       console.error('[serviceService.list] Tenant ID not found in localStorage.');
       throw new Error('Tenant não identificado. Faça login novamente.');
     }
-    const { tenant_id, ...restFilters } = filters;
+    const { 
+      tenant_id, 
+      module: filterModule,
+      category: filterCategory,
+      is_active: filterIsActive,
+      orderByField = 'name',
+      orderByDirection = 'asc',
+      limitNum,
+      startAfterDoc
+    } = filters;
+
     if (tenant_id) {
         console.warn("[serviceService.list] tenant_id filter ignored. Using tenant from localStorage.");
     }
-    console.log(`[serviceService.list] Filtering Services for Tenant ID: ${tenantId} with:`, restFilters);
+    console.log(`[serviceService.list] Filtering Services for Tenant ID: ${tenantId} with:`, filters);
 
-    let queryConstraints = []; // Define outside try
+    let queryConstraints = []; 
     try {
-       queryConstraints.push(where("tenant_id", "==", tenantId)); // <<< Always filter by tenant
+       queryConstraints.push(where("tenant_id", "==", tenantId));
       
-      if (restFilters.module) {
-        queryConstraints.push(where("module", "==", restFilters.module));
+      if (filterModule) {
+        queryConstraints.push(where("module", "==", filterModule));
       }
-      if (restFilters.category) {
-        queryConstraints.push(where("category", "==", restFilters.category));
+      if (filterCategory) {
+        queryConstraints.push(where("category", "==", filterCategory));
       }
-      // Use hasOwnProperty check for boolean filter
-      if (Object.prototype.hasOwnProperty.call(restFilters, 'is_active')) { 
-        queryConstraints.push(where("is_active", "==", restFilters.is_active));
+      
+      if (Object.prototype.hasOwnProperty.call(filters, 'is_active')) { 
+        queryConstraints.push(where("is_active", "==", filterIsActive));
       } else {
-        // Default to only active services if not specified
         queryConstraints.push(where("is_active", "==", true));
       }
       
-      queryConstraints.push(orderBy("name")); 
+      queryConstraints.push(orderBy(orderByField, orderByDirection)); 
+
+      if (startAfterDoc) {
+        queryConstraints.push(startAfter(startAfterDoc));
+      }
+
+      if (limitNum) {
+        queryConstraints.push(limit(limitNum));
+      }
 
       const q = query(servicesCollection, ...queryConstraints);
 
@@ -61,8 +81,10 @@ export const serviceService = {
         id: docSnap.id,
         ...docSnap.data(),
       }));
+      const lastVisible = querySnapshot.docs[querySnapshot.docs.length - 1];
+
       console.log(`[serviceService.list] Found ${services.length} services for Tenant ${tenantId}.`);
-      return services;
+      return { services, lastVisibleDoc: lastVisible };
     } catch (error) {
       console.error(`[serviceService.list] Error fetching services for Tenant ${tenantId}:`, error);
       if (error.code === 'permission-denied') {
@@ -76,6 +98,45 @@ export const serviceService = {
        }
       throw error;
     }
+  },
+
+  getCount: async (filters = {}) => {
+    const tenantId = localStorage.getItem('current_tenant');
+    if (!tenantId) {
+      console.error('[serviceService.getCount] Tenant ID not found in localStorage.');
+      throw new Error('Tenant não identificado. Faça login novamente.');
+    }
+    const { 
+      tenant_id,
+      module: filterModule,
+      category: filterCategory,
+      is_active: filterIsActive
+    } = filters;
+
+    if (tenant_id) {
+        console.warn("[serviceService.getCount] tenant_id filter ignored. Using tenant from localStorage.");
+    }
+    console.log(`[serviceService.getCount] Getting count for Tenant ID: ${tenantId} with:`, { filterModule, filterCategory, filterIsActive });
+
+    const queryConstraints = [];
+    queryConstraints.push(where("tenant_id", "==", tenantId));
+
+    if (filterModule) {
+      queryConstraints.push(where("module", "==", filterModule));
+    }
+    if (filterCategory) {
+      queryConstraints.push(where("category", "==", filterCategory));
+    }
+    if (Object.prototype.hasOwnProperty.call(filters, 'is_active')) {
+      queryConstraints.push(where("is_active", "==", filterIsActive));
+    } else {
+      queryConstraints.push(where("is_active", "==", true));
+    }
+
+    const q = query(servicesCollection, ...queryConstraints);
+    const snapshot = await getCountFromServer(q);
+    console.log("[serviceService.getCount] Total services for filter:", snapshot.data().count);
+    return snapshot.data().count;
   },
 
   /**
@@ -140,9 +201,9 @@ export const serviceService = {
     try {
         const dataToSave = {
             ...restData,
-            name, // Ensure name is included
-            module, // Ensure module is included
-            tenant_id: tenantId, // <<< Set tenant ID
+            name,
+            module,
+            tenant_id: tenantId,
             is_active: restData.is_active !== undefined ? restData.is_active : true,
             created_at: serverTimestamp(),
             updated_at: serverTimestamp()

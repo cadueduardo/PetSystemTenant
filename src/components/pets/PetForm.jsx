@@ -377,27 +377,20 @@ export default function PetForm({ onSuccess, customerId, pet = null }) {
     }
 
     try {
-      const currentTenant = localStorage.getItem('current_tenant') || "";
-      const petData = {
-        ...formData,
-        tenant_id: currentTenant,
-        owner_id: formData.owner_id || customerId,
-        inactivation_reason: formData.is_inactive ? formData.inactivation_reason : "",
-        date_of_death: formData.is_inactive && formData.inactivation_reason === 'Óbito' ? formData.date_of_death : null,
-      };
-
+      let savedPet;
       let successMessage = "";
 
-      if (pet) {
-        console.log('[PetForm] Dados a serem enviados para Pet.update:', pet.id, petData);
-        await Pet.update(pet.id, petData);
+      if (pet && pet.id) {
+        console.log('[PetForm] Atualizando pet existente:', pet.id, formData);
+        await Pet.update(pet.id, formData);
+        savedPet = { ...formData, id: pet.id };
         successMessage = "Pet atualizado com sucesso!";
       } else {
-        console.log('[PetForm] Dados a serem enviados para Pet.create:', petData);
-        await Pet.create(petData);
+        console.log('[PetForm] Dados a serem enviados para Pet.create:', formData);
+        savedPet = await Pet.create(formData);
+        console.log('[PetForm] Pet criado:', savedPet);
         successMessage = "Pet cadastrado com sucesso!";
       }
-
       console.log('[PetForm] Operação (create/update) executada com sucesso (aparentemente).');
 
       toast({
@@ -407,13 +400,14 @@ export default function PetForm({ onSuccess, customerId, pet = null }) {
 
       if (onSuccess) {
         console.log('[PetForm] Chamando onSuccess...');
-        onSuccess();
+        onSuccess(savedPet);
       }
+
     } catch (error) {
       console.error("Erro ao salvar pet:", error);
       toast({
         title: "Erro",
-        description: error.message || "Não foi possível salvar o pet. Tente novamente.",
+        description: error.message || "Não foi possível salvar o pet.",
         variant: "destructive"
       });
     } finally {

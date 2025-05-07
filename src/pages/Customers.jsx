@@ -44,12 +44,15 @@ import {
   AlertDialogHeader, 
   AlertDialogTitle 
 } from "@/components/ui/alert-dialog";
+import PaginationControls from "@/components/ui/PaginationControls";
+import { collection, query, orderBy, limit, getDocs, startAfter, endBefore, getCountFromServer } from "firebase/firestore";
+import { db } from "@/lib/firebaseConfig";
 
 export default function CustomersPage() {
   const navigate = useNavigate();
   const { currentTenant, isLoading: isTenantLoading } = useTenant();
   const [customers, setCustomers] = useState([]);
-  const [pets, setPets] = useState([]);
+  const [pets, setPets] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -65,29 +68,89 @@ export default function CustomersPage() {
   const [showOtherInactivateInput, setShowOtherInactivateInput] = useState(false);
   const [showPetConfirmationAlert, setShowPetConfirmationAlert] = useState(false);
   const [reactivatedCustomerData, setReactivatedCustomerData] = useState(null);
+  const [pageSize, setPageSize] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [lastVisibleDoc, setLastVisibleDoc] = useState(null);
+  const [firstVisibleDoc, setFirstVisibleDoc] = useState(null);
+  const [totalCustomers, setTotalCustomers] = useState(0);
+  const [isLoadingPage, setIsLoadingPage] = useState(false);
+  const [sortField, /* setSortField */] = useState('full_name');
+  const [sortDirection, /* setSortDirection */] = useState('asc');
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (direction = 'current', newPageSize = pageSize) => {
     const tenantId = currentTenant?.id;
     if (!tenantId) {
-      console.log("[CustomersPage loadData] No tenant ID available yet.");
+      console.log("[CustomersPage loadData] No tenant ID.");
       setIsLoading(false);
       setCustomers([]);
-      setPets([]);
+      setPets({});
       return;
     }
 
-    console.log(`[CustomersPage loadData] Loading data for tenant ID: ${tenantId}`);
-    setIsLoading(true);
+    console.log(`[CustomersPage loadData] Loading page. Direction: ${direction}, Size: ${newPageSize}, Current Page: ${currentPage}`);
+    setIsLoadingPage(true);
+    if (direction === 'current' && newPageSize === pageSize) setIsLoading(true);
+
     try {
-      const [customersData, petsData] = await Promise.all([
-        Customer.list({ tenant_id: tenantId }),
-        Pet.list({ tenant_id: tenantId })
-      ]);
+      const customersRef = collection(db, `tenants/${tenantId}/customers`);
+      let q = query(customersRef, 
+          orderBy(sortField, sortDirection), 
+          limit(newPageSize)
+      );
+
+      if (currentPage === 1 && direction !== 'prev') {
+         const countQuery = query(customersRef);
+         const snapshot = await getCountFromServer(countQuery);
+         setTotalCustomers(snapshot.data().count);
+      }
       
-      console.log('[CustomersPage loadData] Pets carregados:', petsData);
-      customersData.sort((a, b) => a.full_name.localeCompare(b.full_name));
+      if (direction === 'next' && lastVisibleDoc) {
+        q = query(q, startAfter(lastVisibleDoc));
+      } else if (direction === 'prev' && firstVisibleDoc) {
+        q = query(
+            customersRef, 
+            orderBy(sortField, sortDirection === 'asc' ? 'desc' : 'asc'),
+            endBefore(firstVisibleDoc),
+            limit(newPageSize)
+        );
+      }
+
+      const documentSnapshots = await getDocs(q);
+      let customersData = documentSnapshots.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      if (direction === 'prev') {
+          customersData.reverse();
+      }
+      
       setCustomers(customersData);
-      setPets(petsData);
+      
+      const newLastVisible = documentSnapshots.docs[documentSnapshots.docs.length - 1];
+      const newFirstVisible = documentSnapshots.docs[0];
+      setLastVisibleDoc(newLastVisible || null);
+      setFirstVisibleDoc(newFirstVisible || null);
+
+      if (direction === 'next') setCurrentPage(prev => prev + 1);
+      else if (direction === 'prev') setCurrentPage(prev => Math.max(1, prev - 1));
+      else if (direction === 'current') setCurrentPage(1);
+
+      if (customersData.length > 0) {
+        const customerIdsOnPage = customersData.map(c => c.id);
+        const allPetsData = await Pet.list({ tenant_id: tenantId });
+        const petsMap = {};
+        allPetsData.forEach(pet => {
+           if (customerIdsOnPage.includes(pet.owner_id)) {
+             if (!petsMap[pet.owner_id]) {
+               petsMap[pet.owner_id] = [];
+             }
+             petsMap[pet.owner_id].push(pet);
+           }
+        });
+        setPets(petsMap);
+        console.log(`[CustomersPage loadData] Pets loaded for ${customersData.length} customers.`, petsMap);
+      } else {
+        setPets({});
+      }
+
     } catch (error) {
       console.error(`[CustomersPage loadData] Erro ao carregar dados para tenant ${tenantId}:`, error);
       toast({
@@ -96,23 +159,23 @@ export default function CustomersPage() {
         variant: "destructive"
       });
       setCustomers([]); 
-      setPets([]);
+      setPets({});
     } finally {
       setIsLoading(false);
+      setIsLoadingPage(false);
     }
-  }, [currentTenant?.id]);
+  }, [currentTenant?.id, pageSize, sortField, sortDirection, lastVisibleDoc, firstVisibleDoc, currentPage, toast]);
 
   useEffect(() => {
     if (currentTenant?.id) {
-      loadData();
+      loadData('current', pageSize);
     } else if (!isTenantLoading) {
         console.log("[CustomersPage useEffect] Tenant context loaded, but no current tenant found.");
         setIsLoading(false);
         setCustomers([]);
-        setPets([]);
+        setPets({});
     }
-    
-  }, [currentTenant?.id, isTenantLoading, loadData]);
+  }, [currentTenant?.id, isTenantLoading]);
 
   useEffect(() => {
     if (showInactivateModal && currentTenant?.id) {
@@ -226,23 +289,33 @@ export default function CustomersPage() {
   };
 
   const getPetsForCustomer = (customerId) => {
-    console.log(`[CustomersPage getPetsForCustomer] Buscando pets para Customer ID: ${customerId}. Total de pets no estado: ${pets.length}`);
-    const filtered = pets.filter(pet => pet.owner_id === customerId);
-    console.log(`[CustomersPage getPetsForCustomer] Pets encontrados para ${customerId}:`, filtered);
-    return filtered;
+    return pets[customerId] || [];
   };
 
   const filteredCustomers = customers.filter(customer => {
-    const matchesSearch = 
+    const matchesStatus = showInactive ? customer.status === 'inactive' : customer.status !== 'inactive';
+    if (!matchesStatus) return false;
+    
+    if (!searchQuery) return true;
+    return (
       customer.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       customer.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       customer.phone?.includes(searchQuery) ||
-      customer.cpf?.includes(searchQuery);
-
-    const matchesStatus = showInactive ? customer.status === 'inactive' : customer.status !== 'inactive';
-    
-    return matchesSearch && matchesStatus;
+      customer.cpf?.includes(searchQuery)
+    );
   });
+
+  const handlePageChange = (direction) => {
+    loadData(direction, pageSize);
+  };
+
+  const handlePageSizeChange = (newPageSize) => {
+    setPageSize(newPageSize);
+    setLastVisibleDoc(null); 
+    setFirstVisibleDoc(null);
+    setCurrentPage(1);
+    loadData('current', newPageSize); 
+  };
 
   if (isLoading || isTenantLoading) {
     return (
@@ -302,16 +375,21 @@ export default function CustomersPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredCustomers.length === 0 ? (
+            {isLoadingPage ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-blue-500 mx-auto" />
+                </TableCell>
+              </TableRow>
+            ) : filteredCustomers.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="text-center py-8 text-gray-500">
-                  Nenhum cliente encontrado.
+                  {customers.length === 0 ? 'Nenhum cliente cadastrado.' : 'Nenhum cliente encontrado nesta página com os filtros atuais.'}
                 </TableCell>
               </TableRow>
             ) : (
               filteredCustomers.map((customer) => {
                 const customerPets = getPetsForCustomer(customer.id);
-                console.log(`[CustomersPage Table Render] Customer ID: ${customer.id}, Nome: ${customer.full_name}, Contagem de Pets: ${customerPets.length}`);
                 const isInactive = customer.status === 'inactive';
                 
                 return (
@@ -402,6 +480,17 @@ export default function CustomersPage() {
             )}
           </TableBody>
         </Table>
+        <PaginationControls
+           currentPage={currentPage}
+           pageSize={pageSize}
+           hasNextPage={customers.length === pageSize}
+           hasPreviousPage={currentPage > 1}
+           itemCountOnPage={customers.length}
+           totalItems={totalCustomers}
+           onPageChange={handlePageChange}
+           onPageSizeChange={handlePageSizeChange}
+           isLoading={isLoadingPage}
+         />
       </div>
 
       <Dialog open={showForm} onOpenChange={setShowForm}>

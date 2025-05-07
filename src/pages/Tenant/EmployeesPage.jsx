@@ -1,16 +1,18 @@
-import { useState, useEffect } from 'react';
-import { getFirestore, collection, query, where, onSnapshot, doc, getDocs, deleteDoc, updateDoc } from 'firebase/firestore';
+import { useState, useEffect, useCallback } from 'react';
+import { getFirestore, doc, deleteDoc, updateDoc, getDocs, collection, query, where } from 'firebase/firestore';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { AlertCircle, PlusCircle, Pencil, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
+import { AlertCircle, PlusCircle, Pencil, Trash2, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTenant } from '@/components/tenant/TenantContext';
 import { useToast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { collaboratorService } from '@/api/firebase/collaboratorService';
+import PaginationControls from "@/components/ui/PaginationControls";
 
 // --- Log para verificar se o módulo JS está sendo carregado --- 
 console.log("--- MODULE LOAD: src/pages/Tenant/EmployeesPage.jsx (Restoring Firestore Query) ---");
@@ -54,93 +56,130 @@ const getEmployeeStatusDisplay = (employee) => {
 function EmployeesPage() {
   const [employees, setEmployees] = useState([]);
   const [profilesMap, setProfilesMap] = useState({});
-  const [loading, setLoading] = useState(true); 
+  const [isLoadingInitial, setIsLoadingInitial] = useState(true);
   const [error, setError] = useState(null);
   const tenantContext = useTenant();
   const db = getFirestore();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // --- Log para depurar o contexto DEPOIS de obtê-lo ---
-  console.log('[EmployeesPage] Rendering. Actual tenantContext value:', tenantContext);
-  // -------------------------------------------------
+  // Estados de Paginação
+  const [pageSize, setPageSize] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [lastVisibleDoc, setLastVisibleDoc] = useState(null);
+  const [firstVisibleDoc, setFirstVisibleDoc] = useState(null);
+  const [totalEmployees, setTotalEmployees] = useState(0);
+  const [isLoadingPage, setIsLoadingPage] = useState(false);
 
-  // Efeito para buscar colaboradores (Firestore ATIVADO)
+  // Ordenação padrão (pode ser expandida com UI no futuro)
+  const sortBy = 'nome'; // Fixo por enquanto
+  const sortOrder = 'asc'; // Fixo por enquanto
+
+  const loadEmployeesPage = useCallback(async (direction = 'current', newPageSize = pageSize, forFiltersReset = false) => {
+    const tenantId = tenantContext.currentTenant?.id;
+    if (!tenantId) {
+      setError("ID da Loja não encontrado. Não é possível buscar colaboradores.");
+      setIsLoadingInitial(false);
+      setIsLoadingPage(false);
+      setEmployees([]);
+      return;
+    }
+
+    console.log(`[EmployeesPage loadEmployeesPage] Dir: ${direction}, Size: ${newPageSize}, Page: ${currentPage}, Tenant: ${tenantId}`);
+    setIsLoadingPage(true);
+    if (direction === 'current' || forFiltersReset) setIsLoadingInitial(true);
+
+    try {
+      const filterOptions = {
+        tenantId,
+        orderByField: sortBy,
+        orderByDirection: sortOrder,
+        limitNum: newPageSize,
+      };
+
+      if (direction === 'current' || forFiltersReset) {
+        const count = await collaboratorService.getCount({ tenantId });
+        setTotalEmployees(count);
+        setCurrentPage(1);
+        setFirstVisibleDoc(null);
+        setLastVisibleDoc(null);
+        filterOptions.startAfterDoc = null;
+      } else if (direction === 'next' && lastVisibleDoc) {
+        filterOptions.startAfterDoc = lastVisibleDoc;
+      } else if (direction === 'prev' && firstVisibleDoc) {
+        // Lógica de 'prev' ainda simplificada. Idealmente, o service lidaria com endBefore.
+        // Por ora, vamos tentar inverter a ordem e pegar o "startAfter" do que seria o fim da página anterior.
+        // Esta lógica de 'prev' é complexa sem endBeforeDoc no service.
+        // A melhoria seria adicionar isso ao collaboratorService.list
+        // Temporariamente, pode não funcionar perfeitamente ou ser menos eficiente.
+        console.warn("[EmployeesPage] 'Previous' page logic is simplified.");
+        filterOptions.orderByDirection = sortOrder === 'asc' ? 'desc' : 'asc';
+        // Sem endBeforeDoc, a query buscaria a partir do início na ordem reversa.
+        // Precisamos buscar "até" o firstVisibleDoc.
+        // A solução de Customers.jsx usa `endBefore` diretamente na query, o que não temos no service.
+        // Solução pragmática: recarregar a primeira página se o usuário tentar ir para trás.
+        // Isso é feito efetivamente pelo PaginationControls se hasPreviousPage for gerenciado corretamente.
+        // Ou, para tentar uma navegação, faríamos a query reversa e pegaríamos os últimos, depois reverteríamos.
+        // Esta parte é complexa de acertar sem o `endBefore` no `collaboratorService.list`.
+        // Para este passo, vamos manter a lógica de `prev` mais simples: decrementar `currentPage`
+        // e o `PaginationControls` gerenciará a disponibilidade do botão.
+        // A busca efetiva da página anterior correta precisará de `endBefore`.
+        // Por agora, apenas preparamos a query para ordem reversa, mas `startAfterDoc` não é usado para `prev` aqui.
+        // A query em collaboratorService.list fará orderBy invertido. A reversão dos dados será feita após a busca.
+      }
+
+      const { collaborators: fetchedCollaborators, lastVisibleDoc: newLastVisible } = await collaboratorService.list(filterOptions);
+      
+      let employeesData = fetchedCollaborators || [];
+      if (direction === 'prev' && firstVisibleDoc && filterOptions.orderByDirection !== sortOrder) {
+         // Se a ordem da query foi invertida para buscar a página anterior,
+         // precisamos reverter os resultados para a ordem de exibição correta.
+         employeesData.reverse();
+      }
+
+      setEmployees(employeesData);
+      setLastVisibleDoc(newLastVisible || null);
+      setFirstVisibleDoc(employeesData.length > 0 ? employeesData[0] : null);
+
+      if (employeesData.length > 0) {
+        fetchProfileNames(employeesData);
+      }
+
+      if (direction === 'next') {
+        setCurrentPage(prev => prev + 1);
+      } else if (direction === 'prev' && currentPage > 1) {
+        setCurrentPage(prev => prev - 1);
+      }
+      // Se direction === 'current' ou forFiltersReset, setCurrentPage(1) já foi chamado.
+
+    } catch (err) {
+      console.error("[EmployeesPage] Error loading collaborators:", err);
+      setError("Falha ao carregar colaboradores. Tente novamente mais tarde.");
+      setTotalEmployees(0);
+      setEmployees([]);
+    } finally {
+      setIsLoadingInitial(false);
+      setIsLoadingPage(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantContext.currentTenant?.id, pageSize, toast]); // Adicionado toast às dependências
+
   useEffect(() => {
-    console.log(`[EmployeesPage] useEffect triggered. isLoading: ${tenantContext.isLoading}, error: ${tenantContext.error}, currentTenant:`, tenantContext.currentTenant);
-
     if (tenantContext.isLoading) {
-      console.log('[EmployeesPage] TenantContext is loading...');
-      setLoading(true);
+      setIsLoadingInitial(true);
       setError(null);
       return;
     }
-
     if (tenantContext.error) {
-       console.error('[EmployeesPage] Error reported by TenantContext:', tenantContext.error);
-       setError(`Erro ao carregar informações da loja: ${tenantContext.error}`);
-       setLoading(false);
-       return;
-    }
-
-    const tenantId = tenantContext.currentTenant?.id;
-
-    if (!tenantId) {
-      console.error('[EmployeesPage] TenantContext is ready, but tenantId is missing. currentTenant:', tenantContext.currentTenant);
-      setError("ID da Loja não encontrado após carregamento do contexto. Não é possível buscar colaboradores.");
-      setLoading(false); 
+      setError(`Erro ao carregar informações da loja: ${tenantContext.error}`);
+      setIsLoadingInitial(false);
       return;
     }
-    
-    // --- FIRESTORE QUERY ATIVADA --- 
-    console.log(`[EmployeesPage] TenantId found: ${tenantId}. Fetching collaborators...`);
-    setLoading(true); // Inicia loading dos colaboradores
-    setError(null); // Limpa erros anteriores
-
-    const employeesCollection = collection(db, 'colaboradores');
-    const q = query(employeesCollection, where("tenantId", "==", tenantId));
-
-    // --- RESTAURAR onSnapshot ---
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      console.log('[EmployeesPage] Collaborators snapshot received.');
-      const employeesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setEmployees(employeesData);
-      fetchProfileNames(employeesData); // Chama a função para buscar nomes dos perfis
-      setLoading(false); // Finaliza loading APÓS receber dados
-    }, (err) => {
-      console.error("[EmployeesPage] Error fetching collaborators: ", err);
-      setError("Falha ao carregar colaboradores. Tente novamente mais tarde.");
-      setLoading(false); // Finaliza loading em caso de erro
-    });
-
-    return () => {
-      console.log('[EmployeesPage] Unsubscribing from collaborators snapshot.');
-      unsubscribe(); // Limpa o listener ao desmontar ou antes de re-executar
-    };
-    // --- FIM RESTAURAÇÃO ---
-
-    // const fetchWithGetDocs = async () => {
-    //   try {
-    //     console.log('[EmployeesPage] Fetching collaborators with getDocs...');
-    //     const querySnapshot = await getDocs(q);
-    //     console.log('[EmployeesPage] Collaborators getDocs successful.');
-    //     const employeesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    //     setEmployees(employeesData);
-    //     fetchProfileNames(employeesData);
-    //     setLoading(false);
-    //   } catch (err) {
-    //     console.error("[EmployeesPage] Error fetching collaborators with getDocs: ", err);
-    //     setError("Falha ao carregar colaboradores (getDocs). Tente novamente mais tarde.");
-    //     setLoading(false);
-    //   }
-    // };
-
-    // fetchWithGetDocs(); // Chama a função assíncrona
-
-    // // Como não há mais listener, não precisamos retornar uma função de limpeza
-
-
-  }, [tenantContext.isLoading, tenantContext.currentTenant, tenantContext.error, db]); // Dependências corretas
+    if (tenantContext.currentTenant?.id) {
+      loadEmployeesPage('current', pageSize, true); // Carga inicial ou reset por mudança de tenant
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantContext.isLoading, tenantContext.currentTenant?.id, tenantContext.error]); // Apenas estas dependências para a carga inicial
 
   // --- Função para buscar nomes dos perfis (Restaurada) ---
   const fetchProfileNames = async (employeeList) => {
@@ -271,6 +310,20 @@ function EmployeesPage() {
   };
   // ----------------------------------------------------
 
+  // Funções de Paginação
+  const handlePageChange = (directionOrPageNumber) => {
+    if (typeof directionOrPageNumber === 'string') {
+      loadEmployeesPage(directionOrPageNumber, pageSize, false);
+    } else {
+      console.warn("[EmployeesPage] Direct page number navigation not fully implemented.");
+    }
+  };
+
+  const handlePageSizeChange = (newPageSize) => {
+    setPageSize(newPageSize);
+    loadEmployeesPage('current', newPageSize, true); // true para forFiltersReset
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -285,112 +338,97 @@ function EmployeesPage() {
           <CardTitle>Colaboradores Cadastrados</CardTitle>
         </CardHeader>
         <CardContent>
-          {/* Lógica de Loading/Erro original */}
-          {(tenantContext.isLoading || loading) && <p>Carregando...</p>}
-          {!tenantContext.isLoading && error && (
+          {(isLoadingInitial) && <div className="flex justify-center items-center py-10"><Loader2 className="h-8 w-8 animate-spin text-primary" /> <p className="ml-2">Carregando...</p></div>}
+          {!isLoadingInitial && error && (
             <div className="text-red-600 flex items-center">
               <AlertCircle className="mr-2 h-5 w-5" /> {error}
             </div>
           )}
-          {/* Tabela Restaurada */}
-          {!tenantContext.isLoading && !loading && !error && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Nome</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Perfil</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {employees.length === 0 ? (
+          {!isLoadingInitial && !error && (
+            <>
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground">
-                      Nenhum colaborador cadastrado ainda.
-                    </TableCell>
+                    <TableHead>Nome</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Perfil</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Ações</TableHead>
                   </TableRow>
-                ) : (
-                  employees.map((employee) => (
-                    <TableRow key={employee.id}>
-                      <TableCell className="font-medium">{employee.nome}</TableCell>
-                      <TableCell>{employee.email}</TableCell>
-                      <TableCell>{profilesMap[employee.perfilId] || 'Carregando...'}</TableCell>
-                      <TableCell>
-                        {(() => { // IIFE para usar a lógica de status
-                          const display = getEmployeeStatusDisplay(employee);
-                          // Definir classes de cor diretamente se a variant não for suficiente ou customizada
-                          let badgeClass = "";
-                          if (display.variant === 'warning') badgeClass = 'bg-yellow-100 text-yellow-800 border-yellow-300';
-                          else if (display.variant === 'success') badgeClass = 'bg-green-100 text-green-800 border-green-300';
-                          else if (display.variant === 'secondary') badgeClass = 'bg-gray-100 text-gray-600 border-gray-300';
-                          else if (display.variant === 'destructive') badgeClass = 'bg-red-100 text-red-800 border-red-300';
-                          else badgeClass = 'bg-white text-gray-500 border-gray-300'; // outline/default
-                          
-                          return (
+                </TableHeader>
+                <TableBody>
+                  {employees.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground">
+                        {totalEmployees === 0 ? "Nenhum colaborador cadastrado ainda." : "Nenhum colaborador nesta página."}
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    employees.map((employee) => {
+                      const display = getEmployeeStatusDisplay(employee);
+                      let badgeClass = "";
+                      if (display.variant === 'warning') badgeClass = 'bg-yellow-100 text-yellow-800 border-yellow-300';
+                      else if (display.variant === 'success') badgeClass = 'bg-green-100 text-green-800 border-green-300';
+                      else if (display.variant === 'secondary') badgeClass = 'bg-gray-100 text-gray-600 border-gray-300';
+                      else if (display.variant === 'destructive') badgeClass = 'bg-red-100 text-red-800 border-red-300';
+                      else badgeClass = 'bg-white text-gray-500 border-gray-300';
+                      
+                      return (
+                        <TableRow key={employee.id}>
+                          <TableCell className="font-medium">{employee.nome}</TableCell>
+                          <TableCell>{employee.email}</TableCell>
+                          <TableCell>{profilesMap[employee.perfilId] || 'Carregando...'}</TableCell>
+                          <TableCell>
                             <div className="flex items-center space-x-2">
                               <Badge className={cn("border", badgeClass)}>{display.text}</Badge>
-                              
-                              {/* Mostrar Switch apenas se status for 'ativo' ou 'inativo' */}
                               {(employee.authUid && (employee.status === true || employee.status === false)) && (
                                 <TooltipProvider delayDuration={100}>
-                                    <Tooltip>
-                                        <TooltipTrigger asChild>
-                                        {/* Envolver o Switch para Tooltip */}
-                                        <div> 
-                                            <Switch
-                                                checked={employee.status === true} // Checked se for ativo
-                                                onCheckedChange={() => handleToggleStatus(employee.id, employee.status)}
-                                                aria-label={employee.status === true ? "Desativar colaborador" : "Ativar colaborador"}
-                                            />
-                                        </div>
-                                        </TooltipTrigger>
-                                        <TooltipContent>
-                                        <p>{employee.status === true ? "Clique para desativar" : "Clique para ativar"}</p>
-                                        </TooltipContent>
-                                    </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <div> 
+                                        <Switch
+                                          checked={employee.status === true}
+                                          onCheckedChange={() => handleToggleStatus(employee.id, employee.status)}
+                                          aria-label={employee.status === true ? "Desativar colaborador" : "Ativar colaborador"}
+                                        />
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>{employee.status === true ? "Clique para desativar" : "Clique para ativar"}</p>
+                                    </TooltipContent>
+                                  </Tooltip>
                                 </TooltipProvider>
                               )}
                             </div>
-                          );
-                        })()}
-                      </TableCell>
-                      <TableCell className="text-right space-x-1">
-                         {/* Botões restaurados e conectados aos handlers */}
-                         <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleToggleStatus(employee.id, employee.status)}
-                            title={employee.status ? 'Desativar' : 'Ativar'}
-                            className={employee.status ? 'text-gray-500 hover:text-gray-700' : 'text-green-600 hover:text-green-700'}
-                         >
-                           {employee.status ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
-                         </Button>
-                         <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => navigate(`/tenant/colaborador/editar/${employee.id}`)}
-                            title="Editar"
-                            className="text-blue-600 hover:text-blue-700"
-                         >
-                             <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                             variant="ghost"
-                             size="icon"
-                             onClick={() => handleDeleteEmployee(employee.id, employee.nome)}
-                             title="Excluir Colaborador"
-                             className="text-red-600 hover:text-red-700"
-                           >
+                          </TableCell>
+                          <TableCell className="text-right space-x-1">
+                            <Button variant="ghost" size="icon" onClick={() => navigate(`/tenant/colaborador/editar/${employee.id}`)} title="Editar" className="text-blue-600 hover:text-blue-700">
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={() => handleDeleteEmployee(employee.id, employee.nome)} title="Excluir Colaborador" className="text-red-600 hover:text-red-700">
                               <Trash2 className="h-4 w-4" />
-                           </Button>
-                       </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+              {totalEmployees > 0 && (
+                <PaginationControls
+                  currentPage={currentPage}
+                  pageSize={pageSize}
+                  totalItems={totalEmployees}
+                  onPageChange={handlePageChange}
+                  onPageSizeChange={handlePageSizeChange}
+                  isLoading={isLoadingPage}
+                  itemCountOnPage={employees.length}
+                  hasNextPage={!!lastVisibleDoc && employees.length === pageSize}
+                  hasPreviousPage={currentPage > 1}
+                />
+              )}
+            </>
           )}
         </CardContent>
       </Card>

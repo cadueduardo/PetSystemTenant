@@ -1,5 +1,5 @@
 import { db } from '@/lib/firebaseConfig'; // Importa a instância do Firestore
-import { doc, getDoc, collection, query, where, getDocs, addDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { doc, getDoc, collection, query, getDocs, addDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 
 /**
  * Busca um cliente específico no Firestore pelo ID.
@@ -15,27 +15,26 @@ async function get(id) {
   }
 
   try {
-    const docRef = doc(db, "customers", id); // Referência ao documento do cliente
+    const docRef = doc(db, "tenants", tenantId, "customers", id);
     const docSnap = await getDoc(docRef); // Busca o documento
 
     if (docSnap.exists()) {
       const customerData = docSnap.data();
-      // <<< Verifica se o cliente pertence ao tenant logado >>>
       if (customerData.tenant_id !== tenantId) {
-        console.warn(`[Firestore] Tentativa de acesso não autorizado ao Customer ID ${id} pelo Tenant ID ${tenantId}. Pertence ao Tenant ID ${customerData.tenant_id}.`);
-        // Retorna null como se não encontrado para o tenant atual
-        return null; 
+        console.warn(`[Firestore Client Check] Cliente ${id} lido, mas pertence a outro tenant (${customerData.tenant_id})?`);
+        return null;
       }
       console.log("[Firestore] Customer encontrado:", { id: docSnap.id, ...customerData });
-      // Retorna os dados do documento incluindo o ID
       return { id: docSnap.id, ...customerData };
     } else {
-      console.warn(`[Firestore] Customer com ID ${id} não encontrado.`);
+      console.warn(`[Firestore] Customer com ID ${id} não encontrado no caminho /tenants/${tenantId}/customers/${id}.`);
       return null;
     }
   } catch (error) {
     console.error("[Firestore] Erro ao buscar Customer:", error);
-    // Propaga o erro para que a UI possa lidar com ele (ex: mostrar toast)
+    if (error.code === 'permission-denied') {
+        console.error(`>>> PERMISSION DENIED ao tentar ler /tenants/${tenantId}/customers/${id}. Verifique as Regras do Firestore.`);
+    }
     throw new Error('Erro ao buscar cliente no banco de dados.');
   }
 }
@@ -53,13 +52,14 @@ async function filter() { // Remove 'filters' parameter, always filters by curre
   }
 
   try {
-    const customersCollectionRef = collection(db, "customers");
-    // <<< Sempre filtra pelo tenant_id do localStorage >>>
-    let q = query(customersCollectionRef, where("tenant_id", "==", tenantId)); 
+    // <<< CORREÇÃO: Usar caminho da SUBCOLEÇÃO >>>
+    const customersCollectionRef = collection(db, "tenants", tenantId, "customers");
+    // <<< REMOVIDO: Filtro explícito por tenant_id (já implícito no path) >>>
+    // let q = query(customersCollectionRef, where("tenant_id", "==", tenantId)); 
+    let q = query(customersCollectionRef); // Query base na subcoleção
 
-    // Adicionar outros filtros aqui se necessário, combinados com o tenant_id
-    // Exemplo: q = query(customersCollectionRef, where("tenant_id", "==", tenantId), where("status", "==", "active"));
-    // Lembre-se que queries complexas podem exigir índices compostos no Firestore.
+    // Adicionar outros filtros aqui se necessário
+    // Exemplo: q = query(customersCollectionRef, where("status", "==", "active"));
 
     const querySnapshot = await getDocs(q);
     const customers = [];
@@ -99,9 +99,11 @@ async function list() {
   }
 
   try {
-    const customersCollectionRef = collection(db, "customers");
-    // <<< Sempre filtra pelo tenant_id do localStorage >>>
-    let q = query(customersCollectionRef, where("tenant_id", "==", tenantId)); 
+    // <<< CORREÇÃO: Usar caminho da SUBCOLEÇÃO >>>
+    const customersCollectionRef = collection(db, "tenants", tenantId, "customers");
+    // <<< REMOVIDO: Filtro explícito por tenant_id (já implícito no path) >>>
+    // let q = query(customersCollectionRef, where("tenant_id", "==", tenantId)); 
+    let q = query(customersCollectionRef); // Query base na subcoleção
     
     // Poderia adicionar ordenação aqui se necessário, ex: query(q, orderBy("full_name"));
 
@@ -141,20 +143,23 @@ async function create(customerData) {
   }
 
   try {
-    // <<< Remove tenant_id de customerData se existir e adiciona o do localStorage >>>
-    const { tenant_id, ...restData } = customerData; // Remove tenant_id se veio por engano
+    // <<< Não precisa mais remover/adicionar tenant_id, pois salvamos na subcoleção correta >>>
+    /*
+    const { tenant_id, ...restData } = customerData;
     if (tenant_id) {
         console.warn("[Firestore] tenant_id fornecido em customerData foi ignorado. Usando o do localStorage.");
     }
-
+    */
     const dataToSave = {
-        ...restData,
-        tenant_id: tenantId, // <<< Adiciona o tenant_id do localStorage >>>
-        created_at: serverTimestamp(), // Adiciona timestamp do servidor
-        status: restData.status || 'active' // Garante status inicial ativo
+        // ...restData,
+        ...customerData, // Usa os dados recebidos diretamente
+        // tenant_id: tenantId, // Não precisa mais salvar explicitamente, está no path
+        created_at: serverTimestamp(),
+        status: customerData.status || 'active'
     };
 
-    const customersCollectionRef = collection(db, "customers");
+    // <<< CORREÇÃO: Usar caminho da SUBCOLEÇÃO >>>
+    const customersCollectionRef = collection(db, "tenants", tenantId, "customers");
     const docRef = await addDoc(customersCollectionRef, dataToSave);
 
     console.log(`[Firestore] Customer criado com ID: ${docRef.id} para Tenant ID: ${tenantId}`);
@@ -182,15 +187,22 @@ async function update(id, customerData) {
   }
 
   try {
-    // <<< Remove tenant_id dos dados de atualização para evitar mudança >>>
+    // <<< Remover verificação manual de tenant_id se regra de segurança já protege >>>
+    /*
     const { tenant_id, ...updateData } = customerData;
     if (tenant_id) {
       console.warn("[Firestore] Tentativa de atualizar tenant_id via update ignorada.");
     }
+    */
+   const updateData = { ...customerData }; // Usa dados como recebidos
+   delete updateData.tenant_id; // Garante que não tentamos mudar tenant_id
+   delete updateData.id; // Garante que não tentamos mudar o ID
 
-    const docRef = doc(db, "customers", id);
+    // <<< CORREÇÃO: Usar caminho da SUBCOLEÇÃO >>>
+    const docRef = doc(db, "tenants", tenantId, "customers", id);
 
-    // <<< Verifica se o cliente pertence ao tenant antes de atualizar >>>
+    // <<< REMOVER getDoc e verificação manual de tenant (regra de segurança deve cuidar) >>>
+    /*
     const docSnap = await getDoc(docRef);
     if (!docSnap.exists()) {
         console.error(`[Firestore] Erro: Customer com ID ${id} não encontrado para atualização.`);
@@ -201,14 +213,14 @@ async function update(id, customerData) {
         console.error(`[Firestore] ERRO: Tenant ${tenantId} tentando atualizar Customer ${id} que pertence ao Tenant ${existingData.tenant_id}. Acesso negado.`);
         throw new Error('Permissão negada para atualizar este cliente.');
     }
+    */
 
-    // <<< Adiciona timestamp de atualização (opcional, mas bom) >>>
     const dataWithTimestamp = {
         ...updateData,
-        updated_at: serverTimestamp() 
+        updated_at: serverTimestamp()
     };
 
-    await updateDoc(docRef, dataWithTimestamp); // Atualiza apenas os campos fornecidos
+    await updateDoc(docRef, dataWithTimestamp);
 
     console.log(`[Firestore] Customer ID: ${id} atualizado com sucesso pelo Tenant ID: ${tenantId}.`);
 
@@ -245,9 +257,11 @@ async function inactivate(id, reasonId) {
   }
 
   try {
-    const docRef = doc(db, "customers", id);
+    // <<< CORREÇÃO: Usar caminho da SUBCOLEÇÃO >>>
+    const docRef = doc(db, "tenants", tenantId, "customers", id);
 
-    // <<< Verifica se o cliente pertence ao tenant antes de inativar >>>
+    // <<< REMOVER getDoc e verificação manual de tenant (regra de segurança deve cuidar) >>>
+    /*
      const docSnap = await getDoc(docRef);
     if (!docSnap.exists()) {
         console.error(`[Firestore] Erro: Customer com ID ${id} não encontrado para inativação.`);
@@ -258,8 +272,8 @@ async function inactivate(id, reasonId) {
         console.error(`[Firestore] ERRO: Tenant ${tenantId} tentando inativar Customer ${id} que pertence ao Tenant ${existingData.tenant_id}. Acesso negado.`);
         throw new Error('Permissão negada para inativar este cliente.');
     }
+    */
 
-    // Prepara os dados da atualização
     const updateData = {
       status: 'inactive',
       inactivation_date: serverTimestamp(), // <<< Usa timestamp do servidor

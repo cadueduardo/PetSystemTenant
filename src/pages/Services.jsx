@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Service } from "@/api/entities";
@@ -53,10 +53,11 @@ import {
 } from "@/components/ui/dialog";
 import ServiceForm from "../components/services/ServiceForm";
 import { toast } from "@/components/ui/use-toast";
+import PaginationControls from "@/components/ui/PaginationControls";
 
 export default function Services() {
   const navigate = useNavigate();
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingInitial, setIsLoadingInitial] = useState(true);
   const [services, setServices] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
@@ -68,21 +69,104 @@ export default function Services() {
   const [editingService, setEditingService] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const storeParam = urlParams.get('store');
-    
-    if (!storeParam && !localStorage.getItem('current_tenant')) {
-      navigate(createPageUrl("Landing"));
+  const [pageSize, setPageSize] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [lastVisibleDoc, setLastVisibleDoc] = useState(null);
+  const [firstVisibleDoc, setFirstVisibleDoc] = useState(null);
+  const [totalServices, setTotalServices] = useState(0);
+  const [isLoadingPage, setIsLoadingPage] = useState(false);
+  
+  const [sortBy, /* setSortBy */] = useState("name"); // Comentado setSortBy
+  const [sortOrder, /* setSortOrder */] = useState("asc"); // Comentado setSortOrder
+
+  const loadServicesPage = useCallback(async (direction = 'current', newPageSize = pageSize, forFilters = false) => {
+    const tenantId = localStorage.getItem('current_tenant');
+    if (!tenantId) {
+      toast({ title: "Erro", description: "Tenant não identificado.", variant: "destructive" });
+      setIsLoadingInitial(false);
+      setIsLoadingPage(false);
+      setServices([]);
       return;
     }
-    
-    if (storeParam) {
-      localStorage.setItem('current_tenant', storeParam);
+
+    console.log(`[ServicesPage loadServicesPage] Loading. Dir: ${direction}, Size: ${newPageSize}, Page: ${currentPage}, Module: ${selectedModule}, Cat: ${selectedCategory}, Sort: ${sortBy} ${sortOrder}`);
+    setIsLoadingPage(true);
+    if (direction === 'current' || forFilters) setIsLoadingInitial(true);
+
+    try {
+      const filterParams = {
+        tenant_id: tenantId,
+        module: selectedModule === 'all' ? null : selectedModule,
+        category: selectedCategory === 'all' ? null : selectedCategory,
+        orderByField: sortBy,
+        orderByDirection: sortOrder,
+        limitNum: newPageSize,
+      };
+      
+      if (direction === 'current' || forFilters) {
+        const count = await Service.getCount(filterParams);
+        setTotalServices(count);
+        setCurrentPage(1);
+        setFirstVisibleDoc(null);
+        setLastVisibleDoc(null);
+        filterParams.startAfterDoc = null;
+      } else if (direction === 'next' && lastVisibleDoc) {
+        filterParams.startAfterDoc = lastVisibleDoc;
+      } else if (direction === 'prev' && firstVisibleDoc) {
+        console.warn("[ServicesPage] 'Previous' page functionality is limited.");
+        filterParams.orderByDirection = sortOrder === 'asc' ? 'desc' : 'asc';
+      }
+
+      const { services: fetchedServices, lastVisibleDoc: newLastVisible } = await Service.list(filterParams);
+      
+      let servicesData = fetchedServices || [];
+      if (direction === 'prev' && firstVisibleDoc) {
+        if(filterParams.orderByDirection !== sortOrder) {
+          servicesData.reverse();
+        }
+      }
+
+      setServices(servicesData);
+      setLastVisibleDoc(newLastVisible || null);
+      setFirstVisibleDoc(servicesData.length > 0 ? servicesData[0] : null);
+
+      if (direction === 'next') {
+        setCurrentPage(prev => prev + 1);
+      } else if (direction === 'prev') {
+        if(currentPage > 1) setCurrentPage(prev => prev - 1);
+      }
+
+    } catch (error) {
+      console.error("Erro ao carregar serviços:", error);
+      toast({ title: "Erro", description: "Não foi possível carregar os serviços.", variant: "destructive" });
+      setServices([]);
+      setTotalServices(0);
+    } finally {
+      setIsLoadingInitial(false);
+      setIsLoadingPage(false);
     }
-    
-    loadServices();
+  }, [selectedModule, selectedCategory, sortBy, sortOrder, pageSize, toast]);
+
+  useEffect(() => {
+    const tenantId = localStorage.getItem('current_tenant');
+    if (!tenantId) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const storeParam = urlParams.get('store');
+      if (!storeParam) {
+        navigate(createPageUrl("Landing"));
+        return;
+      }
+      if (storeParam) localStorage.setItem('current_tenant', storeParam);
+    }
+    loadServicesPage('current', pageSize, true);
   }, [navigate]);
+
+  useEffect(() => {
+    if (!isLoadingInitial) {
+      console.log(`[ServicesPage] Filters/sort changed. Reloading.`);
+      loadServicesPage('current', pageSize, true);
+    }
+  }, [selectedModule, selectedCategory, activeTab, sortBy, sortOrder]);
 
   const handleSearchChange = (e) => {
     setSearchQuery(e.target.value);
@@ -99,13 +183,6 @@ export default function Services() {
 
   const handleTabChange = (value) => {
     setActiveTab(value);
-    if (value !== "all") {
-      setSelectedModule(value);
-      setSelectedCategory("all");
-    } else {
-      setSelectedModule("all");
-      setSelectedCategory("all");
-    }
   };
 
   const handleDeleteClick = (service) => {
@@ -121,7 +198,7 @@ export default function Services() {
         toast({ title: "Sucesso", description: "Serviço excluído." });
         setShowConfirmDelete(false);
         setServiceToDelete(null);
-        await loadServices();
+        await loadServicesPage('current', pageSize, true);
       } catch (error) {
         console.error("Erro ao excluir serviço:", error);
         toast({
@@ -140,118 +217,23 @@ export default function Services() {
     setShowForm(true);
   };
 
-  const loadServices = async () => {
-    setIsLoading(true);
-    try {
-      const tenantId = localStorage.getItem('current_tenant');
-      if (!tenantId) {
-        toast({ title: "Erro", description: "Tenant não identificado.", variant: "destructive" });
-        setIsLoading(false);
-        return;
-      }
-      
-      const servicesData = await Service.list({ tenant_id: tenantId });
-      console.log('[ServicesPage] Serviços carregados:', servicesData);
-      
-      setServices(servicesData || []);
-    } catch (error) {
-      console.error("Erro ao carregar serviços:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível carregar os serviços.",
-        variant: "destructive"
-      });
-      setServices([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Função para obter ícone por categoria
-  const getCategoryIcon = (category) => {
-    switch (category) {
-      case 'consultation':
-        return <PawPrint className="h-4 w-4 text-blue-500" />;
-      case 'exam':
-        return <Scissors className="h-4 w-4 text-green-500" />;
-      case 'vaccination':
-        return <Droplet className="h-4 w-4 text-purple-500" />;
-      case 'surgery':
-        return <Scissors className="h-4 w-4 text-red-500" />;
-      case 'return':
-        return <PawPrint className="h-4 w-4 text-yellow-500" />;
-      case 'telemedicine':
-        return <PawPrint className="h-4 w-4 text-teal-500" />;
-      case 'grooming':
-        return <Scissors className="h-4 w-4 text-pink-500" />;
-      default:
-        return <Package className="h-4 w-4 text-gray-500" />;
-    }
-  };
-
-  // Função para obter texto da categoria
-  const getCategoryText = (category) => {
-    switch (category) {
-      case 'consultation':
-        return "Consulta";
-      case 'exam':
-        return "Exame";
-      case 'vaccination':
-        return "Vacinação";
-      case 'surgery':
-        return "Cirurgia";
-      case 'return':
-        return "Retorno";
-      case 'telemedicine':
-        return "Telemedicina";
-      case 'grooming':
-        return "Banho e Tosa";
-      case 'products':
-        return "Produtos";
-      case 'food':
-        return "Alimentação";
-      case 'accessories':
-        return "Acessórios";
-      case 'medicines':
-        return "Medicamentos";
-      default:
-        return category;
-    }
-  };
-
-  // Filtrar serviços
-  const filteredServices = services.filter(service => {
-    const matchesSearch = service.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          service.description.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesCategory = selectedCategory === "all" || service.category === selectedCategory;
-    const matchesModule = selectedModule === "all" || service.module === selectedModule;
-    
-    return matchesSearch && matchesCategory && matchesModule;
+  const frontendFilteredServices = services.filter(service => {
+    if (!searchQuery) return true;
+    return service.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+           (service.description && service.description.toLowerCase().includes(searchQuery.toLowerCase()));
   });
 
-  // Função auxiliar para formatar preço
-  const formatPrice = (price) => {
-    return new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL'
-    }).format(price);
+  const handlePageChange = (directionOrPageNumber) => {
+    if (typeof directionOrPageNumber === 'string') {
+      loadServicesPage(directionOrPageNumber, pageSize, false);
+    } else {
+      console.warn("[ServicesPage] Direct page number navigation attempted but not fully supported.");
+    }
   };
 
-  // Função auxiliar para formatar duração
-  const formatDuration = (minutes) => {
-    if (minutes < 60) {
-      return `${minutes} min`;
-    }
-    
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
-    
-    if (remainingMinutes === 0) {
-      return `${hours}h`;
-    }
-    
-    return `${hours}h ${remainingMinutes}min`;
+  const handlePageSizeChange = (newPageSize) => {
+    setPageSize(newPageSize);
+    loadServicesPage('current', newPageSize, true);
   };
 
   return (
@@ -277,7 +259,7 @@ export default function Services() {
         <div className="relative w-full sm:w-80">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
           <Input 
-            placeholder="Buscar serviços..." 
+            placeholder="Buscar na página atual..." 
             className="pl-10"
             value={searchQuery}
             onChange={handleSearchChange}
@@ -289,7 +271,7 @@ export default function Services() {
             <SelectValue placeholder="Módulo" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Todos</SelectItem>
+            <SelectItem value="all">Todos Módulos</SelectItem>
             <SelectItem value="clinica">Clínica</SelectItem>
             <SelectItem value="petshop">Petshop</SelectItem>
           </SelectContent>
@@ -300,8 +282,8 @@ export default function Services() {
             <SelectValue placeholder="Categoria" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Todas</SelectItem>
-            {selectedModule === "clinica" || selectedModule === "all" ? (
+            <SelectItem value="all">Todas Categorias</SelectItem>
+            {(selectedModule === "clinica" || selectedModule === "all") && (
               <>
                 <SelectItem value="consultation">Consulta</SelectItem>
                 <SelectItem value="exam">Exame</SelectItem>
@@ -310,36 +292,33 @@ export default function Services() {
                 <SelectItem value="return">Retorno</SelectItem>
                 <SelectItem value="telemedicine">Telemedicina</SelectItem>
               </>
-            ) : null}
-            {selectedModule === "petshop" || selectedModule === "all" ? (
+            )}
+            {(selectedModule === "petshop" || selectedModule === "all") && (
               <>
                 <SelectItem value="grooming">Banho e Tosa</SelectItem>
-                <SelectItem value="products">Produtos</SelectItem>
-                <SelectItem value="food">Alimentação</SelectItem>
-                <SelectItem value="accessories">Acessórios</SelectItem>
-                <SelectItem value="medicines">Medicamentos</SelectItem>
               </>
-            ) : null}
+            )}
+             {selectedModule === "all" && (
+              <>
+                <SelectItem value="consultation">Consulta</SelectItem>
+                <SelectItem value="exam">Exame</SelectItem>
+                <SelectItem value="vaccination">Vacinação</SelectItem>
+                <SelectItem value="surgery">Cirurgia</SelectItem>
+                <SelectItem value="return">Retorno</SelectItem>
+                <SelectItem value="telemedicine">Telemedicina</SelectItem>
+                <SelectItem value="grooming">Banho e Tosa</SelectItem>
+              </>
+            )}
           </SelectContent>
         </Select>
       </div>
       
-      <Tabs defaultValue="all" value={activeTab} onValueChange={handleTabChange}>
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList className="mb-6">
-          <TabsTrigger value="all">Todos</TabsTrigger>
-          <TabsTrigger value="clinica">Clínica</TabsTrigger>
-          <TabsTrigger value="petshop">Petshop</TabsTrigger>
+          <TabsTrigger value="all">Todos (Ativos)</TabsTrigger>
         </TabsList>
         
         <TabsContent value="all" className="mt-0">
-          {renderServicesList()}
-        </TabsContent>
-        
-        <TabsContent value="clinica" className="mt-0">
-          {renderServicesList()}
-        </TabsContent>
-        
-        <TabsContent value="petshop" className="mt-0">
           {renderServicesList()}
         </TabsContent>
       </Tabs>
@@ -374,16 +353,29 @@ export default function Services() {
         onOpenChange={setShowForm}
         service={editingService}
         onSuccess={() => {
-          loadServices();
+          loadServicesPage('current', pageSize, true);
           setShowForm(false);
           setEditingService(null);
         }}
       />
+      {!isLoadingInitial && services.length > 0 && (
+        <PaginationControls
+          currentPage={currentPage}
+          pageSize={pageSize}
+          totalItems={totalServices}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+          isLoading={isLoadingPage}
+          itemCountOnPage={services.length}
+          hasNextPage={!!lastVisibleDoc && services.length === pageSize}
+          hasPreviousPage={currentPage > 1}
+        />
+      )}
     </div>
   );
 
   function renderServicesList() {
-    if (isLoading) {
+    if (isLoadingInitial) {
       return (
         <div className="flex justify-center items-center py-20">
           <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
@@ -391,7 +383,7 @@ export default function Services() {
       );
     }
     
-    if (filteredServices.length === 0) {
+    if (frontendFilteredServices.length === 0) {
       return (
         <div className="flex flex-col items-center justify-center p-8 text-center">
           <div className="h-12 w-12 rounded-full bg-gray-100 flex items-center justify-center mb-4">
@@ -399,7 +391,7 @@ export default function Services() {
           </div>
           <h3 className="text-lg font-medium">Nenhum serviço encontrado</h3>
           <p className="text-gray-500 max-w-sm mt-2">
-            Não encontramos nenhum serviço com os filtros aplicados.
+            {services.length === 0 && !searchQuery ? (totalServices === 0 ? "Nenhum serviço cadastrado." : "Nenhum serviço ativo encontrado com os filtros.") : "Não encontramos nenhum serviço com os filtros e busca atuais."}
           </p>
         </div>
       );
@@ -420,7 +412,7 @@ export default function Services() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredServices.map(service => (
+              {frontendFilteredServices.map(service => (
                 <TableRow key={service.id}>
                   <TableCell>
                     <div className="flex items-center gap-3">
@@ -479,5 +471,69 @@ export default function Services() {
         </CardContent>
       </Card>
     );
+  }
+
+  function getCategoryIcon(category) {
+    switch (category) {
+      case 'consultation':
+        return <PawPrint className="h-4 w-4 text-blue-500" />;
+      case 'exam':
+        return <Scissors className="h-4 w-4 text-green-500" />;
+      case 'vaccination':
+        return <Droplet className="h-4 w-4 text-purple-500" />;
+      case 'surgery':
+        return <Scissors className="h-4 w-4 text-red-500" />;
+      case 'return':
+        return <PawPrint className="h-4 w-4 text-yellow-500" />;
+      case 'telemedicine':
+        return <PawPrint className="h-4 w-4 text-teal-500" />;
+      case 'grooming':
+        return <Scissors className="h-4 w-4 text-pink-500" />;
+      default:
+        return <Package className="h-4 w-4 text-gray-500" />;
+    }
+  }
+
+  function getCategoryText(category) {
+    switch (category) {
+      case 'consultation':
+        return "Consulta";
+      case 'exam':
+        return "Exame";
+      case 'vaccination':
+        return "Vacinação";
+      case 'surgery':
+        return "Cirurgia";
+      case 'return':
+        return "Retorno";
+      case 'telemedicine':
+        return "Telemedicina";
+      case 'grooming':
+        return "Banho e Tosa";
+      case 'products':
+        return "Produtos";
+      case 'food':
+        return "Alimentação";
+      case 'accessories':
+        return "Acessórios";
+      case 'medicines':
+        return "Medicamentos";
+      default:
+        return category;
+    }
+  }
+
+  function formatPrice(price) {
+    if (typeof price !== 'number') return 'R$ -';
+    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price);
+  }
+
+  function formatDuration(minutes) {
+    if (typeof minutes !== 'number') return '-';
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (remainingMinutes === 0) return `${hours}h`;
+    return `${hours}h ${remainingMinutes}min`;
   }
 }

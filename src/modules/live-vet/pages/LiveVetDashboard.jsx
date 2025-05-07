@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom'; // Importando useNavigate
 // import { useNavigate } from 'react-router-dom'; // Para navegação futura
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -15,8 +15,21 @@ import { queueService } from '@/api/firebase/queueService';
 import { medicationTaskService } from '@/api/firebase/medicationTaskService';
 import ServiceTimer from '@/components/queue/ServiceTimer';
 import { Badge } from "@/components/ui/badge"; // <-- Adicionar import do Badge
-import { collection, query, where, getDocs, limit, orderBy, doc, updateDoc, serverTimestamp /*, getDoc */ } from 'firebase/firestore';
+import { query, where, getDocs, limit, orderBy, doc, updateDoc, serverTimestamp, collectionGroup } from 'firebase/firestore';
 import { db } from '@/lib/firebaseConfig'; // <<< Assumindo que db é exportado daqui
+
+// Função auxiliar para debounce
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
 
 // Função auxiliar para exibir o status como Badge
 const getStatusBadge = (status) => {
@@ -48,29 +61,21 @@ export default function LiveVetDashboard() {
   const [activeTab, setActiveTab] = useState("waiting");
   const [followUpItems, setFollowUpItems] = useState([]);
 
-  useEffect(() => {
-    // Não carrega inicialmente
-  }, []);
+  const DEBOUNCE_DELAY = 1500; // 1.5 segundos para debounce
 
-  // Efeito para carregar dados quando a aba ativa muda ou ao montar pela primeira vez
-  useEffect(() => {
-    // Carrega se for a aba inicial ou qualquer aba (exceto se já carregou)
-    // Ou podemos ser mais específicos: if (activeTab === 'waiting') {
-    // Por agora, vamos carregar sempre que a tab muda para garantir dados frescos
-    console.log(`[LiveVetDash] Aba ativa mudou para: ${activeTab}. Recarregando...`);
-    loadAppointmentsAndFollowUps();
-    // Adicionaremos uma flag para evitar recargas desnecessárias se necessário
-  }, [activeTab]); // Depende de activeTab
-
-  const loadAppointmentsAndFollowUps = async () => {
+  // Memoizar a função loadAppointmentsAndFollowUps com useCallback
+  const loadAppointmentsAndFollowUpsCallback = useCallback(async () => {
     setIsLoadingQueue(true);
     setError(null);
+
     try {
       const tenantId = localStorage.getItem('current_tenant') || 'default';
       console.log('[LiveVetDash] Tenant ID para filtro:', tenantId);
 
       // 1. Buscar todos os serviços para saber quais são de clínica
-      const allServices = await Service.list({ tenant_id: tenantId });
+      const serviceResponse = await Service.list({ tenant_id: tenantId }); // Assuming Service.list can return all if not paginated
+      const allServices = serviceResponse.services || []; // Get services array, default to empty if not present
+      
       const clinicServiceIds = allServices
         .filter(s => s.module === 'clinica')
         .map(s => s.id);
@@ -161,45 +166,55 @@ export default function LiveVetDashboard() {
                 return { /* ... dados default ... */ }; // Retorna default se pet não encontrado
             }
 
-            // <<< USAR prontuarioId diretamente do pet buscado >>>
-            const recordNumber = pet.prontuarioId; // Assume que prontuarioId existe (criado pelo backend)
-            console.log(`[LiveVetDash Populating ${appt.id}] Using recordNumber (from pet.prontuarioId): ${recordNumber}`);
-
-            // Buscar episodeNumber (lógica mantida, mas agora usa recordNumber lido)
+            // <<< INÍCIO: LÓGICA REVISADA PARA BUSCAR PRONTUÁRIO E EPISÓDIO >>>
+            let recordNumber = '-';
             let episodeNumber = '-';
             const tenantId = localStorage.getItem('current_tenant') || 'default';
-            if (tenantId && recordNumber) {
-                const episodesPath = `tenants/${tenantId}/prontuarios/${recordNumber}/episodes`;
-                console.log(`[LiveVetDash Populating ${appt.id}] Buscando episódio em ${episodesPath}`);
-                try {
-                    const episodesCollectionRef = collection(db, episodesPath);
-                    const q = query(episodesCollectionRef, where('appointmentId', '==', appt.id), orderBy('createdAt', 'desc'), limit(1));
-                    const querySnapshot = await getDocs(q);
 
-                    if (!querySnapshot.empty) {
-                        const episodeDoc = querySnapshot.docs[0];
-                        const episodeData = episodeDoc.data();
-                        console.log(`[LiveVetDash Populating ${appt.id}] Episódio encontrado na subcoleção: ID=${episodeDoc.id}, Data:`, episodeData);
-                        episodeNumber = episodeData.episodeNumber || '-';
-                        console.log(`[LiveVetDash Populating ${appt.id}] Episode found. Setting episodeNumber to: ${episodeNumber}`);
-                    } else {
-                        console.log(`[LiveVetDash Populating ${appt.id}] Nenhum episódio encontrado na subcoleção para Appt ID. Episode query returned empty.`);
-                    }
-                } catch (episodeQueryError) {
-                    console.error(`[LiveVetDash Populating ${appt.id}] Erro ao buscar episódio na subcoleção:`, episodeQueryError);
+            console.log(`[LiveVetDash Populating ${appt.id}] Iniciando busca de episódio via collectionGroup...`);
+            try {
+                const episodesQuery = query(
+                    collectionGroup(db, 'episodes'), // Busca em todos os 'episodes'
+                    where('tenantId', '==', tenantId),       // Filtra pelo tenant
+                    where('appointmentId', '==', appt.id),  // Filtra pelo ID do agendamento
+                    orderBy('createdAt', 'desc'),         // Pega o mais recente (caso haja duplicidade?)
+                    limit(1)                              // Só precisamos de um
+                );
+                const episodeSnapshot = await getDocs(episodesQuery);
+
+                if (!episodeSnapshot.empty) {
+                    const episodeDoc = episodeSnapshot.docs[0];
+                    const episodeData = episodeDoc.data();
+                    console.log(`[LiveVetDash Populating ${appt.id}] Episódio encontrado via collectionGroup: ID=${episodeDoc.id}, Data:`, episodeData);
+                    
+                    // Extrai os dados do episódio encontrado
+                    recordNumber = episodeData.prontuarioId || '-'; // Pega o ID do prontuário do episódio
+                    episodeNumber = episodeData.episodeNumber || '-'; // Pega o número do episódio
+                    
+                    console.log(`[LiveVetDash Populating ${appt.id}] Valores extraídos: recordNumber=${recordNumber}, episodeNumber=${episodeNumber}`);
+                } else {
+                    // Se não encontrou via collectionGroup, tenta pegar do Pet (fallback, pode não funcionar pelo timing)
+                    console.warn(`[LiveVetDash Populating ${appt.id}] Episódio não encontrado via collectionGroup para Appt ID. Tentando fallback via Pet.get.`);
+                     if (pet && pet.prontuarioId) {
+                         recordNumber = pet.prontuarioId;
+                         console.log(`[LiveVetDash Populating ${appt.id}] Usando recordNumber do fallback Pet.get: ${recordNumber}`);
+                         // A busca pelo episodeNumber aqui ainda falharia se dependesse do recordNumber
+                     } else {
+                        console.warn(`[LiveVetDash Populating ${appt.id}] Nenhum episódio encontrado E pet sem prontuarioId (provável timing).`);
+                     }
                 }
-            } else {
-                console.warn(`[LiveVetDash Populating ${appt.id}] Skipping episode search due to missing tenantId or recordNumber.`);
+            } catch (episodeQueryError) {
+                console.error(`[LiveVetDash Populating ${appt.id}] Erro ao buscar episódio via collectionGroup:`, episodeQueryError);
             }
-            // <<< FIM LÓGICA episodeNumber >>>
+            // <<< FIM: LÓGICA REVISADA >>>
 
             console.log(`[LiveVetDash Populating ${appt.id}] Returning populated data: recordNumber=${recordNumber}, episodeNumber=${episodeNumber}`);
 
             return {
               ...appt,
               petName: pet.name || 'Nome não encontrado',
-              recordNumber, // <<< Exibe o prontuarioId lido >>>
-              episodeNumber,
+              recordNumber, // <<< Usa o valor encontrado pela nova lógica
+              episodeNumber, // <<< Usa o valor encontrado pela nova lógica
               petId: pet.id,
               episodesCount: Array.isArray(pet.consultationHistory) ? pet.consultationHistory.length : 0,
               customerName: customer.full_name,
@@ -212,15 +227,29 @@ export default function LiveVetDashboard() {
         })
       );
 
+      // <<< NOVO: Filtrar para remover itens "arrived" incompletos >>>
+      const completeAppointments = populatedAppointments.filter(item => {
+        if (item.status !== 'arrived') {
+          return true; // Mantém todos que não estão no estado "chegou"
+        }
+        // Para os que chegaram, verifica se episódio E hora de chegada estão presentes
+        const hasEpisode = item.episodeNumber && item.episodeNumber !== '-';
+        const hasCheckInTime = !!item.check_in_time; // Verifica se check_in_time existe e não é null/undefined
+        if (!hasEpisode || !hasCheckInTime) {
+             console.log(`[LiveVetDash Filter] Removendo Appt ${item.id} (status: arrived) por dados incompletos: hasEpisode=${hasEpisode}, hasCheckInTime=${hasCheckInTime}`);
+        }
+        return hasEpisode && hasCheckInTime;
+      });
+
       // Ordenar por horário (lógica mantida)
-      populatedAppointments.sort((a, b) => {
+      completeAppointments.sort((a, b) => { // <<< Ordena a lista filtrada
         const timeA = a.time || '00:00'; // Handle missing time
         const timeB = b.time || '00:00';
         return timeA.localeCompare(timeB);
       });
 
-      console.log('[LiveVetDash] Total de agendamentos de clínica HOJE (todos status):', populatedAppointments);
-      setAllClinicAppointmentsToday(populatedAppointments);
+      console.log('[LiveVetDash] Total de agendamentos COMPLETOS de clínica HOJE (todos status):', completeAppointments);
+      setAllClinicAppointmentsToday(completeAppointments); // <<< Define o estado com a lista filtrada
 
       // 5. Buscar itens da fila de retorno (medication_followup)
       console.log('[LiveVetDash] Buscando itens da fila de retorno (medication_followup)');
@@ -296,13 +325,53 @@ export default function LiveVetDashboard() {
     } finally {
       setIsLoadingQueue(false);
     }
-  };
+  }, [toast]); // <<< Mantém apenas toast como dependência
+
+  // Criar a versão debounced da função de carregamento
+  const debouncedLoadData = useMemo(
+    () => debounce(loadAppointmentsAndFollowUpsCallback, DEBOUNCE_DELAY),
+    [loadAppointmentsAndFollowUpsCallback] // Recriar se a função base mudar
+  );
+
+  useEffect(() => {
+    // Carrega os dados na montagem inicial do componente
+    console.log('[LiveVetDash] Componente montado. Disparando carga inicial.');
+    loadAppointmentsAndFollowUpsCallback();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Roda SÓ na montagem (loadAppointmentsAndFollowUpsCallback está memoizada)
 
   // Filter appointments based on status for different tabs
   // Rename waitingItems to filaDeEsperaItems and filter only for 'arrived'
-  const filaDeEsperaItems = allClinicAppointmentsToday.filter(item => 
+  const filaDeEsperaItemsFiltered = allClinicAppointmentsToday.filter(item => 
     item.status === 'arrived' // <-- Only show items with status 'arrived'
   );
+
+  const filaDeEsperaItems = filaDeEsperaItemsFiltered.sort((a, b) => { // <<< Ordena a lista filtrada
+    // <<< CORRIGIDO: Converte a string ISO para milissegundos >>>
+    let timeA = 0;
+    let timeB = 0;
+
+    try {
+      if (a.check_in_time && typeof a.check_in_time === 'string') {
+        timeA = new Date(a.check_in_time).getTime();
+        if (isNaN(timeA)) timeA = 0; // Trata parse inválido
+      }
+    } catch { /* timeA continua 0 */ }
+
+    try {
+      if (b.check_in_time && typeof b.check_in_time === 'string') {
+        timeB = new Date(b.check_in_time).getTime();
+        if (isNaN(timeB)) timeB = 0; // Trata parse inválido
+      }
+    } catch { /* timeB continua 0 */ }
+
+    // Coloca itens sem horário de chegada válido no final
+    if (timeA === 0 && timeB === 0) return 0; // Ambos sem hora, mantém ordem relativa
+    if (timeA === 0) return 1;  // 'a' não tem hora, vai pro fim
+    if (timeB === 0) return -1; // 'b' não tem hora, vai pro fim
+
+    return timeA - timeB; // Ordena do menor (mais antigo) para o maior (mais recente)
+  });
   const emAtendimentoItems = allClinicAppointmentsToday.filter(item => item.status === 'in_progress');
   const completedItems = allClinicAppointmentsToday.filter(item => item.status === 'completed');
   const cancelledItems = allClinicAppointmentsToday.filter(item => ['canceled', 'no_show'].includes(item.status)); // Include no_show here?
@@ -327,7 +396,7 @@ export default function LiveVetDashboard() {
 
        // 3. Recarregar os dados em segundo plano para refletir a mudança imediatamente no dashboard
        // (Opcional, mas melhora a UX se o usuário voltar rapidamente)
-       loadAppointmentsAndFollowUps();
+       loadAppointmentsAndFollowUpsCallback();
 
     } catch (error) {
       console.error(`[LiveVetDash] Error starting consultation for ${appointmentId}:`, error);
@@ -355,7 +424,7 @@ export default function LiveVetDashboard() {
       navigate(url);
 
       // Recarregar dados em segundo plano para refletir a mudança de status
-      loadAppointmentsAndFollowUps();
+      loadAppointmentsAndFollowUpsCallback();
 
     } catch (error) {
       console.error('[LiveVetDash] Erro ao iniciar reavaliação:', error);
@@ -390,9 +459,16 @@ export default function LiveVetDashboard() {
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
                   <span>Pacientes na Fila de Espera</span>
-                  <Button variant="outline" size="sm" onClick={loadAppointmentsAndFollowUps} disabled={isLoadingQueue}>
-                     <RefreshCcw className={`h-4 w-4 ${isLoadingQueue ? 'animate-spin' : ''}`} />
-                  </Button>
+                  {/* Container para o botão e a dica */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground hidden md:inline">
+                      Não encontrou? Atualize a lista.
+                    </span>
+                    <Button variant="outline" size="sm" onClick={debouncedLoadData} disabled={isLoadingQueue}>
+                       <RefreshCcw className={`h-4 w-4 ${isLoadingQueue ? 'animate-spin' : ''}`} />
+                       <span className="sr-only md:hidden">Atualizar</span> {/* Texto para leitores de tela e mobile */}                  
+                    </Button>
+                  </div>
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -419,8 +495,6 @@ export default function LiveVetDashboard() {
                       </TableRow>
                     ) : (
                       filaDeEsperaItems.map((item) => {
-                        // <<< LOG: Verificar dados do item na Fila de Espera >>>
-                        console.log(`[LiveVetDash - Fila Espera Render] Item ID: ${item.id}, check_in_time:`, item.check_in_time, typeof item.check_in_time);
                         return (
                           <TableRow key={item.id}>
                             <TableCell>
@@ -482,7 +556,7 @@ export default function LiveVetDashboard() {
                   <div className="flex flex-col items-center justify-center py-8 text-destructive">
                     <AlertCircle className="h-8 w-8 mb-2" />
                     <p>{error}</p>
-                    <Button variant="outline" size="sm" onClick={loadAppointmentsAndFollowUps} className="mt-4">
+                    <Button variant="outline" size="sm" onClick={loadAppointmentsAndFollowUpsCallback} className="mt-4">
                       Tentar Novamente
                     </Button>
                   </div>
@@ -509,8 +583,6 @@ export default function LiveVetDashboard() {
                     </TableHeader>
                     <TableBody>
                       {emAtendimentoItems.map((item) => {
-                        // <<< LOG: Verificar dados do item Em Atendimento >>>
-                        console.log(`[LiveVetDash - Em Atendimento Render] Item ID: ${item.id}, start_time:`, item.start_time, typeof item.start_time);
                         return (
                           <TableRow key={item.id}>
                             <TableCell>
@@ -581,7 +653,7 @@ export default function LiveVetDashboard() {
                    <div className="flex flex-col items-center justify-center py-8 text-destructive">
                      <AlertCircle className="h-8 w-8 mb-2" />
                      <p>{error}</p>
-                     <Button variant="outline" size="sm" onClick={loadAppointmentsAndFollowUps} className="mt-4">
+                     <Button variant="outline" size="sm" onClick={loadAppointmentsAndFollowUpsCallback} className="mt-4">
                        Tentar Novamente
                      </Button>
                    </div>

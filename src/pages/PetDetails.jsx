@@ -30,6 +30,9 @@ export default function DetalhesPet() {
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [selectedHistoryEpisode, setSelectedHistoryEpisode] = useState(null);
   const [isLoadingEpisodeDetails, setIsLoadingEpisodeDetails] = useState(false);
+  const [historyDetailsPrescriptionItems, setHistoryDetailsPrescriptionItems] = useState([]);
+  const [isLoadingHistoryDetailsItems, setIsLoadingHistoryDetailsItems] = useState(false);
+  const [historyDetailsItemsError, setHistoryDetailsItemsError] = useState(null);
   
   // Obter parâmetros da URL
   const urlParams = new URLSearchParams(window.location.search);
@@ -185,11 +188,23 @@ export default function DetalhesPet() {
 
   const handleOpenHistoryModal = async (episodeSummary) => {
     console.log("[PetDetails] Abrindo detalhes para:", episodeSummary);
+    if (!episodeSummary || !episodeSummary.id) {
+      toast({ title: "Erro", description: "Dados inválidos para abrir detalhes.", variant: "destructive" });
+      return;
+    }
+
+    // Define o resumo inicial e abre o modal
     setSelectedHistoryEpisode(episodeSummary);
     setIsHistoryModalOpen(true);
-    setIsLoadingEpisodeDetails(true);
+    setIsLoadingEpisodeDetails(true); // Loading do episódio principal
+    setIsLoadingHistoryDetailsItems(true); // Loading dos itens da prescrição
+    setHistoryDetailsPrescriptionItems([]); // Limpa itens anteriores
+    setHistoryDetailsItemsError(null); // Limpa erro anterior
+
+    let fullEpisodeData = null;
 
     try {
+      // 1. Buscar detalhes completos do episódio principal
       const tenantId = storeParam;
       const prontuarioId = pet?.recordNumber;
       if (!tenantId || !prontuarioId) throw new Error("Tenant ID ou Prontuário ID não encontrados.");
@@ -198,17 +213,46 @@ export default function DetalhesPet() {
       const episodeSnap = await getDoc(episodeRef);
 
       if (episodeSnap.exists()) {
-        const fullEpisodeData = { id: episodeSnap.id, ...episodeSnap.data() };
+        fullEpisodeData = { id: episodeSnap.id, ...episodeSnap.data() };
         console.log("[PetDetails] Detalhes completos do episódio carregados:", fullEpisodeData);
-        setSelectedHistoryEpisode(fullEpisodeData);
+        setSelectedHistoryEpisode(fullEpisodeData); // Atualiza com dados completos
       } else {
         throw new Error(`Episódio ${episodeSummary.id} não encontrado para detalhes.`);
       }
     } catch (error) {
       console.error("[PetDetails] Erro ao buscar detalhes do episódio:", error);
       toast({ title: "Erro", description: "Não foi possível carregar os detalhes completos deste episódio.", variant: "destructive" });
+      setIsLoadingEpisodeDetails(false); // Para o loading do episódio principal em caso de erro
+      // Não busca itens se o episódio falhou
+      setIsLoadingHistoryDetailsItems(false);
+      setHistoryDetailsItemsError("Falha ao carregar dados do episódio.");
+      return; // Sai da função se não conseguiu carregar o episódio
     } finally {
-      setIsLoadingEpisodeDetails(false);
+      setIsLoadingEpisodeDetails(false); // Finaliza loading do episódio principal (mesmo que itens ainda carreguem)
+    }
+
+    // 2. Buscar itens da prescrição (somente se o episódio foi carregado com sucesso)
+    if (fullEpisodeData && fullEpisodeData.id) {
+      try {
+        const itemsCollectionRef = collection(db, `consultations/${fullEpisodeData.id}/consultation_prescription_items`);
+        // NOTA: Usando a coleção 'consultations' e o ID do episódio, assumindo que o ID do episódio é o mesmo ID da consulta
+        // Se a estrutura for diferente (ex: consulta tem outro ID), isso precisa ser ajustado.
+        const itemsQuery = query(itemsCollectionRef, orderBy("order", "asc"));
+        const itemsSnapshot = await getDocs(itemsQuery);
+        const fetchedItems = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        console.log(`[PetDetails] Itens da prescrição do histórico (${fullEpisodeData.id}) carregados:`, fetchedItems);
+        setHistoryDetailsPrescriptionItems(fetchedItems);
+      } catch (itemsError) {
+        console.error(`[PetDetails] Erro ao buscar itens da prescrição do histórico (${fullEpisodeData.id}):`, itemsError);
+        setHistoryDetailsItemsError("Falha ao carregar itens da prescrição.");
+        // Não precisa dar toast aqui, o erro será mostrado no modal
+      } finally {
+        setIsLoadingHistoryDetailsItems(false); // Finaliza loading dos itens
+      }
+    } else {
+      // Caso não tenha fullEpisodeData (embora a lógica acima deva prevenir isso)
+      setIsLoadingHistoryDetailsItems(false);
+      setHistoryDetailsItemsError("ID do episódio não encontrado para buscar itens.");
     }
   };
 
@@ -216,6 +260,9 @@ export default function DetalhesPet() {
     setIsHistoryModalOpen(false);
     setSelectedHistoryEpisode(null);
     setIsLoadingEpisodeDetails(false);
+    setHistoryDetailsPrescriptionItems([]); // <<< Limpa estado dos itens
+    setIsLoadingHistoryDetailsItems(false); // <<< Reseta loading dos itens
+    setHistoryDetailsItemsError(null); // <<< Limpa erro dos itens
   };
 
   // Função para renderizar conteúdo baseado no filtro
@@ -435,70 +482,114 @@ export default function DetalhesPet() {
       <Dialog open={isHistoryModalOpen} onOpenChange={handleCloseHistoryModal}>
         <DialogContent className="max-w-4xl w-[95%] max-h-[90vh]">
           <DialogHeader>
-            <DialogTitle>Detalhes do Episódio {selectedHistoryEpisode?.episodeNumber ? `(${selectedHistoryEpisode.episodeNumber})` : `(ID: ${selectedHistoryEpisode?.id})`}</DialogTitle>
+            <DialogTitle>Detalhes do Histórico {selectedHistoryEpisode?.episodeNumber ? `(${selectedHistoryEpisode.episodeNumber})` : selectedHistoryEpisode?.id ? `(ID: ${selectedHistoryEpisode.id})` : ''}</DialogTitle>
             <DialogDescription>
-               Atendimento realizado em {selectedHistoryEpisode?.createdAt?.toDate ? format(selectedHistoryEpisode.createdAt.toDate(), 'dd/MM/yyyy HH:mm', { locale: ptBR }) : 'Data inválida'}.
+              {isLoadingEpisodeDetails
+                ? "Carregando detalhes..."
+                : selectedHistoryEpisode?.createdAt?.toDate
+                  ? `Realizado em ${format(selectedHistoryEpisode.createdAt.toDate(), 'dd/MM/yyyy HH:mm', { locale: ptBR })}`
+                  : 'Data inválida'
+              }
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4 px-1 max-h-[calc(90vh-180px)] overflow-y-auto">
             {isLoadingEpisodeDetails ? (
-               <div className="flex justify-center items-center py-10">
-                 <Loader2 className="h-8 w-8 animate-spin text-primary" /> 
-                 <p className="ml-3 text-muted-foreground">Carregando detalhes completos...</p>
+              <div className="flex items-center justify-center h-32">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
               </div>
-            ) : selectedHistoryEpisode ? (
-                <>
-                  <p><strong>Serviço/Motivo Principal:</strong> {selectedHistoryEpisode.serviceName || selectedHistoryEpisode.reason || 'N/A'}</p>
-                  
-                  <Separator />
-                  <h4 className="font-semibold text-base pt-2">Resumo Clínico</h4>
-                  <div className="space-y-2 pl-2">
-                    <p><strong>Anamnese / Queixa Principal:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.anamnesis || selectedHistoryEpisode.anamnesis?.notes || 'N/A'}</p>
-                    <p><strong>Exame Clínico:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.clinicalExam || selectedHistoryEpisode.clinicalExam || 'N/A'}</p>
-                    <p><strong>Suspeita / Diagnóstico(s):</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.diagnosis || selectedHistoryEpisode.diagnosis || 'N/A'}</p>
-                    <p><strong>Tratamento / Conduta:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.treatment || selectedHistoryEpisode.treatment || 'N/A'}</p>
-                    <p><strong>Diagnóstico Final Confirmado:</strong> {selectedHistoryEpisode.fullInteraction?.confirmedDiagnosis || 'Não confirmado'}</p>
-                  </div>
-                  
-                  {(selectedHistoryEpisode.prescriptionItems && selectedHistoryEpisode.prescriptionItems.length > 0) && (
-                    <>
-                      <Separator />
-                      <h4 className="font-semibold text-base pt-2">Prescrição</h4>
-                      <ul className="list-disc space-y-1 pl-6 text-sm">
-                        {selectedHistoryEpisode.prescriptionItems.map((item, index) => (
-                          <li key={index}>
-                            {item.itemName} ({item.details}) - Uso: {item.usage || 'N/A'}
-                            {item.observations && <span className="block text-xs text-muted-foreground">Obs: {item.observations}</span>}
-                          </li>
-                        ))}
-                      </ul>
-                       {selectedHistoryEpisode.prescriptionObservations && (
-                         <p className="text-sm mt-2 pl-2"><strong>Observações Gerais Prescrição:</strong> {selectedHistoryEpisode.prescriptionObservations}</p>
-                       )}
-                    </>
-                  )}
-                  
-                  {(selectedHistoryEpisode.consumedItems && selectedHistoryEpisode.consumedItems.length > 0) && (
-                    <>
-                      <Separator />
-                      <h4 className="font-semibold text-base pt-2">Itens Consumidos</h4>
-                      <ul className="list-disc space-y-1 pl-6 text-sm">
-                        {selectedHistoryEpisode.consumedItems.map((item, index) => (
-                          <li key={index || item.id}> 
-                            {item.quantity}x {item.name}
-                          </li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
+            ) : selectedHistoryEpisode && !historyDetailsItemsError?.includes("Falha ao carregar dados do episódio") ? ( // Só mostra conteúdo se o episódio carregou
+              <>
+                {/* Tipo de histórico (Consulta ou Petshop) */}
+                {selectedHistoryEpisode.type === 'petshop' ? (
+                    <p><strong>Tipo:</strong> Atendimento Petshop</p>
+                ) : (
+                    <p><strong>Tipo:</strong> Atendimento Clínico</p>
+                )}
 
-                </>
-              ) : (
-                <p className="text-muted-foreground">Nenhum detalhe de episódio selecionado.</p>
-              )}
+                <p><strong>Serviço/Motivo Principal:</strong> {selectedHistoryEpisode.serviceName || selectedHistoryEpisode.reason || 'N/A'}</p>
+
+                {/* Detalhes específicos Petshop */}
+                {selectedHistoryEpisode.type === 'petshop' && (
+                    <>
+                      <p><strong>Profissional:</strong> {selectedHistoryEpisode.professionalName || 'N/A'}</p>
+                      <p><strong>Duração:</strong> {selectedHistoryEpisode.durationMinutes !== 'N/A' ? `${selectedHistoryEpisode.durationMinutes} min` : 'N/A'}</p>
+                      <p><strong>Preço do Serviço:</strong> {selectedHistoryEpisode.servicePrice !== null ? `R$ ${selectedHistoryEpisode.servicePrice.toFixed(2)}` : 'N/A'}</p>
+                      {selectedHistoryEpisode.observations && <p><strong>Observações:</strong> {selectedHistoryEpisode.observations}</p>}
+                    </>
+                )}
+
+                {/* Detalhes específicos Consulta/Episódio Clínico */}
+                {selectedHistoryEpisode.type !== 'petshop' && (
+                  <>
+                    <Separator />
+                    <h4 className="font-semibold text-base pt-2">Resumo Clínico</h4>
+                    <div className="space-y-2 pl-2">
+                      {/* Verifica se fullInteraction existe antes de tentar acessar suas propriedades */}
+                      <p><strong>Anamnese / Queixa Principal:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.anamnesis || selectedHistoryEpisode.anamnesis?.notes || 'N/A'}</p>
+                      <p><strong>Exame Clínico:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.clinicalExam || selectedHistoryEpisode.clinicalExam || 'N/A'}</p>
+                      <p><strong>Suspeita / Diagnóstico(s):</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.diagnosis || selectedHistoryEpisode.diagnosis || 'N/A'}</p>
+                      <p><strong>Tratamento / Conduta:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.treatment || selectedHistoryEpisode.treatment || 'N/A'}</p>
+                      <p><strong>Diagnóstico Final Confirmado:</strong> {selectedHistoryEpisode.fullInteraction?.confirmedDiagnosis || 'Não confirmado'}</p>
+                    </div>
+
+                    {/* Seção de Prescrição Modificada */}
+                    <Separator />
+                    <h4 className="font-semibold text-base pt-2">Prescrição</h4>
+                    {isLoadingHistoryDetailsItems ? (
+                      <div className="flex items-center justify-center p-4">
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                        <p className="ml-2 text-sm text-muted-foreground">Carregando itens da prescrição...</p>
+                      </div>
+                    ) : historyDetailsItemsError && !historyDetailsItemsError.includes("Falha ao carregar dados do episódio") ? ( // Só mostra erro dos itens se o episódio carregou
+                      <p className="text-sm text-destructive pl-2">{historyDetailsItemsError}</p>
+                    ) : historyDetailsPrescriptionItems.length > 0 ? (
+                      <>
+                        <ul className="list-disc space-y-1 pl-6 text-sm">
+                          {historyDetailsPrescriptionItems.map((item) => (
+                            <li key={item.id}>
+                              {item.itemName} ({item.details}) - Uso: {item.usage || 'N/A'}
+                              {item.notes && <span className="block text-xs text-muted-foreground">Obs: {item.notes}</span>}
+                            </li>
+                          ))}
+                        </ul>
+                        {selectedHistoryEpisode.prescriptionObservations && (
+                          <p className="text-sm mt-2 pl-2"><strong>Observações Gerais Prescrição:</strong> {selectedHistoryEpisode.prescriptionObservations}</p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-sm text-muted-foreground pl-2">Nenhum item de prescrição encontrado para este episódio.</p>
+                    )}
+                    {/* Fim da Seção de Prescrição Modificada */}
+
+                    {/* Itens Consumidos (se existirem) */}
+                    {(selectedHistoryEpisode.consumedItems && selectedHistoryEpisode.consumedItems.length > 0) && (
+                      <>
+                        <Separator />
+                        <h4 className="font-semibold text-base pt-2">Itens Consumidos</h4>
+                        <ul className="list-disc space-y-1 pl-6 text-sm">
+                          {selectedHistoryEpisode.consumedItems.map((item, index) => (
+                            <li key={index || item.id}>
+                              {item.quantity}x {item.name}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </>
+                )}
+
+              </>
+            ) : (
+              // Mostra erro se o episódio principal falhou ao carregar
+              <p className="text-destructive text-center p-4">
+                {historyDetailsItemsError || "Não foi possível carregar os detalhes deste registro."}
+              </p>
+            )}
           </div>
-          <DialogFooter className="mt-4">
-            <Button type="button" variant="outline" onClick={handleCloseHistoryModal}>Fechar</Button>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Fechar</Button>
+            </DialogClose>
           </DialogFooter>
         </DialogContent>
       </Dialog>

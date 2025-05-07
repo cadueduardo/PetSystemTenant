@@ -217,9 +217,20 @@ export default function CustomerDetailsPage() {
     }
   };
 
-  const handlePetSuccess = () => {
+  const handlePetSuccess = (savedPet) => {
     setShowNewPetDialog(false);
-    loadData();
+    
+    setPets(prevPets => {
+      const existingPetIndex = prevPets.findIndex(p => p.id === savedPet.id);
+      if (existingPetIndex > -1) {
+        const updatedPets = [...prevPets];
+        updatedPets[existingPetIndex] = savedPet;
+        return updatedPets;
+      } else {
+        return [...prevPets, savedPet];
+      }
+    });
+
     toast({
       title: "Sucesso",
       description: "Pet salvo com sucesso!"
@@ -496,14 +507,6 @@ export default function CustomerDetailsPage() {
           {pets.length === 0 ? (
             <div className="text-center py-10">
               <p className="text-gray-500">Este cliente ainda não tem pets cadastrados.</p>
-              <Button 
-                variant="outline" 
-                className="mt-4"
-                onClick={() => setShowNewPetDialog(true)}
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Adicionar Primeiro Pet
-              </Button>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -548,6 +551,17 @@ export default function CustomerDetailsPage() {
               })}
             </div>
           )}
+
+          {/* Botão Adicionar Novo Pet (sempre visível) */}
+          <div className="mt-6 flex justify-center"> { /* Adiciona margem superior e centraliza */ }
+            <Button 
+              variant="outline" 
+              onClick={() => setShowNewPetDialog(true)}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Adicionar Novo Pet
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

@@ -27,18 +27,56 @@ Sistema de gerenciamento para clínicas veterinárias, focando em agendamentos, 
 ## 4. Convenções e Padrões
 *   Para roteamento, a página está em src/pages/index.jsx
 *   O layout das loja Tenant que é o menu principalmente, está em src/pages/layout.jsx
-*   As funções do Firebase está em functions/index.ts
+*   **Estrutura das Firebase Functions:** As Funções Firebase foram completamente refatoradas para uma estrutura modular localizada em `functions/src/`. Cada módulo (ex: `tenancy`, `waha`, `appointments`) reside em seu próprio diretório e agrupa funcionalidades relacionadas (ex: `*.callable.ts`, `*.http.ts`, `*.triggers.ts`, `*.scheduled.ts`, `*.utils.ts`).
+    *   O arquivo `functions/src/index.ts` agora serve exclusivamente como ponto de entrada principal, responsável por inicializar configurações globais mínimas (como `logger.info`) e reexportar todas as funções dos módulos individuais (ex: `export * from './tenancy';`). Nenhuma lógica de função específica reside mais diretamente em `index.ts`.
+    *   Cada módulo deve ter um arquivo `index.ts` (ex: `functions/src/tenancy/index.ts`) que reexporta todas as funções e utilitários desse módulo específico.
 *   As Regras do Firebase está na raiz do projeto no arquivo firestore.rules
 *   Estado global gerenciado com Zustand
 *   Chamadas de API usam os SDKs do Firebase e a fetch API, com lógica distribuída em src/lib/ e src/api/
 
+**Diretrizes para Desenvolvimento Futuro:**
+*   Sempre priorizar o desempenho e baixo custo no uso de infraestrutura, empregando recursos otimizados e as melhores práticas de desenvolvimento Firebase/GCP.
+*   Sempre usar o recurso de paginação em futuras listagens (CRUDS), utilizando o componente `PaginationControls` já implementado no projeto.
+*   **Desenvolvimento de Novas Firebase Functions:** Ao adicionar novas Firebase Functions, elas DEVEM seguir a estrutura modular existente.
+    *   Identifique ou crie um módulo apropriado em `functions/src/` (ex: `functions/src/meuNovoModulo/`).
+    *   Crie arquivos específicos para os tipos de função dentro do módulo (ex: `meuNovoModulo.callable.ts`, `meuNovoModulo.http.ts`, `meuNovoModulo.triggers.ts`).
+    *   Exporte as novas funções no `index.ts` do módulo (ex: `functions/src/meuNovoModulo/index.ts`).
+    *   Finalmente, reexporte o módulo no `functions/src/index.ts` principal (ex: `export * from './meuNovoModulo';`).
+
 ## 4.1 Backend (Firebase Functions)
 
-*   **Funções Firebase (`functions/src/index.ts`):**
-    *   **Criação de Tenant/Admin (`createTenantAndAdmin`):** Cria novos tenants e seus administradores iniciais (Callable, Super Admin).
-    *   **Gestão de Convites (`inviteCollaborator`, `completeInvitation`):** Gerencia o fluxo de convite e cadastro de novos colaboradores (Callable).
-    *   **Confirmação WhatsApp (`sendWahaConfirmation`, `wahaWebhook`, `scheduledAppointmentCheck`):** Envia mensagens de confirmação de agendamento via WAHA (Callable, HTTP Webhook, Scheduler) e processa respostas para atualizar status.
-    *   **Gatilho de Agendamento (`onAppointmentUpdate`):** Cria/atualiza registros associados (Episódios Clínicos, Ordens de Serviço Petshop) quando o status do agendamento muda (ex: para 'Chegou') (Firestore Trigger).
+*   **Funções Firebase (modularizadas em `functions/src/`):** O arquivo `functions/src/index.ts` agora serve como um ponto de entrada que reexporta funções dos seguintes módulos:
+    *   **`tenancy` (em `functions/src/tenancy/`):
+        *   `createTenantAndAdmin` (`tenant.callable.ts`): Cria novos tenants e seus administradores iniciais (Callable, Super Admin).
+        *   `sendCustomInvite`, `completeInvitation` (`collaborator.callable.ts`): Gerencia o fluxo de convite e cadastro de novos colaboradores (Callable).
+    *   **`waha` (em `functions/src/waha/`):
+        *   `sendWahaConfirmation` (`waha.callable.ts`): Envia mensagem de confirmação de agendamento via WAHA (Callable).
+        *   `handleWahaWebhook` (`waha.http.ts`): Processa webhooks do WAHA para status de sessão e respostas de mensagens (HTTP).
+        *   `scheduledWahaConfirmationSender` (`waha.scheduled.ts`): Rotina agendada para enviar confirmações pendentes (Scheduler).
+        *   `scheduleWahaConfirmationTask`, `wahaConfirmationTaskHandler` (`waha.tasks.ts`): Gerenciam o agendamento e execução de tarefas para envio de confirmações via Cloud Tasks (Firestore Trigger, HTTP).
+    *   **`appointments` (em `functions/src/appointments/`):
+        *   `sendWahaReplyOnStatusChange` (`appointments.triggers.ts`): Envia uma resposta via WAHA quando o status de um agendamento muda (Firestore Trigger).
+        *   `onAppointmentArrived` (`appointments.triggers.ts`): Dispara a criação de prontuário/episódio ou OS de petshop (Firestore Trigger).
+        *   `onAppointmentCompletedCreateCharge` (`appointments.triggers.ts`): Dispara a criação de uma cobrança (charge) (Firestore Trigger).
+        *   `scheduledAutoCancellation` (`appointments.scheduled.ts`): Cancela automaticamente agendamentos não confirmados (Scheduler).
+    *   **`medical` (em `functions/src/medical/medical.utils.ts`):
+        *   `getOrCreateProntuario`: Busca ou cria um prontuário.
+        *   `createEpisode`: Cria um novo episódio clínico.
+    *   **`billing` (em `functions/src/billing/`):
+        *   `addItemsToPendingCharge` (`billing.utils.ts`): Adiciona itens a uma cobrança.
+        *   `processPayment` (`billing.callable.ts`): Processa pagamentos (Callable).
+        *   `cancelChargeItem` (`billing.callable.ts`): Cancela item de uma cobrança (Callable).
+        *   `addCancellationReason` (`billing.callable.ts`): Adiciona motivo de cancelamento (Callable).
+    *   **`orders` (em `functions/src/orders/orders.callable.ts`):
+        *   `generateOsNumber`: Gera número de Ordem de Serviço (Callable).
+        *   `createContinuedOrderService`: Cria OS para "continuar comprando" (Callable).
+        *   `deleteEmptyCashierOs`: Deleta OS vazia do caixa (Callable).
+    *   **`admin` (em `functions/src/admin/admin.callable.ts`):
+        *   `listSuperAdmins`: Lista super administradores (Callable, Super Admin Only).
+        *   `createSuperAdmin`: Cria novo super administrador (Callable, Super Admin Only, Não implementada).
+        *   `deleteSuperAdmin`: Deleta super administrador (Callable, Super Admin Only, Não implementada).
+    *   **`barcodes` (em `functions/src/barcodes/barcodes.http.ts`):
+        *   `lookupBarcode`: Busca informações de produto via código de barras (HTTP, Cosmos API).
 
 ## 5. Fluxos Importantes / Lógica Complexa
 
@@ -144,7 +182,6 @@ Sistema de gerenciamento para clínicas veterinárias, focando em agendamentos, 
 *   Área de importação de clientes, ter a possibilidade de ler um excel, csv, etc, para cadastrar clientes automaticamente
 *   Internação - trabalhar o fluxo de internação do Pet
 *   Leva e Traz - trabalhar um sistema simples de controle de Leva e Traz dos pets, como módulo
-*   Refatorar `functions/src/index.ts` para uma estrutura modular (múltiplos arquivos) para melhor organização e manutenção
 
 
 ## 7. Links Úteis (Opcional)
