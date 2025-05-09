@@ -30,8 +30,11 @@ Uma análise mais aprofundada será necessária para escolher o que melhor se ad
 ### 3.1. Módulo de Integração com a API de NF
 
 *   **Serviço de Configuração:**
-    *   Permitir que cada tenant insira suas credenciais da API do provedor de NF.
-    *   Armazenar de forma segura as chaves de API e outros dados de configuração.
+    *   Permitir que cada tenant insira suas credenciais da API do provedor de NF (se o modelo for o tenant ter sua própria conta Focus - verificar este fluxo).
+    *   Coletar os dados do tenant necessários para o cadastro na API da Focus NFe (CNPJ, Razão Social, Endereço, etc., muitos podem vir da tabela `Tenants`).
+    *   Chamar a API da Focus NFe para cadastrar/atualizar a empresa do tenant sob a conta principal do PetSystemTenant.
+    *   Armazenar o ID da empresa retornado pela Focus NFe e quaisquer outros dados de configuração relevantes.
+    *   Armazenar de forma segura as chaves de API da conta principal do PetSystemTenant na Focus NFe.
 *   **Serviço de Certificado Digital:**
     *   Interface para upload do certificado A1 (arquivo .pfx) e senha.
     *   Armazenamento seguro do certificado (ex: Azure Key Vault, HashiCorp Vault, ou sistema de arquivos com criptografia forte e controle de acesso restrito).
@@ -57,15 +60,16 @@ Novas tabelas ou ajustes nas existentes serão necessários:
 
 *   `TenantFiscalConfigs`:
     *   `TenantId` (FK)
-    *   `ProviderApiUrl`
-    *   `ProviderApiKey` (criptografado)
+    *   `ProviderApiUrl` (Pode ser fixo se sempre Focus NFe)
+    *   `ProviderApiKey` (Token da conta principal PetSystemTenant na Focus NFe, criptografado)
+    *   `FocusNFeCompanyId` (ID da empresa do tenant retornado pela API Focus, após cadastro)
     *   `CertificateStoragePath` (ou referência ao Vault)
     *   `CertificatePassword` (criptografado, se necessário armazenar e não apenas usar no upload)
     *   `DefaultCfopProdutos`
     *   `DefaultCfopServicos`
     *   `OutrasConfiguracoesFiscais` (JSONB para flexibilidade)
-    *   `focus_nfe_api_token_homologacao` (encrypted)
-    *   `focus_nfe_api_token_producao` (encrypted)
+    *   `focus_nfe_api_token_homologacao` (encrypted, token da conta principal PetSystemTenant)
+    *   `focus_nfe_api_token_producao` (encrypted, token da conta principal PetSystemTenant)
     *   `certificado_digital_path` (ou referência ao armazenamento seguro)
     *   `certificado_digital_senha` (encrypted)
     *   `status` (ativo, inativo, pendente_configuracao_fiscal)
@@ -83,38 +87,44 @@ Novas tabelas ou ajustes nas existentes serão necessários:
 
 ## 4. Estrutura do Frontend
 
-### 4.1. Página de Integrações (`IntegrationsPage.jsx` - Estilo Marketplace)
+### 4.1. Página de Integrações (`IntegrationsMarketplacePage.jsx` - Estilo Marketplace)
 
-A `IntegrationsPage.jsx` servirá como uma vitrine ou "marketplace" para todas as integrações externas disponíveis para o tenant.
+A `IntegrationsMarketplacePage.jsx` servirá como uma vitrine ou "marketplace" para todas as integrações externas disponíveis para o tenant.
 
-*   **Layout:** Exibição em formato de grid de cards, onde cada card representa uma integração (ex: WhatsApp WAHA, Emissão de Nota Fiscal).
-*   **Card de Integração (Exemplo para NF):**
+*   **Layout:** Exibição em formato de grid de cards, onde cada card representa uma integração.
+*   **Card de Integração (Exemplo para NF):
     *   Ícone/Logo representativo.
     *   Título: "Emissão de Nota Fiscal Eletrônica".
     *   Breve descrição dos benefícios.
-    *   Indicador de Status (Badge): "Não Configurado", "Ativo", "Requer Atenção".
-    *   Botão de Ação: "Configurar" (se não ativa/configurada) ou "Gerenciar" (se ativa).
-*   Ao clicar em "Configurar" (ou "Gerenciar") no card de Nota Fiscal, o usuário será redirecionado para uma página dedicada de configuração.
+    *   **Status da Assinatura/Configuração (Badge):** "Não Contratado", "Não Configurado", "Ativo", "Inativo", "Requer Atenção", "Pendente Pagamento".
+    *   **Informações de Custo:** Exibição clara do valor da integração (se aplicável, como adição à mensalidade).
+    *   **Botão de Ação Dinâmico:** "Contratar", "Configurar", "Gerenciar", "Ativar", "Desativar", dependendo do status.
+*   Ao interagir com o card, o sistema deve guiar o usuário pelo fluxo de contratação (se necessário), configuração e gerenciamento.
+*   **Lógica de Status:** A determinação do status e do texto do botão de ação deve considerar tanto a configuração técnica da integração quanto o status da assinatura/contratação do tenant para aquele módulo.
 
 ### 4.2. Página de Configuração da Nota Fiscal (`NFeSetupPage.jsx` - Dedicada)
 
-Esta será uma página dedicada para o tenant configurar todos os aspectos da emissão de Notas Fiscais.
+Esta será uma página dedicada para o tenant configurar todos os aspectos da emissão de Notas Fiscais, acessada após o fluxo de contratação, se aplicável.
 
-*   **URL:** Algo como `/integrations/nfe-setup`.
-*   **Navegação:** Incluir um botão "Voltar para Integrações" ou breadcrumbs.
+*   **URL:** Algo como `/tenant/integracoes/nfe/setup`.
+*   **Navegação:** Incluir um botão "Voltar para Central de Integrações".
 *   **Conteúdo:**
-    *   **Seção de Certificado Digital:**
-        *   Input para upload do arquivo de certificado digital (`.pfx`).
-        *   Input para a senha do certificado digital.
-        *   Exibição de informações do certificado após o upload (nome do arquivo, validade, emissor - se possível extrair).
-        *   Feedback visual sobre o status do upload e validação do certificado.
-    *   **Seção de Configuração da API (Focus NFe):**
-        *   Input para o Token da API Focus NFe (este campo pode ser condicional, dependendo do modelo de parceria final com a Focus NFe – se o tenant fornece ou se é gerenciado centralmente).
-        *   Seleção do Ambiente de Emissão: "Homologação" ou "Produção".
-    *   **Botões de Ação:**
-        *   "Salvar Configurações".
-        *   (Opcional, mas recomendado) "Testar Conexão" – para verificar se o certificado e o token (se aplicável) estão corretos e comunicam com a API da Focus NFe (ex: chamando um endpoint de status da API).
-        *   Feedback claro ao usuário sobre o sucesso ou falhas na configuração/salvamento.
+    *   **Seção de Dados da Empresa e Endereço Fiscal (Read-Only):**
+        *   Exibição dos dados cadastrais e fiscais do tenant (Razão Social, CNPJ, IE, IM, Regime Tributário, email, endereço completo, etc.) pré-preenchidos a partir dos dados do `currentTenant` (gerenciados em `Settings.jsx`).
+        *   Estes campos são apenas para visualização nesta página.
+        *   Um alerta e um botão/link direcionarão o usuário para a página de "Configurações" (`/tenant/configuracoes`) caso necessitem editar essas informações primárias.
+    *   **Seção de Certificado Digital (Editável):**
+        *   Input para upload do arquivo de certificado digital (`.pfx`) (obrigatório).
+        *   Input para a senha do certificado digital (obrigatório).
+    *   **Seção de Preferências de Emissão (Editável):**
+        *   Seleção do Ambiente da Focus NFe: "Homologação (Testes)" ou "Produção (Real)". (Default: Homologação).
+        *   Checkbox para `habilita_nfe` (NF de Produtos).
+        *   Checkbox para `habilita_nfse` (NF de Serviços).
+    *   **Botão de Ação:** "Salvar e Configurar Emissão de NF".
+*   **Lógica:**
+    *   Ao carregar, os dados do `currentTenant` preenchem os campos de visualização.
+    *   A submissão do formulário envia para o backend: `tenantId`, o arquivo do certificado, a senha do certificado, o ambiente selecionado e as flags de habilitação (NF-e/NFS-e).
+    *   O backend usará o `tenantId` para buscar os dados completos da empresa, fazer o cadastro na Focus NFe e armazenar o certificado de forma segura.
 
 ### 4.3. Emissão de NF
 
@@ -187,10 +197,21 @@ Esta tabela armazenará as configurações fiscais específicas para cada tenant
 
 ### Backend:
 *   [ ] Pesquisar e definir o provedor de API de NF (Focus NFe escolhido inicialmente).
-*   [ ] Modelar e implementar as tabelas `TenantFiscalConfigs` e `NotasFiscais`.
-*   [ ] Implementar o serviço de configuração de API e certificado para o tenant.
-*   [ ] Definir e implementar a estratégia de armazenamento seguro de certificados.
-*   [ ] Implementar o módulo de comunicação com a API do provedor (autenticação, headers).
+*   [x] Modelar e implementar as tabelas `TenantFiscalConfigs` e `NotasFiscais` (ou usar subcoleção `integrations/nfeConfig` - **Implementado como subcoleção `tenants/{tenantId}/integrations/nfeConfig`**).
+*   [x] Esboçar a Firebase Function `setupNFeIntegration` (callable) com validações e fluxo principal.
+    *   [x] Recebimento de dados do frontend (ambiente, certificado base64, senha).
+    *   [x] Validação dos dados cadastrais do tenant.
+    *   [x] Upload do certificado `.pfx` para Firebase Storage.
+    *   [x] Integração com Google Secret Manager para buscar tokens da API Focus NFe.
+    *   [x] Salvamento da configuração (`focusCompanyId`, `certificatePath`, `environment`) no Firestore.
+*   [x] Implementar a chamada à API da Focus NFe para cadastrar/gerenciar empresas (tenants) - **Estrutura inicial para verificar existência (GET) e criar (POST) / atualizar (PUT) implementada em `setupNFeIntegration`.**
+*   [ ] **Testar Efetivamente `setupNFeIntegration`**: Realizar teste end-to-end com dados reais (certificado de teste) no ambiente de homologação Focus NFe.
+*   [ ] **Revisar/Completar `mapRegimeTributarioToFocusCode`**: Garantir mapeamento correto conforme documentação Focus NFe.
+*   [ ] **Tratamento de Erro API Focus**: Refinar tratamento de erros em `makeFocusApiCall`.
+*   [ ] **(Opcional/Recomendado) Senha do Certificado no Secret Manager**: Implementar busca da senha do certificado via Secret Manager.
+*   [ ] Implementar o serviço de configuração de API (incluindo cadastro do tenant na Focus) e certificado para o tenant - (Parcialmente coberto por `setupNFeIntegration`).
+*   [ ] Definir e implementar a estratégia de armazenamento seguro de certificados - (Armazenamento no Firebase Storage implementado; senha ainda via request, considerar Secret Manager).
+*   [ ] Implementar o módulo de comunicação com a API do provedor (autenticação, headers) - (Função `makeFocusApiCall` implementada).
 *   [ ] Implementar o serviço de emissão de NF-e (incluindo mapeamento de dados).
 *   [ ] Implementar o serviço de emissão de NFS-e (incluindo mapeamento de dados).
 *   [ ] Implementar o serviço de consulta de status de NF.
@@ -198,25 +219,26 @@ Esta tabela armazenará as configurações fiscais específicas para cada tenant
 *   [ ] Implementar o armazenamento dos arquivos XML e PDF das notas.
 *   [ ] (Opcional) Implementar endpoints para webhooks do provedor.
 *   [ ] Criar testes unitários e de integração para os serviços de NF.
-*   [ ] [ ] Pesquisar e definir o provedor de API de NF (Focus NFe escolhido inicialmente).
 *   [ ] Detalhar as entidades e campos necessários no banco de dados, alinhado com `optimization_plan.md`.
 *   [ ] Definir os DTOs (Data Transfer Objects) para a comunicação com a API da Focus NFe.
-*   [ ] [ ] Implementar a lógica para armazenar de forma segura o Token da API da Focus NFe (homologação e produção) por tenant.
-*   [ ] [ ] Implementar a lógica para processar as notificações e atualizar o status da NF no banco de dados local.
-*   [ ] [ ] Configurar os Webhooks no painel da Focus NFe (ambiente de homologação) para apontar para os endpoints desenvolvidos.
-*   [ ] [ ] Obter o Token de API de Produção da Focus NFe para cada tenant.
-*   [ ] [ ] Configurar os Webhooks no ambiente de produção da Focus NFe.
-*   [ ] [ ] Garantir que os certificados digitais de produção dos tenants estejam corretamente configurados.
+*   [ ] Implementar a lógica para processar as notificações e atualizar o status da NF no banco de dados local.
+*   [ ] Configurar os Webhooks no painel da Focus NFe (ambiente de homologação) para apontar para os endpoints desenvolvidos.
+*   [ ] Obter o Token de API de Produção da Focus NFe para cada tenant.
+*   [ ] Configurar os Webhooks no ambiente de produção da Focus NFe.
+*   [ ] Garantir que os certificados digitais de produção dos tenants estejam corretamente configurados.
+*   [ ] Desenvolver lógica de backend para gerenciar status de assinatura de integrações (ativação, desativação, billing).
 
 ### Frontend:
-*   [x] Refatorar `IntegrationsPage.jsx` para um layout de "marketplace" com cards para cada integração (WAHA, NF-e).
-*   [x] Desenvolver a página dedicada `NFeSetupPage.jsx` para configuração da NF (certificado, API token, ambiente) - Esqueleto inicial criado.
-*   [ ] Implementar os formulários e a lógica de estado na `NFeSetupPage.jsx` para:
-    *   [ ] Upload do arquivo de certificado (.pfx) e entrada da senha.
-    *   [ ] Entrada do Token da API FocusNFe e seleção do ambiente (Homologação/Produção).
-    *   [ ] Lógica de estado para gerenciar os campos do formulário.
-    *   [ ] Função inicial para "Salvar Configurações" (ex: console.log dos dados).
-*   [ ] Implementar a lógica de upload seguro do arquivo de certificado (.pfx) e envio da senha para o backend a partir da `NFeSetupPage.jsx`.
+*   [x] Refatorar `IntegrationsMarketplacePage.jsx` para um layout de "marketplace" com cards para cada integração (WAHA, NF-e) - Estrutura inicial.
+*   [ ] Expandir `IntegrationsMarketplacePage.jsx` para incluir lógica de status de assinatura, exibição de custos e botões de ação dinâmicos (Contratar, Ativar, Gerenciar).
+*   [x] Desenvolver a página dedicada `NFeSetupPage.jsx` para configuração da NF (certificado, API token, ambiente) - Esqueleto inicial criado, UI do formulário de dados da empresa e certificado adicionada. Campos de dados da empresa agora são read-only, com link para `Settings.jsx`. Adicionado seletor de ambiente (Homologação/Produção).
+*   [x] Implementar os formulários e a lógica de estado na `NFeSetupPage.jsx` para:
+    *   [x] Coleta/confirmação dos dados da empresa para cadastro na Focus NFe - (Interface exibe dados do `currentTenant` como read-only).
+    *   [x] Upload do arquivo de certificado (.pfx) e entrada da senha - (Interface do formulário criada e funcional).
+    *   [x] Seleção do ambiente (Homologação/Produção) - (Interface criada).
+*   [ ] **Chamar `setupNFeIntegration`**: Garantir que `NFeSetupPage.jsx` chama a Cloud Function com o payload correto.
+*   [ ] **Feedback ao Usuário em `NFeSetupPage.jsx`**: Melhorar feedback durante e após a submissão (loading, sucesso, erros).
+*   [ ] Implementar a lógica de upload seguro do arquivo de certificado (.pfx) e envio da senha para o backend a partir da `NFeSetupPage.jsx` - (Parcialmente feito, a função de backend recebe, falta a lógica de conversão para base64 e envio no frontend).
 *   [ ] Implementar a funcionalidade de "Testar Conexão" na `NFeSetupPage.jsx`.
 *   [ ] Desenvolver a interface para acionar a emissão de NF a partir de uma venda (manter fluxo, ajustar se necessário para obter configurações da nova tabela).
 *   [ ] Desenvolver o formulário de NF com os campos necessários e validações.
@@ -227,6 +249,7 @@ Esta tabela armazenará as configurações fiscais específicas para cada tenant
 *   [ ] Criar testes para os componentes de NF e para a página de configuração.
 
 ### Geral:
+*   [ ] **Certificado de Teste Focus NFe**: Investigar se a Focus NFe fornece um certificado digital de teste ou orientações para criar/obter um para o ambiente de homologação.
 *   [ ] Documentar a configuração e uso do novo módulo.
 *   [ ] Realizar testes end-to-end no ambiente de homologação do provedor de NF.
 

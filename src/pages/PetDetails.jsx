@@ -5,20 +5,24 @@ import { ChevronLeft, Loader2, Pencil, Filter, Eye, Sparkles, ShoppingCart, Stet
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { createPageUrl } from "@/utils";
 import { Pet, Customer, QueueService, Service, PurchaseHistory } from "@/api/entities";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import PetForm from "@/components/pets/PetForm";
 import PetBasicInfo from "@/components/pets/PetBasicInfo";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { parseISO, differenceInMinutes, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { collection, query, orderBy, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, query, orderBy, getDocs, doc, getDoc, limit, startAfter, getCountFromServer, where } from 'firebase/firestore';
 import { db } from '@/lib/firebaseConfig';
 import { Separator } from "@/components/ui/separator";
 import React from "react";
+import { useTenant } from "@/components/tenant/TenantContext";
+import PaginationControls from "@/components/ui/PaginationControls";
 
 export default function DetalhesPet() {
   const navigate = useNavigate();
   const { id: petId } = useParams();
+  const { currentTenant, isLoading: isLoadingTenant, error: errorTenant } = useTenant();
+
   const [pet, setPet] = useState(null);
   const [dono, setDono] = useState(null);
   const [carregando, setCarregando] = useState(true);
@@ -34,61 +38,170 @@ export default function DetalhesPet() {
   const [isLoadingHistoryDetailsItems, setIsLoadingHistoryDetailsItems] = useState(false);
   const [historyDetailsItemsError, setHistoryDetailsItemsError] = useState(null);
   
-  // Obter parâmetros da URL
-  const urlParams = new URLSearchParams(window.location.search);
-  const storeParam = urlParams.get('store') || localStorage.getItem('current_tenant');
+  // Estados para paginação dos episódios clínicos (historicoLiveVet)
+  const [episodesPageSize, setEpisodesPageSize] = useState(5); // Ex: 5 itens por página
+  const [episodesCurrentPage, setEpisodesCurrentPage] = useState(1);
+  const [episodesLastVisibleDoc, setEpisodesLastVisibleDoc] = useState(null);
+  const [episodesFirstVisibleDoc, setEpisodesFirstVisibleDoc] = useState(null);
+  const [totalEpisodes, setTotalEpisodes] = useState(0);
+  const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
+
+  const loadEpisodes = useCallback(async (direction = 'current', newPageSize = episodesPageSize) => {
+    console.log(`[PetDetails loadEpisodes] Executing. Direction: ${direction}, Size: ${newPageSize}`); 
+    if (!currentTenant?.id || !pet?.prontuarioId) { 
+      console.warn("[PetDetails loadEpisodes] Prontuário (prontuarioId) ou Tenant ID não encontrados para buscar episódios.");
+      setHistoricoLiveVet([]);
+      setTotalEpisodes(0);
+      setEpisodesCurrentPage(1);
+      setEpisodesFirstVisibleDoc(null);
+      setEpisodesLastVisibleDoc(null);
+      setIsLoadingEpisodes(false); 
+      return;
+    }
+    
+    setIsLoadingEpisodes(true);
+    const tenantId = currentTenant.id;
+    const prontuarioId = pet.prontuarioId;
+    const episodesPath = `tenants/${tenantId}/prontuarios/${prontuarioId}/episodes`;
+
+    try {
+      const episodesCollectionRef = collection(db, episodesPath);
+      
+      if (direction === 'current' || newPageSize !== episodesPageSize) {
+        const countQuery = query(episodesCollectionRef);
+        const snapshot = await getCountFromServer(countQuery);
+        setTotalEpisodes(snapshot.data().count);
+        if (direction === 'current') {
+            setEpisodesCurrentPage(1);
+            setEpisodesFirstVisibleDoc(null);
+            setEpisodesLastVisibleDoc(null);
+        }
+      }
+
+      let q = query(episodesCollectionRef, orderBy('createdAt', 'desc'));
+
+      if (direction === 'next' && episodesLastVisibleDoc) {
+        q = query(q, startAfter(episodesLastVisibleDoc), limit(newPageSize));
+      } else if (direction === 'prev' && episodesFirstVisibleDoc) {
+         q = query(q, limit(newPageSize));
+         setEpisodesCurrentPage(1);
+         setEpisodesFirstVisibleDoc(null);
+         setEpisodesLastVisibleDoc(null);
+      } else {
+        q = query(q, limit(newPageSize));
+      }
+      
+      const documentSnapshots = await getDocs(q);
+      const episodesData = documentSnapshots.docs.map(doc => ({
+        id: doc.id,
+        createdAt: doc.data().createdAt,
+        data: doc.data().createdAt?.toDate ? format(doc.data().createdAt.toDate(), 'dd/MM/yyyy HH:mm', { locale: ptBR }) : 'Data inválida',
+        motivo: doc.data().serviceName || doc.data().reason || 'Consulta Clínica',
+        episodeNumber: doc.data().episodeNumber,
+        diagnosticoResumo: doc.data().diagnosis || doc.data().fullInteraction?.vetNotes?.diagnosis || 'Não registrado',
+        appointmentId: doc.data().appointmentId
+      }));
+
+      setHistoricoLiveVet(episodesData);
+      
+      const newLastVisible = documentSnapshots.docs[documentSnapshots.docs.length - 1];
+      const newFirstVisible = documentSnapshots.docs[0];
+      setEpisodesLastVisibleDoc(newLastVisible || null);
+      setEpisodesFirstVisibleDoc(newFirstVisible || null);
+
+      if (direction === 'next') setEpisodesCurrentPage(prev => prev + 1);
+      else if (direction === 'current') setEpisodesCurrentPage(1);
+
+      if (newPageSize !== episodesPageSize) setEpisodesPageSize(newPageSize);
+
+    } catch (error) {
+      console.error("[PetDetails] Erro ao carregar episódios clínicos paginados:", error);
+      toast({ title: "Erro", description: "Não foi possível carregar o histórico clínico.", variant: "destructive" });
+      setHistoricoLiveVet([]);
+    } finally {
+      setIsLoadingEpisodes(false);
+    }
+  }, [currentTenant, pet, episodesPageSize, episodesFirstVisibleDoc, episodesLastVisibleDoc]);
   
-  // Carregar dados do pet e do dono
+  useEffect(() => {
+    console.log(`[PetDetails useEffect for Episodes] Checking conditions. Pet: ${!!pet}, Pet Prontuario ID: ${pet?.prontuarioId}, Tenant: ${!!currentTenant}, Tenant ID: ${currentTenant?.id}`);
+    if (pet && pet.prontuarioId && currentTenant && currentTenant.id) {
+      console.log(`[PetDetails useEffect for Episodes] Conditions MET. Calling loadEpisodes.`);
+      loadEpisodes('current', episodesPageSize);
+    } else {
+       console.log(`[PetDetails useEffect for Episodes] Conditions NOT MET.`);
+       if(pet && !pet.prontuarioId) {
+           console.log("[PetDetails useEffect for Episodes] Pet object exists but missing prontuarioId:", pet);
+       }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps 
+  }, [pet, currentTenant, episodesPageSize]);
+
+  const handleEpisodesPageChange = (direction) => {
+    loadEpisodes(direction, episodesPageSize);
+  };
+
+  const handleEpisodesPageSizeChange = (newPageSize) => {
+    loadEpisodes('current', newPageSize); 
+  };
+
   const carregarDados = async () => {
+    if (!currentTenant || !currentTenant.id) {
+      console.log("[PetDetails] Aguardando currentTenant do contexto (em carregarDados).");
+      if (!isLoadingTenant && !errorTenant && !currentTenant) {
+        toast({ title: "Erro", description: "Loja não identificada. Verifique seu acesso.", variant: "destructive" });
+        navigate('/tenant/dashboard');
+      }
+      if (!carregando) setCarregando(true);
+      return;
+    }
+    
+    const tenantId = currentTenant.id;
+
       if (!petId) {
-        navigate(createPageUrl(`Customers?store=${storeParam}`));
+      navigate(createPageUrl(`Customers?store=${tenantId}`));
         return;
       }
       
     setCarregando(true);
       try {
-        // Carregar dados do pet
+      // Carrega Pet
       const dadosPet = await Pet.get(petId);
       if (!dadosPet) {
           throw new Error("Pet não encontrado");
         }
       setPet(dadosPet);
         
-        // Carregar dados do dono
+      // Carrega Dono
       if (dadosPet.owner_id) {
           try {
           const dadosDono = await Customer.get(dadosPet.owner_id);
           setDono(dadosDono);
           } catch (error) {
             console.error("Erro ao carregar dados do dono:", error);
-            toast({
-              title: "Aviso",
-              description: "Não foi possível carregar dados do dono.",
-              variant: "warning"
-            });
+          toast({ title: "Aviso", description: "Não foi possível carregar dados do dono.", variant: "warning" });
           }
         }
         
-      // --- Buscar Histórico de Petshop (QueueService Concluídos) --- 
+      // Carrega Histórico Petshop
       try {
-        const petshopQueueItems = await QueueService.list({ pet_id: petId, status: 'completed' });
+        const petshopQueueItems = await QueueService.list({ pet_id: petId, status: 'completed', tenant_id: tenantId });
         const petshopHistory = await Promise.all(petshopQueueItems.map(async (item) => {
           let serviceName = 'Serviço Desconhecido';
-          let servicePrice = null; // <<< Variavel para preço
+          let servicePrice = null;
           if (item.service_id) {
             try {
-              const service = await Service.get(item.service_id);
+              const service = await Service.get(item.service_id, tenantId); 
               serviceName = service?.name || serviceName;
-              servicePrice = service?.price; // <<< Pega o preço
+              servicePrice = service?.price;
             } catch (serviceError) {
-              console.warn(`[PetDetails] Erro ao buscar serviço ${item.service_id} para item da fila ${item.id}:`, serviceError);
+              console.warn(`[PetDetails] Erro ao buscar serviço ${item.service_id}:`, serviceError);
             }
           }
           let duration = 'N/A';
           if (item.start_time && item.end_time) {
             duration = differenceInMinutes(parseISO(item.end_time), parseISO(item.start_time));
           }
-          // Inclui servicePrice no retorno
           return { ...item, serviceName, durationMinutes: duration, servicePrice }; 
         }));
         setHistoricoPetshop(petshopHistory);
@@ -96,76 +209,66 @@ export default function DetalhesPet() {
         console.error("Erro ao carregar histórico de Petshop:", error);
         setHistoricoPetshop([]);
       }
-      // ---------------------------------------------------------------
       
-      // <<< INÍCIO: Buscar Histórico Clínico (Episódios) >>>
+      // Carrega Histórico Compras
       try {
-        if (dadosPet.recordNumber && storeParam) { // Precisa do prontuário ID e tenant ID
-          const prontuarioId = dadosPet.recordNumber;
-          const tenantId = storeParam;
-          const episodesPath = `tenants/${tenantId}/prontuarios/${prontuarioId}/episodes`;
-          console.log(`[PetDetails] Buscando episódios em: ${episodesPath}`);
-          
-          const episodesQuery = query(
-            collection(db, episodesPath),
-            orderBy('createdAt', 'desc') // Ordenar por data de criação, mais recentes primeiro
-          );
-          
-          const querySnapshot = await getDocs(episodesQuery);
-          const episodesData = querySnapshot.docs.map(doc => ({
-            id: doc.id,
-            createdAt: doc.data().createdAt,
-            data: doc.data().createdAt?.toDate ? format(doc.data().createdAt.toDate(), 'dd/MM/yyyy HH:mm', { locale: ptBR }) : 'Data inválida',
-            motivo: doc.data().serviceName || doc.data().reason || 'Consulta Clínica',
-            episodeNumber: doc.data().episodeNumber,
-            diagnosticoResumo: doc.data().diagnosis || doc.data().fullInteraction?.vetNotes?.diagnosis || 'Não registrado',
-            appointmentId: doc.data().appointmentId
-          }));
-          
-          console.log("[PetDetails] Episódios clínicos encontrados:", episodesData);
-          setHistoricoLiveVet(episodesData); // Salva no mesmo estado por enquanto
-        } else {
-          console.warn("[PetDetails] Prontuário (recordNumber) ou Tenant ID não encontrado. Não foi possível buscar histórico de episódios.");
-          setHistoricoLiveVet([]);
-        }
-        } catch (error) {
-        console.error("Erro ao carregar histórico de episódios clínicos:", error);
-        setHistoricoLiveVet([]);
-      }
-      // <<< FIM: Buscar Histórico Clínico (Episódios) >>>
-      
-      // Buscar Histórico de Compras (Exemplo, ajuste conforme sua entidade)
-      try {
-        const purchaseHistoryData = await PurchaseHistory.filter({ pet_id: petId }); // Ajuste o filtro se necessário
+        const purchaseHistoryData = await PurchaseHistory.filter({ pet_id: petId, tenant_id: tenantId });
         setHistoricoCompras(purchaseHistoryData);
       } catch (purchaseError) {
-        console.warn("[PetDetails] Módulo de Histórico de Compras não encontrado ou erro ao buscar:", purchaseError);
-        // Lidar com o erro ou definir como vazio se o módulo não existir
+        console.warn("[PetDetails] Módulo de Histórico de Compras não encontrado ou erro:", purchaseError);
         setHistoricoCompras([]);
         }
         
       } catch (error) {
-        console.error("Erro ao carregar dados:", error);
-        toast({
-          title: "Erro",
-          description: "Não foi possível carregar os dados do pet.",
-          variant: "destructive"
-        });
+      console.error("Erro ao carregar dados do pet:", error);
+      toast({ title: "Erro", description: `Não foi possível carregar os dados do pet: ${error.message}`, variant: "destructive" });
+      // Garante que estados sejam limpos em caso de erro ao carregar pet
+      setPet(null);
+      setDono(null);
+      setHistoricoPetshop([]);
+      setHistoricoCompras([]);
       } finally {
       setCarregando(false);
     }
   };
 
   useEffect(() => {
+    if (isLoadingTenant) {
+      console.log("[PetDetails useEffect] Aguardando TenantContext carregar...");
+      if (!carregando) setCarregando(true);
+      return;
+    }
+
+    if (errorTenant) {
+      console.error("[PetDetails useEffect] Erro no TenantContext:", errorTenant);
+      toast({ title: "Erro de Acesso", description: `Não foi possível carregar informações da loja: ${errorTenant}`, variant: "destructive" });
+      setCarregando(false);
+      return;
+    }
+
+    if (!currentTenant) {
+        console.warn("[PetDetails useEffect] Tenant não disponível após carregamento do contexto.");
+        if (carregando) setCarregando(false);
+    }
+    
+    if (currentTenant && currentTenant.id && petId) {
     carregarDados();
-  }, [petId, storeParam, navigate]);
+    } else if (!petId) {
+        navigate('/tenant/dashboard');
+        setCarregando(false);
+    }
+  }, [petId, navigate, currentTenant, isLoadingTenant, errorTenant]);
 
   const voltar = () => {
-    if (dono?.id) {
+    if (dono?.id && currentTenant?.id) {
       navigate(`/tenant/cliente/${dono.id}`);
     } else {
-      console.warn("[PetDetails] Dono não encontrado, voltando para a lista de clientes.");
-      navigate(createPageUrl(`Customers?store=${storeParam}`));
+      console.warn("[PetDetails] Dono ou Tenant não encontrado, voltando para a lista de clientes.");
+      if (currentTenant?.id) {
+        navigate(createPageUrl(`Customers?store=${currentTenant.id}`));
+      } else {
+        navigate('/tenant/dashboard');
+      }
     }
   };
 
@@ -193,64 +296,91 @@ export default function DetalhesPet() {
       return;
     }
 
-    // Define o resumo inicial e abre o modal
     setSelectedHistoryEpisode(episodeSummary);
     setIsHistoryModalOpen(true);
-    setIsLoadingEpisodeDetails(true); // Loading do episódio principal
-    setIsLoadingHistoryDetailsItems(true); // Loading dos itens da prescrição
-    setHistoryDetailsPrescriptionItems([]); // Limpa itens anteriores
-    setHistoryDetailsItemsError(null); // Limpa erro anterior
+    setIsLoadingEpisodeDetails(true);
+    setIsLoadingHistoryDetailsItems(true);
+    setHistoryDetailsPrescriptionItems([]);
+    setHistoryDetailsItemsError(null);
 
     let fullEpisodeData = null;
+    const tenantId = currentTenant?.id;
 
     try {
-      // 1. Buscar detalhes completos do episódio principal
-      const tenantId = storeParam;
-      const prontuarioId = pet?.recordNumber;
-      if (!tenantId || !prontuarioId) throw new Error("Tenant ID ou Prontuário ID não encontrados.");
+      if (!tenantId || !pet?.prontuarioId) throw new Error("Tenant ID ou Prontuário ID não encontrados para buscar detalhes do episódio.");
 
-      const episodeRef = doc(db, `tenants/${tenantId}/prontuarios/${prontuarioId}/episodes`, episodeSummary.id);
+      const episodeRef = doc(db, `tenants/${tenantId}/prontuarios/${pet.prontuarioId}/episodes`, episodeSummary.id);
       const episodeSnap = await getDoc(episodeRef);
 
       if (episodeSnap.exists()) {
         fullEpisodeData = { id: episodeSnap.id, ...episodeSnap.data() };
-        console.log("[PetDetails] Detalhes completos do episódio carregados:", fullEpisodeData);
-        setSelectedHistoryEpisode(fullEpisodeData); // Atualiza com dados completos
+        setSelectedHistoryEpisode(fullEpisodeData);
       } else {
         throw new Error(`Episódio ${episodeSummary.id} não encontrado para detalhes.`);
       }
     } catch (error) {
       console.error("[PetDetails] Erro ao buscar detalhes do episódio:", error);
       toast({ title: "Erro", description: "Não foi possível carregar os detalhes completos deste episódio.", variant: "destructive" });
-      setIsLoadingEpisodeDetails(false); // Para o loading do episódio principal em caso de erro
-      // Não busca itens se o episódio falhou
+      setIsLoadingEpisodeDetails(false);
       setIsLoadingHistoryDetailsItems(false);
       setHistoryDetailsItemsError("Falha ao carregar dados do episódio.");
-      return; // Sai da função se não conseguiu carregar o episódio
+      return;
     } finally {
-      setIsLoadingEpisodeDetails(false); // Finaliza loading do episódio principal (mesmo que itens ainda carreguem)
+      setIsLoadingEpisodeDetails(false);
     }
 
-    // 2. Buscar itens da prescrição (somente se o episódio foi carregado com sucesso)
     if (fullEpisodeData && fullEpisodeData.id) {
       try {
-        const itemsCollectionRef = collection(db, `consultations/${fullEpisodeData.id}/consultation_prescription_items`);
-        // NOTA: Usando a coleção 'consultations' e o ID do episódio, assumindo que o ID do episódio é o mesmo ID da consulta
-        // Se a estrutura for diferente (ex: consulta tem outro ID), isso precisa ser ajustado.
+        const episodeAppointmentId = fullEpisodeData.appointmentId;
+
+        if (!tenantId || !episodeAppointmentId) {
+          console.error("[PetDetails] Tenant ID ou Episode's appointmentId ausentes. Episode ID:", episodeSummary.id, "Episode Appointment ID:", episodeAppointmentId);
+          setHistoryDetailsItemsError("Dados incompletos (ID do agendamento do episódio) para buscar itens da prescrição.");
+          setIsLoadingHistoryDetailsItems(false);
+          return;
+        }
+
+        // Passo 1: Query para encontrar o documento de consulta pelo appointmentId do episódio
+        const consultationsRef = collection(db, "consultations");
+        // ASSUMINDO que o documento em 'consultations' tem um campo 'appointmentId' no nível raiz E um 'tenant_id'
+        const q = query(consultationsRef, 
+                        where("appointmentId", "==", episodeAppointmentId),
+                        where("tenant_id", "==", tenantId), // Crucial para segurança e para a regra funcionar
+                        limit(1));
+        
+        console.log(`[PetDetails] Querying 'consultations' for appointmentId: ${episodeAppointmentId} and tenantId: ${tenantId}`);
+        const querySnapshot = await getDocs(q);
+
+        if (querySnapshot.empty) {
+          console.warn(`[PetDetails] Nenhum documento encontrado em 'consultations' para appointmentId: ${episodeAppointmentId} e tenantId: ${tenantId}`);
+          setHistoryDetailsItemsError("Documento da consulta não encontrado para este episódio.");
+          setHistoryDetailsPrescriptionItems([]);
+          setIsLoadingHistoryDetailsItems(false);
+          return;
+        }
+
+        // Assumimos que há apenas um resultado devido ao episodeAppointmentId + tenantId ser teoricamente único
+        const consultationDoc = querySnapshot.docs[0];
+        const actualConsultationDocId = consultationDoc.id;
+        console.log(`[PetDetails] Encontrado documento de consulta: ${actualConsultationDocId} com dados:`, consultationDoc.data());
+        
+        // Passo 2: Usar o ID do documento de consulta encontrado para buscar os itens da prescrição
+        const itemsPath = `consultations/${actualConsultationDocId}/consultation_prescription_items`;
+        console.log("[PetDetails] Path final para itens da prescrição:", itemsPath);
+        const itemsCollectionRef = collection(db, itemsPath);
+        
         const itemsQuery = query(itemsCollectionRef, orderBy("order", "asc"));
         const itemsSnapshot = await getDocs(itemsQuery);
         const fetchedItems = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        console.log(`[PetDetails] Itens da prescrição do histórico (${fullEpisodeData.id}) carregados:`, fetchedItems);
         setHistoryDetailsPrescriptionItems(fetchedItems);
+
       } catch (itemsError) {
         console.error(`[PetDetails] Erro ao buscar itens da prescrição do histórico (${fullEpisodeData.id}):`, itemsError);
         setHistoryDetailsItemsError("Falha ao carregar itens da prescrição.");
-        // Não precisa dar toast aqui, o erro será mostrado no modal
       } finally {
-        setIsLoadingHistoryDetailsItems(false); // Finaliza loading dos itens
+        setIsLoadingHistoryDetailsItems(false);
       }
     } else {
-      // Caso não tenha fullEpisodeData (embora a lógica acima deva prevenir isso)
       setIsLoadingHistoryDetailsItems(false);
       setHistoryDetailsItemsError("ID do episódio não encontrado para buscar itens.");
     }
@@ -260,18 +390,21 @@ export default function DetalhesPet() {
     setIsHistoryModalOpen(false);
     setSelectedHistoryEpisode(null);
     setIsLoadingEpisodeDetails(false);
-    setHistoryDetailsPrescriptionItems([]); // <<< Limpa estado dos itens
-    setIsLoadingHistoryDetailsItems(false); // <<< Reseta loading dos itens
-    setHistoryDetailsItemsError(null); // <<< Limpa erro dos itens
+    setHistoryDetailsPrescriptionItems([]);
+    setIsLoadingHistoryDetailsItems(false);
+    setHistoryDetailsItemsError(null);
   };
 
-  // Função para renderizar conteúdo baseado no filtro
   const renderConteudoFiltrado = () => {
     switch (filtroAtivo) {
       case 'consultas': {
         return (
           <div>
             <h3 className="text-lg font-semibold mb-3 flex items-center"><Stethoscope className="h-5 w-5 mr-2" /> Histórico Clínico (Episódios)</h3>
+            {isLoadingEpisodes && historicoLiveVet.length === 0 ? (
+              <div className="flex justify-center items-center py-8"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+            ) : totalEpisodes > 0 ? (
+              <>
             {historicoLiveVet.length > 0 ? (
               <ul className="space-y-3">
                 {historicoLiveVet.map((ep, index) => (
@@ -308,18 +441,32 @@ export default function DetalhesPet() {
                 ))}
               </ul>
             ) : (
-              <p className="text-muted-foreground">Nenhum histórico clínico (episódio) encontrado.</p>
+                  <p className="text-muted-foreground py-4 text-center">Nenhum episódio encontrado para esta página.</p>
+                )}
+                <PaginationControls
+                  currentPage={episodesCurrentPage}
+                  pageSize={episodesPageSize}
+                  hasNextPage={episodesLastVisibleDoc !== null && historicoLiveVet.length === episodesPageSize && (episodesCurrentPage * episodesPageSize < totalEpisodes)}
+                  hasPreviousPage={episodesCurrentPage > 1}
+                  itemCountOnPage={historicoLiveVet.length}
+                  totalItems={totalEpisodes}
+                  onPageChange={handleEpisodesPageChange}
+                  onPageSizeChange={handleEpisodesPageSizeChange}
+                  isLoading={isLoadingEpisodes}
+                />
+              </>
+            ) : (
+              <p className="text-muted-foreground py-4 text-center">Nenhum histórico clínico (episódio) encontrado para este pet.</p>
             )}
           </div>
         );
       }
 
       case 'petshop': {
-        // Ordena por data de fim, mais recentes primeiro (trata nulls)
         const historicoPetshopOrdenado = [...historicoPetshop].sort((a, b) => {
             const dateA = a.end_time ? new Date(a.end_time) : new Date(0);
             const dateB = b.end_time ? new Date(b.end_time) : new Date(0);
-            return dateB - dateA; // Descendente
+            return dateB - dateA;
         });
 
         return (
@@ -331,9 +478,7 @@ export default function DetalhesPet() {
                    <li key={item.id} className="border p-3 rounded-md bg-muted/20">
                      <p><strong>Data Conclusão:</strong> {item.end_time ? format(parseISO(item.end_time), 'dd/MM/yyyy HH:mm', { locale: ptBR }) : 'N/A'}</p>
                      <p><strong>Serviço:</strong> {item.serviceName}</p>
-                     {/* Exibe Duração */}
                      <p><strong>Duração:</strong> {item.durationMinutes !== 'N/A' ? `${item.durationMinutes} min` : 'N/A'}</p>
-                     {/* Exibe Preço */}
                      <p><strong>Valor:</strong> {item.servicePrice !== null ? `R$ ${item.servicePrice.toFixed(2)}` : 'N/A'}</p>
                      {item.notes && <p><strong>Observações:</strong> {item.notes}</p>}
                    </li>
@@ -389,10 +534,40 @@ export default function DetalhesPet() {
     }
   };
 
+  if (isLoadingTenant || (carregando && !errorTenant && !currentTenant)) {
+    return (
+      <div className="flex justify-center items-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+        <p className="ml-2">Carregando dados da loja e do pet...</p>
+      </div>
+    );
+  }
+  
+  if (errorTenant) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen text-center">
+        <h2 className="text-2xl font-bold mb-2 text-destructive">Erro ao Carregar Loja</h2>
+        <p className="mb-4">{errorTenant}</p>
+        <Button onClick={() => navigate('/')}>Voltar para Início</Button>
+      </div>
+    );
+  }
+
+  if (!currentTenant) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen text-center">
+        <h2 className="text-2xl font-bold mb-2">Loja não Identificada</h2>
+        <p className="mb-4">Não foi possível identificar a loja. Por favor, tente acessar novamente ou contate o suporte.</p>
+        <Button onClick={() => navigate('/')}>Voltar para Início</Button>
+      </div>
+    );
+  }
+
   if (carregando) {
     return (
       <div className="flex justify-center items-center min-h-screen">
         <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+         <p className="ml-2">Carregando dados do pet...</p>
       </div>
     );
   }
@@ -425,7 +600,7 @@ export default function DetalhesPet() {
           size="sm" 
           onClick={editar} 
           className="absolute top-4 right-4"
-          disabled={pet?.is_inactive || carregando}
+          disabled={pet?.is_inactive || carregando || isLoadingTenant}
         >
           <Pencil className="mr-2 h-4 w-4" />
                 Editar Pet
@@ -497,9 +672,8 @@ export default function DetalhesPet() {
               <div className="flex items-center justify-center h-32">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
               </div>
-            ) : selectedHistoryEpisode && !historyDetailsItemsError?.includes("Falha ao carregar dados do episódio") ? ( // Só mostra conteúdo se o episódio carregou
+            ) : selectedHistoryEpisode && !historyDetailsItemsError?.includes("Falha ao carregar dados do episódio") ? ( 
               <>
-                {/* Tipo de histórico (Consulta ou Petshop) */}
                 {selectedHistoryEpisode.type === 'petshop' ? (
                     <p><strong>Tipo:</strong> Atendimento Petshop</p>
                 ) : (
@@ -508,7 +682,6 @@ export default function DetalhesPet() {
 
                 <p><strong>Serviço/Motivo Principal:</strong> {selectedHistoryEpisode.serviceName || selectedHistoryEpisode.reason || 'N/A'}</p>
 
-                {/* Detalhes específicos Petshop */}
                 {selectedHistoryEpisode.type === 'petshop' && (
                     <>
                       <p><strong>Profissional:</strong> {selectedHistoryEpisode.professionalName || 'N/A'}</p>
@@ -518,13 +691,11 @@ export default function DetalhesPet() {
                     </>
                 )}
 
-                {/* Detalhes específicos Consulta/Episódio Clínico */}
                 {selectedHistoryEpisode.type !== 'petshop' && (
                   <>
                     <Separator />
                     <h4 className="font-semibold text-base pt-2">Resumo Clínico</h4>
                     <div className="space-y-2 pl-2">
-                      {/* Verifica se fullInteraction existe antes de tentar acessar suas propriedades */}
                       <p><strong>Anamnese / Queixa Principal:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.anamnesis || selectedHistoryEpisode.anamnesis?.notes || 'N/A'}</p>
                       <p><strong>Exame Clínico:</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.clinicalExam || selectedHistoryEpisode.clinicalExam || 'N/A'}</p>
                       <p><strong>Suspeita / Diagnóstico(s):</strong> {selectedHistoryEpisode.fullInteraction?.vetNotes?.diagnosis || selectedHistoryEpisode.diagnosis || 'N/A'}</p>
@@ -532,7 +703,6 @@ export default function DetalhesPet() {
                       <p><strong>Diagnóstico Final Confirmado:</strong> {selectedHistoryEpisode.fullInteraction?.confirmedDiagnosis || 'Não confirmado'}</p>
                     </div>
 
-                    {/* Seção de Prescrição Modificada */}
                     <Separator />
                     <h4 className="font-semibold text-base pt-2">Prescrição</h4>
                     {isLoadingHistoryDetailsItems ? (
@@ -540,7 +710,7 @@ export default function DetalhesPet() {
                         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                         <p className="ml-2 text-sm text-muted-foreground">Carregando itens da prescrição...</p>
                       </div>
-                    ) : historyDetailsItemsError && !historyDetailsItemsError.includes("Falha ao carregar dados do episódio") ? ( // Só mostra erro dos itens se o episódio carregou
+                    ) : historyDetailsItemsError && !historyDetailsItemsError.includes("Falha ao carregar dados do episódio") ? ( 
                       <p className="text-sm text-destructive pl-2">{historyDetailsItemsError}</p>
                     ) : historyDetailsPrescriptionItems.length > 0 ? (
                       <>
@@ -559,9 +729,7 @@ export default function DetalhesPet() {
                     ) : (
                       <p className="text-sm text-muted-foreground pl-2">Nenhum item de prescrição encontrado para este episódio.</p>
                     )}
-                    {/* Fim da Seção de Prescrição Modificada */}
 
-                    {/* Itens Consumidos (se existirem) */}
                     {(selectedHistoryEpisode.consumedItems && selectedHistoryEpisode.consumedItems.length > 0) && (
                       <>
                         <Separator />
@@ -580,7 +748,6 @@ export default function DetalhesPet() {
 
               </>
             ) : (
-              // Mostra erro se o episódio principal falhou ao carregar
               <p className="text-destructive text-center p-4">
                 {historyDetailsItemsError || "Não foi possível carregar os detalhes deste registro."}
               </p>

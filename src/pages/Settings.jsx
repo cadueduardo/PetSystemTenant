@@ -24,6 +24,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import AddressForm from "@/components/shared/AddressForm";
 
 const safeApiCall = async (apiFunction, params, fallback = []) => {
   try {
@@ -289,24 +290,6 @@ export default function Settings() {
 
     setIsSaving(true);
     try {
-      const updatedTenantData = {
-        company_name: tenant.company_name || "",
-        legal_name: tenant.legal_name || "",
-        document_type: tenant.document_type || "cnpj",
-        document: tenant.document || "",
-        email: tenant.email || "",
-        phone: tenant.phone || "",
-        address: {
-          cep: tenant.address?.cep || "",
-          street: tenant.address?.street || "",
-          number: tenant.address?.number || "",
-          complement: tenant.address?.complement || "",
-          neighborhood: tenant.address?.neighborhood || "",
-          city: tenant.address?.city || "",
-          state: tenant.address?.state || ""
-        },
-      };
-      
       const updatedCustomization = {
         ...customization,
         tenant_id: tenant?.id || null,
@@ -740,123 +723,13 @@ export default function Settings() {
               </div>
 
               <h3 className="text-lg font-medium pt-4 border-t mt-6 mb-2">Endereço Fiscal</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="settings_cep">CEP *</Label>
-                  <div className="flex">
-                    <Input
-                      id="settings_cep"
-                      name="cep"
-                      value={tenant?.address?.cep || ""}
-                      onChange={handleTenantAddressChange}
-                      maxLength={8}
-                      required
-                    />
-                    {isSearchingCep && (
-                      <div className="ml-2 flex items-center">
-                        <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              
-              <div>
-                <Label htmlFor="settings_street">Logradouro *</Label>
-                <Input
-                  id="settings_street"
-                  name="street"
-                  value={tenant?.address?.street || ""}
-                  onChange={handleTenantAddressChange}
-                  required
-                />
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="settings_number">Número *</Label>
-                  <Input
-                    id="settings_number"
-                    name="number"
-                    value={tenant?.address?.number || ""}
-                    onChange={handleTenantAddressChange}
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="settings_complement">Complemento</Label>
-                  <Input
-                    id="settings_complement"
-                    name="complement"
-                    value={tenant?.address?.complement || ""}
-                    onChange={handleTenantAddressChange}
-                  />
-                </div>
-              </div>
-              
-              <div>
-                <Label htmlFor="settings_neighborhood">Bairro *</Label>
-                <Input
-                  id="settings_neighborhood"
-                  name="neighborhood"
-                  value={tenant?.address?.neighborhood || ""}
-                  onChange={handleTenantAddressChange}
-                  required
-                />
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="settings_city">Cidade *</Label>
-                  <Input
-                    id="settings_city"
-                    name="city"
-                    value={tenant?.address?.city || ""}
-                    onChange={handleTenantAddressChange}
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="settings_state">Estado *</Label>
-                  <Select 
-                    value={tenant?.address?.state || ""} 
-                    onValueChange={(value) => handleTenantAddressChange({ target: { name: "state", value } })}
-                  >
-                    <SelectTrigger id="settings_state">
-                      <SelectValue placeholder="Selecione o estado" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="AC">Acre</SelectItem>
-                      <SelectItem value="AL">Alagoas</SelectItem>
-                      <SelectItem value="AP">Amapá</SelectItem>
-                      <SelectItem value="AM">Amazonas</SelectItem>
-                      <SelectItem value="BA">Bahia</SelectItem>
-                      <SelectItem value="CE">Ceará</SelectItem>
-                      <SelectItem value="DF">Distrito Federal</SelectItem>
-                      <SelectItem value="ES">Espírito Santo</SelectItem>
-                      <SelectItem value="GO">Goiás</SelectItem>
-                      <SelectItem value="MA">Maranhão</SelectItem>
-                      <SelectItem value="MT">Mato Grosso</SelectItem>
-                      <SelectItem value="MS">Mato Grosso do Sul</SelectItem>
-                      <SelectItem value="MG">Minas Gerais</SelectItem>
-                      <SelectItem value="PA">Pará</SelectItem>
-                      <SelectItem value="PB">Paraíba</SelectItem>
-                      <SelectItem value="PR">Paraná</SelectItem>
-                      <SelectItem value="PE">Pernambuco</SelectItem>
-                      <SelectItem value="PI">Piauí</SelectItem>
-                      <SelectItem value="RJ">Rio de Janeiro</SelectItem>
-                      <SelectItem value="RN">Rio Grande do Norte</SelectItem>
-                      <SelectItem value="RS">Rio Grande do Sul</SelectItem>
-                      <SelectItem value="RO">Rondônia</SelectItem>
-                      <SelectItem value="RR">Roraima</SelectItem>
-                      <SelectItem value="SC">Santa Catarina</SelectItem>
-                      <SelectItem value="SP">São Paulo</SelectItem>
-                      <SelectItem value="SE">Sergipe</SelectItem>
-                      <SelectItem value="TO">Tocantins</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
+              <AddressForm 
+                 address={tenant?.address || {}}
+                 onAddressChange={handleTenantAddressChange}
+                 searchCepFunction={searchAddressByCepInSettings}
+                 isLoadingCep={isSearchingCep}
+                 className="pt-2"
+              />
 
               <div className="pt-6 border-t mt-6">
                 <Label className="text-lg font-medium">Redes Sociais</Label>

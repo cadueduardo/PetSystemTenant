@@ -1,29 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useTenant } from '@/components/tenant/TenantContext';
-import { useNavigate } from 'react-router-dom'; // Para navegação
+import { useNavigate } from 'react-router-dom';
 
-// Importações de UI (ShadCN/UI)
-import { Loader2, MessageSquareText, FileText } from 'lucide-react'; // Ícones
+import { Loader2, MessageSquareText, FileText } from 'lucide-react';
 import { useToast } from "@/components/ui/use-toast";
 
-// Firebase - Removido por enquanto, pode ser readicionado se necessário para buscar status GERAIS
-// import { httpsCallable } from "firebase/functions"; 
-// import { doc, onSnapshot } from "firebase/firestore";
-// import { db, functions } from '@/lib/firebaseConfig';
-
-// Novo componente de Card
 import IntegrationCard from '@/components/integrations/IntegrationCard';
 
-// REMOVER toda a função WahaConfigForm() e suas constantes relacionadas como FIRESTORE_WAHA_DOC
-// A lógica de WahaConfigForm será movida para sua própria página/modal de configuração.
-// ... WahaConfigForm code removed ...
-
-function IntegrationsPage() {
+function IntegrationsMarketplacePage() {
   const { currentTenant } = useTenant();
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  // Estados simplificados para status das integrações (exemplos)
   const [wahaStatusText, setWahaStatusText] = useState('Verificando...');
   const [isWahaConfigured, setIsWahaConfigured] = useState(false);
   
@@ -32,18 +20,10 @@ function IntegrationsPage() {
   
   const [pageLoading, setPageLoading] = useState(true);
 
-  // Simular carregamento de dados e status das integrações
   useEffect(() => {
-    // TODO: No futuro, buscar o status real das integrações para o tenant.
-    // Esta lógica deve ser mais robusta, possivelmente chamando uma função de backend
-    // ou lendo de um local centralizado no Firestore que resume os status das integrações.
     setPageLoading(true);
     const timer = setTimeout(() => {
-      // Exemplo de como você poderia verificar se está configurado (MUITO SIMPLIFICADO)
-      // Para WAHA, você precisaria de uma lógica similar à que existia no WahaConfigForm, 
-      // mas provavelmente em uma store global ou em sua página de configuração.
-      // Por agora, vamos simular:
-      if (currentTenant?.someWahaFlag) { // Substitua someWahaFlag por uma verificação real
+      if (currentTenant?.someWahaFlag) {
         setWahaStatusText('Ativo');
         setIsWahaConfigured(true);
       } else {
@@ -51,8 +31,7 @@ function IntegrationsPage() {
         setIsWahaConfigured(false);
       }
 
-      // Para NFe, também simulado:
-      if (currentTenant?.someNFeFlag) { // Substitua someNFeFlag por uma verificação real
+      if (currentTenant?.someNFeFlag) {
         setNfeStatusText('Ativo');
         setIsNfeConfigured(true);
       } else {
@@ -60,18 +39,16 @@ function IntegrationsPage() {
         setIsNfeConfigured(false);
       }
       setPageLoading(false);
-    }, 1200); // Aumentado o tempo para simular melhor
+    }, 1200);
     return () => clearTimeout(timer);
   }, [currentTenant]);
 
   const handleWahaNavigation = () => {
-    // Futuramente, navegar para a página de configuração/gerenciamento do WAHA
-    // Ex: navigate('/tenant/integrations/waha-setup');
-    toast({ title: 'Integração WhatsApp', description: 'Navegar para a página de configuração do WAHA.' });
+    navigate('/tenant/integracoes/waha/setup');
   };
 
   const handleNFeNavigation = () => {
-    navigate('/tenant/integrations/nfe-setup');
+    navigate('/tenant/integracoes/nfe/setup');
   };
 
   if (pageLoading) {
@@ -84,14 +61,14 @@ function IntegrationsPage() {
 
   return (
     <div className="container mx-auto p-4 md:p-6 lg:p-8">
-      <header className="mb-10"> {/* Aumentado margin-bottom */}
+      <header className="mb-10">
         <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-gray-900">Central de Integrações</h1>
-        <p className="text-lg text-muted-foreground mt-2"> {/* Aumentado tamanho e margin-top */}
+        <p className="text-lg text-muted-foreground mt-2">
           Conecte e gerencie serviços externos para automatizar e expandir as funcionalidades da sua loja.
         </p>
       </header>
 
-      <div className="grid sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8"> {/* Aumentado gap */}
+      <div className="grid sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
         
         <IntegrationCard
           icon={<MessageSquareText className="w-full h-full text-green-600" />}
@@ -122,7 +99,6 @@ function IntegrationsPage() {
           comingSoon={true}
         />
         
-        {/* Adicione mais cards de placeholder se desejar */}
         <IntegrationCard
           icon={<Loader2 className="w-full h-full text-gray-500" />} 
           title="ERP MasterControl"
@@ -137,4 +113,4 @@ function IntegrationsPage() {
   );
 }
 
-export default IntegrationsPage;
+export default IntegrationsMarketplacePage; 

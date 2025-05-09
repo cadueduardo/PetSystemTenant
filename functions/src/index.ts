@@ -1,4 +1,8 @@
+import * as admin from "firebase-admin";
 import * as logger from "firebase-functions/logger";
+
+// Inicializar o Firebase Admin SDK
+admin.initializeApp();
 
 // Importações da nova estrutura modular
 import {
@@ -14,6 +18,7 @@ export * from './billing';
 export * from './orders';
 export * from './admin';
 export * from './barcodes';
+export * from './nfe';
 
 logger.info(`[Function Init] Running code version: ${CODE_VERSION}`);
 

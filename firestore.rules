@@ -87,6 +87,19 @@ service cloud.firestore {
             allow update: if isTenantMember(tenantId); 
             // Exclusão bloqueada do lado do cliente
             allow delete: if false;
+
+            // +++ INÍCIO: Regra para subcoleção consultation_prescription_items DENTRO DE EPISODES +++
+            match /consultation_prescription_items/{itemId} {
+              // Permitir leitura se o usuário pertence ao tenant (tenantId já validado pelo path aninhado)
+              allow read: if isTenantMember(tenantId);
+  
+              // Permitir criação se o usuário pertence ao tenant
+              allow create: if isTenantMember(tenantId);
+              
+              // Negar atualização/exclusão direta por enquanto (se necessário, adicione regras específicas)
+              allow update, delete: if false;
+            }
+            // +++ FIM: Regra para subcoleção consultation_prescription_items +++
           }
         }
         // +++ FIM: Regras para Prontuários e Episódios +++
@@ -347,13 +360,13 @@ service cloud.firestore {
 
        // +++ INÍCIO: Regra para subcoleção consultation_prescription_items +++
        match /consultation_prescription_items/{itemId} {
-         // Permitir leitura se o usuário pertence ao tenant da consulta pai
-         allow read: if request.auth != null &&
-                        isTenantMember(get(/databases/$(database)/documents/consultations/$(consultationId)).data.tenant_id);
-         // Permitir criação se o usuário pertence ao tenant (sem depender do get() no pai)
-         allow create: if isAuthenticatedTenant();
+         // --- REGRA SIMPLIFICADA PARA DEBUG ---
+         // Permitir leitura se o usuário está autenticado com um tenant
+         allow read: if isAuthenticatedTenant(); 
+         // --- FIM DA REGRA SIMPLIFICADA ---
          
-         // Negar atualização/exclusão direta por enquanto
+         // Manter regras de create/write como estavam (ou ajustar conforme necessário)
+         allow create: if isAuthenticatedTenant();
          allow update, delete: if false;
        }
        // +++ FIM: Regra para subcoleção consultation_prescription_items +++

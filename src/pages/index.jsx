@@ -97,8 +97,10 @@ import EmployeesPage from './Tenant/EmployeesPage';
 import EmployeeFormPage from './Tenant/EmployeeFormPage';
 import AcceptInvitationPage from './Public/AcceptInvitationPage';
 import AgendaPage from './Tenant/AgendaPage';
-import IntegrationsPage from './Tenant/IntegrationsPage';
-import NFeSetupPage from './Tenant/NFeSetupPage'; // <<< ADICIONAR IMPORT NOVO
+import IntegrationsMarketplacePage from './Integrations/IntegrationsMarketplacePage';
+import WahaSetupPage from './Integrations/Waha/WahaSetupPage';
+import NFeSetupPage from './Integrations/NFe/NFeSetupPage';
+// import NFeSetupPage from './Tenant/NFeSetupPage'; // Comentado temporariamente
 // Remover import desnecessário
 // import PasswordSetupPage from './PasswordSetupPage'; 
 // --- FIM NOVAS IMPORTAÇÕES ---
@@ -274,20 +276,26 @@ function PagesContent() {
                 <Route path="medicacao" element={<MedicationQueue />} />
                 <Route path="prescription-manager" element={<PrescriptionManager />} />
 
-                {/* --- NOVAS ROTAS --- */}
+                {/* Rotas de Configurações do Tenant */}
+                <Route path="profiles" element={<ProfilesPage />} />
+                <Route path="profiles/new" element={<ProfileFormPage />} />
+                <Route path="profiles/edit/:id" element={<ProfileFormPage />} />
+                <Route path="employees" element={<EmployeesPage />} />
+                <Route path="employees/new" element={<EmployeeFormPage />} />
+                <Route path="employees/edit/:id" element={<EmployeeFormPage />} />
+
+                {/* Novas rotas para Integrações */}
+                <Route path="integracoes" element={<IntegrationsMarketplacePage />} />
+                <Route path="integracoes/waha/setup" element={<WahaSetupPage />} />
+                <Route path="integracoes/nfe/setup" element={<NFeSetupPage />} />
+
+                {/* Adicionando Novas Rotas Tenant */}
+                <Route path="colaboradores" element={<EmployeesPage />} />
+                <Route path="colaboradores/novo" element={<EmployeeFormPage />} />
+                <Route path="colaboradores/editar/:id" element={<EmployeeFormPage />} />
                 <Route path="perfis" element={<ProfilesPage />} />
                 <Route path="perfis/novo" element={<ProfileFormPage />} />
-                <Route path="perfis/editar/:profileId" element={<ProfileFormPage />} />
-                <Route path="colaboradores" element={<EmployeesPage />} />
-                <Route path="colaborador/novo" element={<EmployeeFormPage />} />
-                <Route path="colaborador/editar/:employeeId" element={<EmployeeFormPage />} />
-                {/* --- FIM NOVAS ROTAS --- */}
-
-                {/* --- ROTA PARA INTEGRAÇÕES --- */}
-                <Route path="integracoes" element={<IntegrationsPage />} /> 
-                {/* --- FIM ROTA INTEGRAÇÕES --- */}
-                
-                <Route path="integracoes/nfe-setup" element={<NFeSetupPage />} /> {/* <<< ADICIONAR NOVA ROTA AQUI */}
+                <Route path="perfis/editar/:id" element={<ProfileFormPage />} />
               </Route>
             </Route>
             

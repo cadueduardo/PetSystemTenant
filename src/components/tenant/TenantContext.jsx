@@ -151,9 +151,9 @@ export function TenantProvider({ children }) {
                 // Caso de sucesso
                 setCurrentTenant({ id: docSnap.id, ...tenantData, userId: currentUserId || null }); // Associa userId
                 setError(null); // Limpa erro anterior
-                console.log(`[TenantProvider] Successfully loaded tenant: ${tenantData.name} (ID: ${docSnap.id}) for user ${currentUserId || 'public'}`);
+                console.log(`[TenantProvider] Successfully loaded tenant: ${tenantData.company_name} (ID: ${docSnap.id}) for user ${currentUserId || 'public'}`);
                 localStorage.setItem('current_tenant', docSnap.id);
-                localStorage.setItem('tenant_name', tenantData.name);
+                localStorage.setItem('tenant_name', tenantData.company_name);
               } else {
                 // Encontrado mas inativo
                 const status = tenantData?.status || 'unknown';

@@ -37,6 +37,7 @@ import {
   CheckCircle2
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import AddressForm from "../shared/AddressForm";
 
 export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -726,131 +727,12 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
               </TabsContent>
               
               <TabsContent value="address" className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="cep">CEP *</Label>
-                    <div className="flex">
-                      <Input
-                        id="cep"
-                        name="cep"
-                        value={formData.address.cep}
-                        onChange={handleAddressChange}
-                        maxLength={8}
-                        required
-                      />
-                      {isSearchingCep && (
-                        <div className="ml-2 flex items-center">
-                          <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                
-                <div>
-                  <Label htmlFor="street">Logradouro *</Label>
-                  <Input
-                    id="street"
-                    name="street"
-                    value={formData.address.street}
-                    onChange={handleAddressChange}
-                    required
-                  />
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="number">Número *</Label>
-                    <Input
-                      id="number"
-                      name="number"
-                      value={formData.address.number}
-                      onChange={handleAddressChange}
-                      required
-                    />
-                  </div>
-                  
-                  <div>
-                    <Label htmlFor="complement">Complemento</Label>
-                    <Input
-                      id="complement"
-                      name="complement"
-                      value={formData.address.complement}
-                      onChange={handleAddressChange}
-                    />
-                  </div>
-                </div>
-                
-                <div>
-                  <Label htmlFor="neighborhood">Bairro *</Label>
-                  <Input
-                    id="neighborhood"
-                    name="neighborhood"
-                    value={formData.address.neighborhood}
-                    onChange={handleAddressChange}
-                    required
-                  />
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="city">Cidade *</Label>
-                    <Input
-                      id="city"
-                      name="city"
-                      value={formData.address.city}
-                      onChange={handleAddressChange}
-                      required
-                    />
-                  </div>
-                  
-                  <div>
-                    <Label htmlFor="state">Estado *</Label>
-                    <Select 
-                      value={formData.address.state} 
-                      onValueChange={(value) => setFormData(prev => ({
-                        ...prev,
-                        address: {
-                          ...prev.address,
-                          state: value
-                        }
-                      }))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Selecione o estado" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="AC">Acre</SelectItem>
-                        <SelectItem value="AL">Alagoas</SelectItem>
-                        <SelectItem value="AP">Amapá</SelectItem>
-                        <SelectItem value="AM">Amazonas</SelectItem>
-                        <SelectItem value="BA">Bahia</SelectItem>
-                        <SelectItem value="CE">Ceará</SelectItem>
-                        <SelectItem value="DF">Distrito Federal</SelectItem>
-                        <SelectItem value="ES">Espírito Santo</SelectItem>
-                        <SelectItem value="GO">Goiás</SelectItem>
-                        <SelectItem value="MA">Maranhão</SelectItem>
-                        <SelectItem value="MT">Mato Grosso</SelectItem>
-                        <SelectItem value="MS">Mato Grosso do Sul</SelectItem>
-                        <SelectItem value="MG">Minas Gerais</SelectItem>
-                        <SelectItem value="PA">Pará</SelectItem>
-                        <SelectItem value="PB">Paraíba</SelectItem>
-                        <SelectItem value="PR">Paraná</SelectItem>
-                        <SelectItem value="PE">Pernambuco</SelectItem>;
-                        <SelectItem value="PI">Piauí</SelectItem>;
-                        <SelectItem value="RJ">Rio de Janeiro</SelectItem>;
-                        <SelectItem value="RN">Rio Grande do Norte</SelectItem>;
-                        <SelectItem value="RS">Rio Grande do Sul</SelectItem>;
-                        <SelectItem value="RO">Rondônia</SelectItem>;
-                        <SelectItem value="RR">Roraima</SelectItem>;
-                        <SelectItem value="SC">Santa Catarina</SelectItem>;
-                        <SelectItem value="SP">São Paulo</SelectItem>;
-                        <SelectItem value="SE">Sergipe</SelectItem>;
-                        <SelectItem value="TO">Tocantins</SelectItem>;
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
+                <AddressForm 
+                    address={formData.address}
+                    onAddressChange={handleAddressChange}
+                    searchCepFunction={searchAddressByCep}
+                    isLoadingCep={isSearchingCep}
+                />
                 
                 <div className="flex justify-between mt-6">
                   <Button type="button" variant="outline" onClick={prevTab}>Voltar</Button>
