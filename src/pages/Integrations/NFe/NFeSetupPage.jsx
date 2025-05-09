@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/components/ui/use-toast";
 import { Loader2, AlertTriangle, ExternalLink } from 'lucide-react';
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { getApp } from "firebase/app";
 
 // Mock data for regimes tributários - idealmente viria de uma constante ou API
 const regimesTributarios = [
@@ -45,12 +47,12 @@ function NFeSetupPage() {
   const [codigoMunicipioIBGE, setCodigoMunicipioIBGE] = useState('');
 
   // Certificado Digital
-  const [certificadoFile, setCertificadoFile] = useState(null);
-  const [senhaCertificado, setSenhaCertificado] = useState('');
+  const [certificateFile, setCertificateFile] = useState(null);
+  const [certificatePassword, setCertificatePassword] = useState('');
   
   const [habilitaNFe, setHabilitaNFe] = useState(true);
   const [habilitaNFSe, setHabilitaNFSe] = useState(true);
-  const [ambienteFocusNFe, setAmbienteFocusNFe] = useState('homologacao');
+  const [environment, setEnvironment] = useState('homologation');
 
   const [isLoading, setIsLoading] = useState(false);
 
@@ -80,7 +82,7 @@ function NFeSetupPage() {
 
   const handleCertificadoChange = (event) => {
     if (event.target.files && event.target.files[0]) {
-      setCertificadoFile(event.target.files[0]);
+      setCertificateFile(event.target.files[0]);
     }
   };
 
@@ -103,72 +105,83 @@ function NFeSetupPage() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    setIsLoading(true);
 
-    if (!certificadoFile || !senhaCertificado) {
-      toast({
-        title: "Campos Obrigatórios",
-        description: "Por favor, forneça o arquivo do certificado digital (.pfx) e a senha.",
-        variant: "destructive",
-      });
-      return; // Não continua se campos obrigatórios faltarem
+    if (!currentTenant?.id) {
+      toast({ title: "Erro", description: "Tenant não identificado.", variant: "destructive" });
+      setIsLoading(false);
+      return;
+    }
+    if (!certificateFile) {
+      toast({ title: "Erro", description: "O arquivo do certificado é obrigatório.", variant: "destructive" });
+      setIsLoading(false);
+      return;
+    }
+    if (certificatePassword === "") {
+      toast({ title: "Erro", description: "A senha do certificado é obrigatória.", variant: "destructive" });
+      setIsLoading(false);
+      return;
     }
 
-    setIsLoading(true);
-    
+    let base64Cert = null;
     try {
-      // Ler o arquivo como Base64 antes de enviar
-      const certificadoBase64 = await readFileAsBase64(certificadoFile);
-
-      const formDataToSubmit = {
-        tenantId: currentTenant.id,
-        certificadoBase64, // Enviar string Base64
-        senhaCertificado,
-        habilitaNFe,
-        habilitaNFSe,
-        ambienteFocusNFe,
-      };
-  
-      console.log("Form Data to be sent to backend (Base64):", {
-        tenantId: formDataToSubmit.tenantId,
-        fileName: certificadoFile.name,
-        base64Length: formDataToSubmit.certificadoBase64.length,
-        hasPassword: !!formDataToSubmit.senhaCertificado,
-        habilitaNFe: formDataToSubmit.habilitaNFe,
-        habilitaNFSe: formDataToSubmit.habilitaNFSe,
-        ambiente: formDataToSubmit.ambienteFocusNFe,
-      });
-  
-      // TODO: Implementar chamada REAL para Firebase Function
-      // Descomentar e adaptar quando a função estiver pronta
-      // import { httpsCallable } from "firebase/functions"; 
-      // import { functions } from '@/lib/firebaseConfig'; // Certifique-se que 'functions' está exportado
-      // const setupNFeCallable = httpsCallable(functions, 'setupNFeIntegration');
-      // try {
-      //   console.log("Chamando a função setupNFeIntegration...");
-      //   const result = await setupNFeCallable(formDataToSubmit);
-      //   console.log("Resultado da função:", result.data);
-      //   toast({ title: "Sucesso", description: result.data.message });
-      // } catch (error) {
-      //   console.error("Erro ao chamar a função:", error);
-      //   toast({ title: "Erro na Configuração", description: error.message || "Falha ao configurar NF-e.", variant: "destructive" });
-      // }
-  
-      // Simulação atual
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      toast({
-        title: "Configurações em Processamento (Simulação)",
-        description: "Os dados (incluindo certificado Base64) foram enviados para configuração.",
-      });
-
+      base64Cert = await readFileAsBase64(certificateFile);
+      if (!base64Cert) {
+        throw new Error("Não foi possível ler o arquivo do certificado.");
+      }
     } catch (error) {
-      console.error("Erro ao processar o formulário ou ler o arquivo:", error);
+      toast({ title: "Erro de Certificado", description: error.message || "Falha ao converter certificado.", variant: "destructive" });
+      setIsLoading(false);
+      return;
+    }
+
+    const dataToSend = {
+        tenantId: currentTenant.id,
+        environment: environment,
+        certificatePassword: certificatePassword,
+        certificateBase64: base64Cert,
+    };
+
+    console.log("[NFeSetupPage] Final data being sent to setupNFeIntegration:", {
+        tenantId: dataToSend.tenantId,
+        environment: dataToSend.environment,
+        isCertificatePasswordString: typeof dataToSend.certificatePassword === 'string',
+        certificateBase64Length: dataToSend.certificateBase64?.length
+    });
+
+    try {
+      const app = getApp();
+      const firebaseFunctionsInstance = getFunctions(app, "southamerica-east1");
+      const setupNFeIntegrationCallable = httpsCallable(firebaseFunctionsInstance, 'setupNFeIntegration');
+      
+      const result = await setupNFeIntegrationCallable(dataToSend);
+
+      if (result.data.success) {
+        toast({
+          title: "Sucesso!",
+          description: result.data.message || "Integração NF-e configurada com sucesso.",
+          variant: "success"
+        });
+      } else {
+        throw new functions.https.HttpsError(result.data.errorCode || 'unknown', result.data.message || "Falha ao configurar a integração NF-e.");
+      }
+    } catch (error) {
+      console.error("Erro ao chamar a função setupNFeIntegration ou tratar sua resposta:", error);
+      let errorMessage = "Ocorreu um erro desconhecido.";
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      if (error.message && error.code) {
+         errorMessage = error.message;
+      }
+
       toast({
-        title: "Erro no Formulário",
-        description: error.message || "Não foi possível processar os dados do certificado.",
-        variant: "destructive",
+        title: "Erro ao Configurar NF-e",
+        description: errorMessage,
+        variant: "destructive"
       });
     } finally {
-       setIsLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -293,12 +306,12 @@ function NFeSetupPage() {
             </CardHeader>
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <Label htmlFor="certificadoFile">Arquivo do Certificado (.pfx) *</Label>
-                <Input id="certificadoFile" type="file" accept=".pfx" onChange={handleCertificadoChange} required />
+                <Label htmlFor="certificateFile">Arquivo do Certificado (.pfx) *</Label>
+                <Input id="certificateFile" type="file" accept=".pfx" onChange={handleCertificadoChange} required />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="senhaCertificado">Senha do Certificado *</Label>
-                <Input id="senhaCertificado" type="password" value={senhaCertificado} onChange={(e) => setSenhaCertificado(e.target.value)} required />
+                <Label htmlFor="certificatePassword">Senha do Certificado *</Label>
+                <Input id="certificatePassword" type="password" value={certificatePassword} onChange={(e) => setCertificatePassword(e.target.value)} required />
               </div>
             </CardContent>
           </Card>
@@ -309,14 +322,14 @@ function NFeSetupPage() {
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="space-y-2">
-                    <Label htmlFor="ambienteFocusNFe">Ambiente de Emissão (Focus NFe)</Label>
-                    <Select value={ambienteFocusNFe} onValueChange={setAmbienteFocusNFe}>
-                        <SelectTrigger id="ambienteFocusNFe">
+                    <Label htmlFor="environment">Ambiente de Emissão (Focus NFe)</Label>
+                    <Select value={environment} onValueChange={setEnvironment}>
+                        <SelectTrigger id="environment">
                             <SelectValue placeholder="Selecione o ambiente" />
                         </SelectTrigger>
                         <SelectContent>
-                            <SelectItem value="homologacao">Homologação (Testes)</SelectItem>
-                            <SelectItem value="producao">Produção (Real)</SelectItem>
+                            <SelectItem value="homologation">Homologação (Testes)</SelectItem>
+                            <SelectItem value="production">Produção (Real)</SelectItem>
                         </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">Selecione {/**/"Homologação"/**/} para realizar testes de emissão sem validade fiscal.</p>

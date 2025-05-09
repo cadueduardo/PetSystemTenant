@@ -16,7 +16,7 @@ function AddressForm({
   const handleChange = (e) => {
     const { name, value } = e.target;
     if (onAddressChange) {
-      onAddressChange(name, value);
+      onAddressChange({ name, value });
     }
     // Disparar busca de CEP se o campo CEP for alterado e tiver 8 dígitos
     if (name === 'cep' && value.replace(/[^0-9]/g, "").length === 8 && searchCepFunction) {
@@ -27,7 +27,7 @@ function AddressForm({
   // Handler específico para o Select de Estado
   const handleStateChange = (value) => {
      if (onAddressChange) {
-      onAddressChange('state', value);
+      onAddressChange({ name: 'state', value });
     }
   };
 
@@ -61,6 +61,8 @@ function AddressForm({
                 value={address.street || ""}
                 onChange={handleChange}
                 required
+                readOnly
+                className="bg-slate-100 dark:bg-slate-800 cursor-not-allowed"
               />
             </div>
         </div>
@@ -93,6 +95,8 @@ function AddressForm({
                   value={address.neighborhood || ""}
                   onChange={handleChange}
                   required
+                  readOnly
+                  className="bg-slate-100 dark:bg-slate-800 cursor-not-allowed"
                 />
             </div>
         </div>
@@ -106,6 +110,8 @@ function AddressForm({
                 value={address.city || ""}
                 onChange={handleChange}
                 required
+                readOnly
+                className="bg-slate-100 dark:bg-slate-800 cursor-not-allowed"
               />
             </div>
             <div className="space-y-1">
@@ -114,7 +120,7 @@ function AddressForm({
                 value={address.state || ""} 
                 onValueChange={handleStateChange}
               >
-                <SelectTrigger id="address_state">
+                <SelectTrigger id="address_state" className={address.street ? "bg-slate-100 dark:bg-slate-800 cursor-not-allowed" : ""}>
                   <SelectValue placeholder="UF" />
                 </SelectTrigger>
                 <SelectContent>

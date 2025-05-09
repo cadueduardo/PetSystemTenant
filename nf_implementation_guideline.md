@@ -201,17 +201,18 @@ Esta tabela armazenará as configurações fiscais específicas para cada tenant
 *   [x] Esboçar a Firebase Function `setupNFeIntegration` (callable) com validações e fluxo principal.
     *   [x] Recebimento de dados do frontend (ambiente, certificado base64, senha).
     *   [x] Validação dos dados cadastrais do tenant.
-    *   [x] Upload do certificado `.pfx` para Firebase Storage.
-    *   [x] Integração com Google Secret Manager para buscar tokens da API Focus NFe.
-    *   [x] Salvamento da configuração (`focusCompanyId`, `certificatePath`, `environment`) no Firestore.
+    *   [x] Upload do certificado `.pfx` para Firebase Storage. (**Resolvido problema de bucket e permissões iniciais.**)
+    *   [x] Integração com Google Secret Manager para buscar tokens da API Focus NFe. (**Resolvido problema de nome do secret.**)
+    *   [x] Salvamento da configuração (`focusCompanyId`, `certificatePath`, `environment`) no Firestore. (Estrutura existe, pendente sucesso da API Focus para `focusCompanyId`)
 *   [x] Implementar a chamada à API da Focus NFe para cadastrar/gerenciar empresas (tenants) - **Estrutura inicial para verificar existência (GET) e criar (POST) / atualizar (PUT) implementada em `setupNFeIntegration`.**
-*   [ ] **Testar Efetivamente `setupNFeIntegration`**: Realizar teste end-to-end com dados reais (certificado de teste) no ambiente de homologação Focus NFe.
+*   [ ] **Testar Efetivamente `setupNFeIntegration`**: Realizar teste end-to-end com dados reais (certificado de teste) no ambiente de homologação Focus NFe. (**Em andamento. Problema atual: API Focus NFe retorna 404 ao tentar criar empresa via POST /v2/empresas.**)
+*   [ ] **Investigar erro 404 da API Focus NFe**: Analisar o motivo do erro 404 Not Found ao tentar criar (POST) uma nova empresa em `https://homologacao.focusnfe.com.br/v2/empresas`. Verificar o payload enviado (logar o objeto `focusPayload` completo se necessário), comparar com a documentação da API da Focus NFe para o cadastro de empresas (campos obrigatórios, formatos), e considerar realizar um teste direto da requisição POST usando cURL ou Postman. (**FOCO ATUAL DA INVESTIGAÇÃO**)
 *   [ ] **Revisar/Completar `mapRegimeTributarioToFocusCode`**: Garantir mapeamento correto conforme documentação Focus NFe.
-*   [ ] **Tratamento de Erro API Focus**: Refinar tratamento de erros em `makeFocusApiCall`.
+*   [ ] **Tratamento de Erro API Focus**: Refinar tratamento de erros em `makeFocusApiCall` (embora já esteja capturando e propagando o erro 404).
 *   [ ] **(Opcional/Recomendado) Senha do Certificado no Secret Manager**: Implementar busca da senha do certificado via Secret Manager.
 *   [ ] Implementar o serviço de configuração de API (incluindo cadastro do tenant na Focus) e certificado para o tenant - (Parcialmente coberto por `setupNFeIntegration`).
-*   [ ] Definir e implementar a estratégia de armazenamento seguro de certificados - (Armazenamento no Firebase Storage implementado; senha ainda via request, considerar Secret Manager).
-*   [ ] Implementar o módulo de comunicação com a API do provedor (autenticação, headers) - (Função `makeFocusApiCall` implementada).
+*   [x] Definir e implementar a estratégia de armazenamento seguro de certificados - (Armazenamento no Firebase Storage implementado; senha ainda via request, considerar Secret Manager).
+*   [x] Implementar o módulo de comunicação com a API do provedor (autenticação, headers) - (Função `makeFocusApiCall` implementada).
 *   [ ] Implementar o serviço de emissão de NF-e (incluindo mapeamento de dados).
 *   [ ] Implementar o serviço de emissão de NFS-e (incluindo mapeamento de dados).
 *   [ ] Implementar o serviço de consulta de status de NF.
@@ -236,9 +237,9 @@ Esta tabela armazenará as configurações fiscais específicas para cada tenant
     *   [x] Coleta/confirmação dos dados da empresa para cadastro na Focus NFe - (Interface exibe dados do `currentTenant` como read-only).
     *   [x] Upload do arquivo de certificado (.pfx) e entrada da senha - (Interface do formulário criada e funcional).
     *   [x] Seleção do ambiente (Homologação/Produção) - (Interface criada).
-*   [ ] **Chamar `setupNFeIntegration`**: Garantir que `NFeSetupPage.jsx` chama a Cloud Function com o payload correto.
+*   [ ] **Chamar `setupNFeIntegration`**: Garantir que `NFeSetupPage.jsx` chama a Cloud Function com o payload correto. (Chamada implementada, payload sendo enviado; problema atual no backend/API externa).
 *   [ ] **Feedback ao Usuário em `NFeSetupPage.jsx`**: Melhorar feedback durante e após a submissão (loading, sucesso, erros).
-*   [ ] Implementar a lógica de upload seguro do arquivo de certificado (.pfx) e envio da senha para o backend a partir da `NFeSetupPage.jsx` - (Parcialmente feito, a função de backend recebe, falta a lógica de conversão para base64 e envio no frontend).
+*   [x] Implementar a lógica de upload do arquivo de certificado (.pfx) como base64 e envio da senha para o backend a partir da `NFeSetupPage.jsx`.
 *   [ ] Implementar a funcionalidade de "Testar Conexão" na `NFeSetupPage.jsx`.
 *   [ ] Desenvolver a interface para acionar a emissão de NF a partir de uma venda (manter fluxo, ajustar se necessário para obter configurações da nova tabela).
 *   [ ] Desenvolver o formulário de NF com os campos necessários e validações.

@@ -25,6 +25,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import AddressForm from "@/components/shared/AddressForm";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { getApp } from "firebase/app";
 
 const safeApiCall = async (apiFunction, params, fallback = []) => {
   try {
@@ -279,10 +281,10 @@ export default function Settings() {
   };
 
   const handleSaveSettings = async () => {
-    if (!customization.id && !tenant?.id) {
+    if (!tenant?.id) {
       toast({
         title: "Erro",
-        description: "ID da customização ou do tenant não encontrado.",
+        description: "ID do tenant não encontrado para salvar as configurações.",
         variant: "destructive"
       });
       return;
@@ -290,9 +292,29 @@ export default function Settings() {
 
     setIsSaving(true);
     try {
-      const updatedCustomization = {
+      const app = getApp();
+      const firebaseFunctionsInstance = getFunctions(app, "southamerica-east1");
+      const updateTenantCallable = httpsCallable(firebaseFunctionsInstance, 'updateTenantSettings');
+      
+      // Dados do Tenant para atualização (apenas os campos editáveis em Settings.jsx)
+      const tenantDataToUpdate = {
+        company_name: tenant.company_name,
+        legal_name: tenant.legal_name,
+        document_type: tenant.document_type,
+        document: tenant.document,
+        responsible_name: tenant.responsible_name,
+        email: tenant.email, 
+        phone: tenant.phone,
+        address: tenant.address, // Envie o objeto de endereço inteiro conforme definido na interface UpdateTenantData
+        inscricao_estadual: tenant.inscricao_estadual,
+        inscricao_municipal: tenant.inscricao_municipal,
+        cnae_principal: tenant.cnae_principal,
+        regime_tributario: tenant.regime_tributario,
+      };
+
+      // Dados da Customização para atualização
+      const customizationDataToUpdate = {
         ...customization,
-        tenant_id: tenant?.id || null,
         company_info: {
           social_media: {
             facebook: customization.company_info?.social_media?.facebook || "",
@@ -305,29 +327,90 @@ export default function Settings() {
           cancel_if_unconfirmed_hours_before: parseInt(String(customization.messaging_settings?.cancel_if_unconfirmed_hours_before || 3)) || 3,
         }
       };
+      // O tenant_id já está no objeto customization se ele foi carregado, ou será adicionado se for uma criação.
+      // Se o seu Customization.update não espera o ID no corpo do payload, você pode precisar remover:
+      // delete customizationDataToUpdate.id; 
 
       const promises = [];
-      if (tenant?.id) {
-        promises.push(fetchWithRetry(() => Tenant.update(tenant.id, tenant)));
+
+      // Promessa para atualizar dados do Tenant
+      promises.push(updateTenantCallable({ tenantId: tenant.id, updates: tenantDataToUpdate }));
+
+      // Promessa para atualizar/criar dados de Customization
+      if (customization?.id && typeof Customization.update === 'function') {
+        promises.push(fetchWithRetry(() => Customization.update(customization.id, customizationDataToUpdate)));
+      } else if (!customization?.id && typeof Customization.create === 'function') {
+        // Se não tem ID, é uma criação. Garanta que tenant_id está incluído.
+        const dataToCreate = { ...customizationDataToUpdate, tenant_id: tenant.id };
+        delete dataToCreate.id; // Remove ID se existir, pois é uma criação
+        promises.push(fetchWithRetry(() => Customization.create(dataToCreate)));
+      } else {
+        console.warn("[Settings] Customization.update ou Customization.create não é uma função ou ID está ausente. Pulando salvamento da customização.");
       }
-      if (customization?.id) {
-        promises.push(fetchWithRetry(() => Customization.update(customization.id, updatedCustomization)));
+
+      const results = await Promise.allSettled(promises);
+
+      let overallSuccess = true;
+      const successMessages = [];
+      const errorMessages = [];
+
+      // Processar resultado da atualização do Tenant (primeira promessa)
+      if (results[0]) {
+        const tenantResult = results[0];
+        if (tenantResult.status === 'fulfilled' && tenantResult.value?.data?.success) {
+          successMessages.push(tenantResult.value.data.message || "Dados da empresa atualizados.");
+        } else {
+          overallSuccess = false;
+          const errorMessage = tenantResult.status === 'rejected' ? tenantResult.reason?.message : tenantResult.value?.data?.message;
+          errorMessages.push(errorMessage || "Erro ao atualizar dados da empresa.");
+          console.error("Erro ao atualizar tenant:", tenantResult.status === 'rejected' ? tenantResult.reason : tenantResult.value);
+        }
       }
 
-      await Promise.all(promises);
+      // Processar resultado da atualização/criação da Customization (segunda promessa, se existir)
+      if (results.length > 1 && results[1]) {
+        const customizationResult = results[1];
+        if (customizationResult.status === 'fulfilled') { 
+          // Supondo que Customization.update/create resolve diretamente ou com dados de sucesso
+          // Se retornar um objeto {data:{success:true, message:"..."}}, ajuste aqui:
+          // successMessages.push(customizationResult.value?.data?.message || "Customizações salvas.");
+          successMessages.push("Customizações salvas."); 
+        } else {
+          overallSuccess = false;
+          errorMessages.push(customizationResult.reason?.message || "Erro ao salvar customizações.");
+          console.error("Erro ao salvar customização:", customizationResult.reason);
+        }
+      }
 
+      if (overallSuccess && successMessages.length > 0) {
+        toast({
+          title: "Sucesso!",
+          description: successMessages.filter(Boolean).join(" ") || "Configurações salvas com sucesso!",
+        });
+        if (typeof loadData === 'function') {
+          loadData(); // Recarrega os dados do tenant e customization
+        } else {
+          window.location.reload(); // Fallback se loadData não estiver disponível
+        }
+      } else if (!overallSuccess) {
+        toast({
+          title: "Atenção",
+          description: `Algumas configurações não puderam ser salvas: ${errorMessages.filter(Boolean).join("; ")}`,
+          variant: "destructive",
+        });
+      } else {
+        // Caso onde não houve erros mas também nenhuma mensagem de sucesso (ex: nenhuma operação realizada)
+        toast({
+            title: "Concluído",
+            description: "Nenhuma alteração detectada ou necessária."
+        });
+      }
+
+    } catch (error) { 
+      console.error("Erro geral não capturado em handleSaveSettings:", error);
       toast({
-        title: "Sucesso",
-        description: "Configurações salvas com sucesso!",
-      });
-
-      window.location.reload();
-
-    } catch (error) {
-      console.error("Erro ao salvar configurações:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível salvar as configurações. Por favor, tente novamente mais tarde.",
+        title: "Erro Crítico",
+        description: "Ocorreu um problema inesperado ao tentar salvar. Verifique o console.",
         variant: "destructive"
       });
     } finally {
@@ -345,8 +428,7 @@ export default function Settings() {
   };
 
   // Nova função para lidar com mudanças nos campos de endereço do tenant
-  const handleTenantAddressChange = (e) => {
-    const { name, value } = e.target;
+  const handleTenantAddressChange = ({ name, value }) => {
     setTenant(prev => ({
       ...prev,
       address: {
@@ -367,6 +449,9 @@ export default function Settings() {
     setIsSearchingCep(true);
     try {
       const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+      if (!response.ok) { 
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
       const data = await response.json();
       
       if (!data.erro) {
@@ -374,12 +459,12 @@ export default function Settings() {
           ...prev,
           address: {
             ...prev.address,
-            cep: cep, // Mantém o CEP digitado pelo usuário
+            cep: cep,
             street: data.logradouro || prev.address.street || "",
             neighborhood: data.bairro || prev.address.neighborhood || "",
             city: data.localidade || prev.address.city || "",
             state: data.uf || prev.address.state || "",
-            // number e complement não são preenchidos pelo ViaCEP, manter os atuais ou vazios
+            ibge_code: data.ibge || prev.address.ibge_code || "",
             number: prev.address.number || "",
             complement: prev.address.complement || ""
           }
