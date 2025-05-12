@@ -27,6 +27,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import AddressForm from "@/components/shared/AddressForm";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { getApp } from "firebase/app";
+import { Checkbox } from "@/components/ui/checkbox";
 
 const safeApiCall = async (apiFunction, params, fallback = []) => {
   try {
@@ -310,6 +311,7 @@ export default function Settings() {
         inscricao_municipal: tenant.inscricao_municipal,
         cnae_principal: tenant.cnae_principal,
         regime_tributario: tenant.regime_tributario,
+        incentivador_cultural: tenant.incentivador_cultural,
       };
 
       // Dados da Customização para atualização
@@ -424,6 +426,14 @@ export default function Settings() {
     setTenant(prev => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : value
+    }));
+  };
+
+  // Nova função para lidar com mudanças nos campos de Switch diretamente no tenant
+  const handleTenantSwitchChange = (name, checked) => {
+    setTenant(prev => ({
+      ...prev,
+      [name]: checked
     }));
   };
 
@@ -756,13 +766,30 @@ export default function Settings() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="settings_inscricao_estadual">Inscrição Estadual</Label>
-                  <Input
-                    id="settings_inscricao_estadual"
-                    name="inscricao_estadual"
-                    value={tenant?.inscricao_estadual || ""}
-                    onChange={handleTenantChange}
-                    placeholder="IE (apenas números ou ISENTO)"
-                  />
+                  <div className="flex items-center space-x-2 mt-1">
+                    <Input
+                      id="settings_inscricao_estadual"
+                      name="inscricao_estadual"
+                      value={tenant?.inscricao_estadual === "ISENTO" ? "" : tenant?.inscricao_estadual || ""}
+                      onChange={handleTenantChange}
+                      placeholder="IE (apenas números ou ISENTO)"
+                      disabled={tenant?.inscricao_estadual === "ISENTO"}
+                      className="flex-1"
+                    />
+                    <div className="flex items-center space-x-1">
+                      <Checkbox
+                        id="settings_ie_isento"
+                        checked={tenant?.inscricao_estadual === "ISENTO"}
+                        onCheckedChange={(checked) => {
+                          setTenant(prev => ({
+                            ...prev,
+                            inscricao_estadual: checked ? "ISENTO" : ""
+                          }));
+                        }}
+                      />
+                      <Label htmlFor="settings_ie_isento" className="text-sm">Isento</Label>
+                    </div>
+                  </div>
                 </div>
                 <div>
                   <Label htmlFor="settings_inscricao_municipal">Inscrição Municipal</Label>
@@ -805,6 +832,22 @@ export default function Settings() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+
+              <div className="pt-4">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="settings_incentivador_cultural"
+                    checked={tenant?.incentivador_cultural || false}
+                    onCheckedChange={(checked) => handleTenantSwitchChange('incentivador_cultural', checked)}
+                  />
+                  <Label htmlFor="settings_incentivador_cultural">
+                    Incentivador Cultural (Conforme Lei Rouanet, etc.)
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Marque esta opção se a empresa se enquadra como incentivadora cultural.
+                </p>
               </div>
 
               <h3 className="text-lg font-medium pt-4 border-t mt-6 mb-2">Endereço Fiscal</h3>

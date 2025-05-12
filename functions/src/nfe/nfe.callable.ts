@@ -175,19 +175,25 @@ export const setupNFeIntegration = onCall(
                 throw new HttpsError("internal", detailedErrorMessage, storageError);
             }
 
-            const apiUrlFocus = request.data.environment === 'homologation' ? 'https://homologacao.focusnfe.com.br' : 'https://api.focusnfe.com.br';
-            const focusTokenSecretName = 'FOCUS_NFE_TOKEN';
+            // MODIFICAÇÃO IMPORTANTE AQUI: URL para API de Empresas será sempre a de produção.
+            const apiUrlFocusForCompanySetup = 'https://api.focusnfe.com.br'; 
+            // A URL de homologação (https://homologacao.focusnfe.com.br) continua relevante para EMISSÃO de notas em homologação,
+            // mas o cadastro da empresa, conforme a hipótese, ocorreria na URL de produção.
+
+            const focusTokenSecretName = 'FOCUS_NFE_TOKEN'; // O token é o mesmo para ambos, conforme confirmado.
             
             let tokenPrincipalFocus: string | null = null;
             try {
+                // Log ainda pode mencionar o ambiente para clareza, mas o token é o mesmo.
                 tokenPrincipalFocus = await accessSecretVersion(focusTokenSecretName);
             } catch (error) {
                 throw error; // accessSecretVersion já lança HttpsError
             }
             if (!tokenPrincipalFocus) {
-                throw new HttpsError("internal", `Token da API Focus NFe para ${request.data.environment} está vazio (${focusTokenSecretName}).`);
+                throw new HttpsError("internal", `Token da API Focus NFe está vazio (${focusTokenSecretName}).`);
             }
-            logger.info(`Token Focus NFe para ${request.data.environment} obtido com sucesso.`);
+            // Log ajustado para refletir que o token é para o 'ambiente de destino da empresa'
+            logger.info(`Token Focus NFe para ambiente de empresa (produção) obtido com sucesso.`);
 
             const codigoRegimeFocus = mapRegimeTributarioToFocusCode(tenantData.regime_tributario);
             if (!codigoRegimeFocus) {
@@ -195,12 +201,19 @@ export const setupNFeIntegration = onCall(
             }
 
             const focusPayload = {
-                razao_social: tenantData.legal_name || tenantData.company_name,
+                nome: tenantData.legal_name || tenantData.company_name,
                 nome_fantasia: tenantData.company_name,
                 cnpj: tenantData.document?.replace(/[^0-9]/g, ''),
-                inscricao_estadual: tenantData.inscricao_estadual?.replace(/[^0-9]/g, '') || undefined,
+                
+                inscricao_estadual: tenantData.inscricao_estadual === "ISENTO" 
+                                    ? "ISENTO" 
+                                    : tenantData.inscricao_estadual?.replace(/[^0-9A-Za-z]/g, '') || undefined,
                 inscricao_municipal: tenantData.inscricao_municipal?.replace(/[^0-9]/g, '') || undefined,
-                codigo_de_regime_tributario: codigoRegimeFocus,
+                
+                regime_tributario: codigoRegimeFocus,
+                simples_nacional: calcularSimplesNacional(tenantData.regime_tributario, codigoRegimeFocus), 
+                incentivador_cultural: tenantData.incentivador_cultural || false, 
+
                 email: tenantData.email,
                 telefone: tenantData.phone?.replace(/[^0-9]/g, '') || undefined,
                 logradouro: tenantData.address?.street,
@@ -211,6 +224,16 @@ export const setupNFeIntegration = onCall(
                 municipio: tenantData.address?.city,
                 uf: tenantData.address?.state,
                 codigo_municipio: tenantData.address?.ibge_code?.replace(/[^0-9]/g, '') || undefined,
+                pais: "Brasil",
+                codigo_pais: "1058",
+                
+                cnae: tenantData.cnae_principal?.replace(/[^0-9]/g, '') || undefined, 
+
+                // Adicionar informações do certificado digital
+                nome_arquivo_certificado: "focus_nfe_certificate.pfx", // Nome padrão para o arquivo
+                conteudo_arquivo_certificado: request.data.certificateBase64,
+                senha_certificado: request.data.certificatePassword,
+
                 habilita_nfe: true, 
                 habilita_nfse: true, 
             };
@@ -224,7 +247,8 @@ export const setupNFeIntegration = onCall(
             let companyExists = false;
 
             try {
-                const checkUrl = `${apiUrlFocus}/v2/empresas?cnpj=${focusPayload.cnpj}`;
+                // Usar apiUrlFocusForCompanySetup para a verificação
+                const checkUrl = `${apiUrlFocusForCompanySetup}/v2/empresas?cnpj=${focusPayload.cnpj}`;
                 const existingCompanies = await makeFocusApiCall('GET', checkUrl, tokenPrincipalFocus);
                 if (Array.isArray(existingCompanies) && existingCompanies.length > 0) {
                     focusNFeCompanyId = existingCompanies[0].id;
@@ -243,39 +267,128 @@ export const setupNFeIntegration = onCall(
 
             try {
                 if (companyExists && focusNFeCompanyId) {
-                    const updateUrl = `${apiUrlFocus}/v2/empresas/${focusNFeCompanyId}`;
+                    // Atualiza empresa existente: O focusPayload já contém os dados do certificado.
+                    const updateUrl = `${apiUrlFocusForCompanySetup}/v2/empresas/${focusNFeCompanyId}`;
                     await makeFocusApiCall('PUT', updateUrl, tokenPrincipalFocus, focusPayload);
-                    logger.info(`[${tenantId}] Empresa atualizada na Focus NFe com ID: ${focusNFeCompanyId}`);
+                    logger.info(`[${tenantId}] Empresa atualizada na Focus NFe com ID: ${focusNFeCompanyId} (via URL de produção)`);
                 } else {
-                    const createUrl = `${apiUrlFocus}/v2/empresas`;
-                    // Log do payload antes de enviar para criação
-                    logger.info(`[${tenantId}] Tentando criar empresa na Focus NFe. URL: ${createUrl}, Payload:`, focusPayload);
-                    const createResponse = await makeFocusApiCall('POST', createUrl, tokenPrincipalFocus, focusPayload);
+                    // Cria nova empresa em duas etapas:
+                    // Etapa 1: Criar a empresa sem os dados do certificado.
+                    const {
+                        nome_arquivo_certificado,
+                        conteudo_arquivo_certificado,
+                        senha_certificado,
+                        ...companyDataOnlyPayload // Restante dos campos vão para companyDataOnlyPayload
+                    } = focusPayload;
+
+                    const createUrl = `${apiUrlFocusForCompanySetup}/v2/empresas`;
+                    logger.info(`[${tenantId}] Etapa 1: Tentando criar empresa (sem cert) na Focus NFe. URL: ${createUrl}, Payload JSON:`, JSON.stringify(companyDataOnlyPayload, null, 2));
+                    const createResponse = await makeFocusApiCall('POST', createUrl, tokenPrincipalFocus, companyDataOnlyPayload);
+                    
                     if (!createResponse || !createResponse.id) {
-                        throw new Error("Resposta da criação de empresa na Focus NFe não contém ID.");
+                        throw new Error("Resposta da criação de empresa (etapa 1) na Focus NFe não contém ID.");
                     }
                     focusNFeCompanyId = createResponse.id;
-                    logger.info(`[${tenantId}] Nova empresa criada na Focus NFe com ID: ${focusNFeCompanyId}`);
+                    logger.info(`[${tenantId}] Etapa 1: Nova empresa criada na Focus NFe com ID: ${focusNFeCompanyId}.`);
+
+                    // Etapa 2: Atualizar a empresa recém-criada APENAS com os dados do certificado.
+                    const certificateOnlyPayload = {
+                        nome_arquivo_certificado: focusPayload.nome_arquivo_certificado,
+                        conteudo_arquivo_certificado: focusPayload.conteudo_arquivo_certificado,
+                        senha_certificado: focusPayload.senha_certificado
+                    };
+                    const updateWithCertUrl = `${apiUrlFocusForCompanySetup}/v2/empresas/${focusNFeCompanyId}`;
+                    logger.info(`[${tenantId}] Etapa 2: Tentando adicionar certificado (payload mínimo) à empresa ID ${focusNFeCompanyId}. URL: ${updateWithCertUrl}`, JSON.stringify(certificateOnlyPayload, null, 2));
+                    await makeFocusApiCall('PUT', updateWithCertUrl, tokenPrincipalFocus, certificateOnlyPayload); 
+                    logger.info(`[${tenantId}] Etapa 2: Certificado adicionado/atualizado para a empresa ID ${focusNFeCompanyId}.`);
                 }
             } catch (error: any) {
                 logger.error(`[${tenantId}] Erro ao criar/atualizar empresa na Focus NFe:`, error);
-                throw new HttpsError("internal", "Falha ao comunicar com a API da Focus NFe para cadastrar/atualizar a empresa.", error.message);
+                // Se o erro for uma HttpsError já formatada pela makeFocusApiCall, propague-a.
+                if (error instanceof HttpsError) throw error;
+                // Caso contrário, encapsule em uma HttpsError genérica.
+                throw new HttpsError("internal", "Falha ao comunicar com a API da Focus NFe para cadastrar/atualizar a empresa.", { errorDetails: error.message });
             }
             
             if (!focusNFeCompanyId) {
                 throw new HttpsError("internal", "Não foi possível obter o ID da empresa na Focus NFe após cadastro/atualização.");
             }
 
+            // PASSO ADICIONAL: Buscar os tokens de emissão da empresa recém-cadastrada/atualizada
+            let companyFocusHomologationToken: string | null = null;
+            let companyFocusProductionToken: string | null = null;
+
+            try {
+                const companyDetailsUrl = `${apiUrlFocusForCompanySetup}/v2/empresas/${focusNFeCompanyId}`;
+                logger.info(`[${tenantId}] Buscando detalhes da empresa na Focus NFe para obter tokens de emissão. URL: ${companyDetailsUrl}`);
+                const companyDetails = await makeFocusApiCall('GET', companyDetailsUrl, tokenPrincipalFocus);
+
+                if (companyDetails && companyDetails.id) { // Verifica se a resposta é válida e contém o ID esperado
+                    companyFocusHomologationToken = companyDetails.token_homologacao || null;
+                    companyFocusProductionToken = companyDetails.token_producao || null;
+                    logger.info(`[${tenantId}] Tokens de emissão obtidos. Homologação: ${companyFocusHomologationToken ? 'OK' : 'NÃO ENCONTRADO'}, Produção: ${companyFocusProductionToken ? 'OK' : 'NÃO ENCONTRADO'}`);
+                    
+                    if (!companyFocusHomologationToken || !companyFocusProductionToken) {
+                        logger.warn(`[${tenantId}] Um ou ambos os tokens de emissão (homologação/produção) não foram retornados pela API da Focus para a empresa ${focusNFeCompanyId}.`);
+                        // Decide-se prosseguir mesmo sem os tokens, mas logando o aviso.
+                        // Poderia lançar um erro aqui se fossem estritamente obrigatórios para salvar a configuração.
+                    }
+                } else {
+                    logger.error(`[${tenantId}] Resposta inválida ao buscar detalhes da empresa ${focusNFeCompanyId} na Focus NFe.`);
+                    throw new HttpsError("internal", `Falha ao obter detalhes e tokens da empresa ${focusNFeCompanyId} na Focus NFe após cadastro.`);
+                }
+            } catch (error: any) {
+                logger.error(`[${tenantId}] Erro ao buscar detalhes/tokens da empresa ${focusNFeCompanyId} na Focus NFe:`, error);
+                // Se o erro for uma HttpsError já formatada, propague-a.
+                if (error instanceof HttpsError) throw error;
+                // Caso contrário, encapsule.
+                throw new HttpsError("internal", `Falha ao buscar tokens de emissão para a empresa ${focusNFeCompanyId}.`, { errorDetails: error.message });
+            }
+
             const integrationConfigRef = db.collection("tenants").doc(tenantId).collection("integrations").doc("nfeConfig");
             await integrationConfigRef.set({
                 provider: "FocusNFe",
-                environment: request.data.environment,
+                environment: request.data.environment, // Ambiente de emissão de notas
                 focusCompanyId: focusNFeCompanyId,
+                focusCompanyHomologationToken: companyFocusHomologationToken,
+                focusCompanyProductionToken: companyFocusProductionToken,
                 certificatePath: certificateStoragePath,
                 lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
                 status: 'active',
+
+                // Adicionar os dados fiscais do emitente que foram enviados/confirmados pela Focus
+                company_name: focusPayload.nome, // Razão Social
+                legal_name: focusPayload.nome_fantasia, // Nome Fantasia
+                cnpj: focusPayload.cnpj,
+                // Preservar "ISENTO" se for o caso, senão o valor limpo enviado para Focus
+                inscricao_estadual: tenantData.inscricao_estadual === "ISENTO" ? "ISENTO" : focusPayload.inscricao_estadual,
+                inscricao_municipal: focusPayload.inscricao_municipal,
+                regime_tributario_empresa: focusPayload.regime_tributario, // Código '1', '2', '3' da Focus
+                simples_nacional_empresa: focusPayload.simples_nacional, // true/false
+                incentivador_cultural_empresa: focusPayload.incentivador_cultural,
+                email_emitente: focusPayload.email, // Email do emitente usado na Focus
+                telefone_emitente: focusPayload.telefone, // Telefone do emitente usado na Focus
+                cnae_emitente: focusPayload.cnae,
+
+                address_tenant: { // Endereço do emitente usado/confirmado na Focus
+                    street: focusPayload.logradouro,
+                    number: focusPayload.numero,
+                    complement: focusPayload.complemento,
+                    neighborhood: focusPayload.bairro,
+                    city: focusPayload.municipio,
+                    state: focusPayload.uf,
+                    zipCode: focusPayload.cep,
+                    codigo_municipio: focusPayload.codigo_municipio, // Código IBGE do município do emitente
+                    // pais: focusPayload.pais, // Já é "Brasil"
+                    // codigo_pais: focusPayload.codigo_pais, // Já é "1058"
+                },
+                // Outros campos do focusPayload que podem ser úteis para referência futura
+                // habilita_nfe: focusPayload.habilita_nfe,
+                // habilita_nfse: focusPayload.habilita_nfse,
+
             }, { merge: true });
-            logger.info(`[${tenantId}] Configuração NFe salva no Firestore.`);
+
+            logger.info(`[${tenantId}] Configuração NFe completa salva no Firestore, incluindo dados detalhados do emitente.`);
 
             return {
                 success: true,
@@ -313,6 +426,22 @@ function mapRegimeTributarioToFocusCode(regimeInterno: string | null | undefined
             logger.warn(`Regime tributário interno desconhecido: ${regimeInterno}`);
             return null;
     }
+}
+
+// Função para determinar o valor do campo simples_nacional da Focus NFe
+function calcularSimplesNacional(regimeInterno: string | null | undefined, codigoRegimeFocus: string | null): boolean {
+    if (!regimeInterno || !codigoRegimeFocus) return false; 
+
+    // Se o código Focus para Simples Nacional for '1' (geralmente MEI ou Simples Nacional puro)
+    if (codigoRegimeFocus === '1') {
+        return true; 
+    }
+    // Se o código Focus para Simples Nacional - Excesso for '2'
+    if (codigoRegimeFocus === '2') {
+        return false; // Neste caso, a API da Focus pode esperar simples_nacional como false
+    }
+    // Outros regimes (Lucro Presumido/Real, código '3') não são Simples Nacional
+    return false;
 }
 
 // makeFocusApiCall (adaptado para logger v2 e HttpsError v2)

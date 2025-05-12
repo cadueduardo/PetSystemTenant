@@ -33,8 +33,10 @@ function NFeSetupPage() {
   const [inscricaoEstadual, setInscricaoEstadual] = useState('');
   const [inscricaoMunicipal, setInscricaoMunicipal] = useState('');
   const [regimeTributario, setRegimeTributario] = useState('');
+  const [incentivadorCultural, setIncentivadorCultural] = useState(false);
   const [emailComercial, setEmailComercial] = useState('');
   const [telefoneComercial, setTelefoneComercial] = useState('');
+  const [cnaePrincipal, setCnaePrincipal] = useState('');
 
   // Endereço
   const [cep, setCep] = useState('');
@@ -77,6 +79,8 @@ function NFeSetupPage() {
       setInscricaoEstadual(currentTenant.inscricao_estadual || '');
       setInscricaoMunicipal(currentTenant.inscricao_municipal || '');
       setRegimeTributario(currentTenant.regime_tributario || '');
+      setIncentivadorCultural(currentTenant.incentivador_cultural || false);
+      setCnaePrincipal(currentTenant.cnae_principal || '');
     }
   }, [currentTenant]);
 
@@ -163,7 +167,7 @@ function NFeSetupPage() {
           variant: "success"
         });
       } else {
-        throw new functions.https.HttpsError(result.data.errorCode || 'unknown', result.data.message || "Falha ao configurar a integração NF-e.");
+        throw new Error(result.data.message || "Falha ao configurar a integração NF-e.");
       }
     } catch (error) {
       console.error("Erro ao chamar a função setupNFeIntegration ou tratar sua resposta:", error);
@@ -227,12 +231,20 @@ function NFeSetupPage() {
                 <p className="text-gray-800 p-2 border rounded-md bg-gray-50 min-h-[38px]">{inscricaoEstadual || "-"}</p>
               </div>
               <div className="space-y-1">
+                <Label htmlFor="cnaePrincipalDisplay" className="text-sm font-medium text-gray-500">CNAE Principal</Label>
+                <p className="text-gray-800 p-2 border rounded-md bg-gray-50 min-h-[38px]">{cnaePrincipal || "-"}</p>
+              </div>
+              <div className="space-y-1">
                 <Label htmlFor="inscricaoMunicipal" className="text-sm font-medium text-gray-500">Inscrição Municipal (IM)</Label>
                 <p className="text-gray-800 p-2 border rounded-md bg-gray-50 min-h-[38px]">{inscricaoMunicipal || "-"}</p>
               </div>
               <div className="space-y-1">
                 <Label htmlFor="regimeTributarioDisplay" className="text-sm font-medium text-gray-500">Regime Tributário</Label>
                 <p className="text-gray-800 p-2 border rounded-md bg-gray-50 min-h-[38px]">{regimesTributarios.find(r => r.value === regimeTributario)?.label || regimeTributario || "-"}</p>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="incentivadorCulturalDisplay" className="text-sm font-medium text-gray-500">Incentivador Cultural</Label>
+                <p className="text-gray-800 p-2 border rounded-md bg-gray-50 min-h-[38px]">{incentivadorCultural ? "Sim" : "Não"}</p>
               </div>
               <div className="space-y-1">
                 <Label htmlFor="emailComercialDisplay" className="text-sm font-medium text-gray-500">Email Comercial</Label>

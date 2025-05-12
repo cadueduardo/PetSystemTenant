@@ -66,6 +66,7 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
     inscricao_municipal: "",
     cnae_principal: "",
     regime_tributario: "",
+    incentivador_cultural: false,
     business_type: "both",
     selected_modules: ["clinic_management", "petshop"],
     access_url: "",
@@ -105,6 +106,7 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
         inscricao_municipal: tenant.inscricao_municipal || "",
         cnae_principal: tenant.cnae_principal || "",
         regime_tributario: tenant.regime_tributario || "",
+        incentivador_cultural: tenant.incentivador_cultural || false,
         business_type: tenant.business_type || "both",
         selected_modules: tenant.selected_modules || ["clinic_management", "petshop"],
         access_url: tenant.access_url || "",
@@ -142,6 +144,7 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
         inscricao_municipal: "",
         cnae_principal: "",
         regime_tributario: "",
+        incentivador_cultural: false,
         business_type: "both",
         selected_modules: ["clinic_management", "petshop"],
         access_url: "",
@@ -573,6 +576,22 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
                         </SelectContent>
                       </Select>
                     </div>
+                  </div>
+                  
+                  <div className="pt-4">
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="incentivador_cultural"
+                        checked={formData.incentivador_cultural}
+                        onCheckedChange={(checked) => setFormData(prev => ({ ...prev, incentivador_cultural: checked }))}
+                      />
+                      <Label htmlFor="incentivador_cultural">
+                        Incentivador Cultural
+                      </Label>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Marque se a empresa se enquadra como incentivadora cultural.
+                    </p>
                   </div>
                   
                   <div>

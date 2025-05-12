@@ -19,6 +19,8 @@ import { toast } from "@/components/ui/use-toast";
 import { useTenant } from '@/components/tenant/TenantContext';
 import { db } from '@/lib/firebaseConfig';
 import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { functions } from '@/lib/firebaseConfig';
+import { httpsCallable } from 'firebase/functions';
 
 export default function ChargeHistoryPage() { 
   const navigate = useNavigate();
@@ -29,6 +31,7 @@ export default function ChargeHistoryPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [isEmittingNFe, setIsEmittingNFe] = useState(null);
 
   useEffect(() => {
     if (currentTenant?.id) {
@@ -70,6 +73,44 @@ export default function ChargeHistoryPage() {
       setCustomers([]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleEmitNFe = async (chargeId) => {
+    if (!chargeId) {
+      toast({
+        title: "Erro",
+        description: "ID da cobrança não encontrado.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsEmittingNFe(chargeId);
+    try {
+      const emitNFeFunction = httpsCallable(functions, 'emitNFe');
+      // @ts-ignore
+      const result = await emitNFeFunction({ tenantId: currentTenant.id, chargeId });
+      
+      console.log("Resultado da emissão da NF-e:", result);
+      
+      if (result.data?.success) {
+        toast({
+          title: "NF-e emitida com sucesso!",
+          description: `Nota Fiscal ${result.data.nfeId || ''} gerada.`,
+        });
+      } else {
+        throw new Error(result.data?.message || "Erro desconhecido ao emitir NF-e");
+      }
+    } catch (error) {
+      console.error("Erro ao emitir NF-e:", error);
+      toast({
+        title: "Erro ao emitir NF-e",
+        description: error.message || "Não foi possível gerar a NF-e. Verifique os logs.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsEmittingNFe(null);
     }
   };
 
@@ -186,8 +227,12 @@ export default function ChargeHistoryPage() {
                     <Button 
                         variant="outline" 
                         size="sm" 
-                        disabled
+                        onClick={() => handleEmitNFe(charge.id)}
+                        disabled={isEmittingNFe === charge.id}
                     >
+                        {isEmittingNFe === charge.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        ) : null}
                         Gerar NF
                     </Button>
                 </TableCell>

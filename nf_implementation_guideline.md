@@ -196,25 +196,26 @@ Esta tabela armazenará as configurações fiscais específicas para cada tenant
 ## 5. Lista de Tarefas (Checklist)
 
 ### Backend:
-*   [ ] Pesquisar e definir o provedor de API de NF (Focus NFe escolhido inicialmente).
+*   [x] Pesquisar e definir o provedor de API de NF (Focus NFe escolhido inicialmente).
 *   [x] Modelar e implementar as tabelas `TenantFiscalConfigs` e `NotasFiscais` (ou usar subcoleção `integrations/nfeConfig` - **Implementado como subcoleção `tenants/{tenantId}/integrations/nfeConfig`**).
 *   [x] Esboçar a Firebase Function `setupNFeIntegration` (callable) com validações e fluxo principal.
     *   [x] Recebimento de dados do frontend (ambiente, certificado base64, senha).
     *   [x] Validação dos dados cadastrais do tenant.
     *   [x] Upload do certificado `.pfx` para Firebase Storage. (**Resolvido problema de bucket e permissões iniciais.**)
-    *   [x] Integração com Google Secret Manager para buscar tokens da API Focus NFe. (**Resolvido problema de nome do secret.**)
-    *   [x] Salvamento da configuração (`focusCompanyId`, `certificatePath`, `environment`) no Firestore. (Estrutura existe, pendente sucesso da API Focus para `focusCompanyId`)
-*   [x] Implementar a chamada à API da Focus NFe para cadastrar/gerenciar empresas (tenants) - **Estrutura inicial para verificar existência (GET) e criar (POST) / atualizar (PUT) implementada em `setupNFeIntegration`.**
-*   [ ] **Testar Efetivamente `setupNFeIntegration`**: Realizar teste end-to-end com dados reais (certificado de teste) no ambiente de homologação Focus NFe. (**Em andamento. Problema atual: API Focus NFe retorna 404 ao tentar criar empresa via POST /v2/empresas.**)
-*   [ ] **Investigar erro 404 da API Focus NFe**: Analisar o motivo do erro 404 Not Found ao tentar criar (POST) uma nova empresa em `https://homologacao.focusnfe.com.br/v2/empresas`. Verificar o payload enviado (logar o objeto `focusPayload` completo se necessário), comparar com a documentação da API da Focus NFe para o cadastro de empresas (campos obrigatórios, formatos), e considerar realizar um teste direto da requisição POST usando cURL ou Postman. (**FOCO ATUAL DA INVESTIGAÇÃO**)
-*   [ ] **Revisar/Completar `mapRegimeTributarioToFocusCode`**: Garantir mapeamento correto conforme documentação Focus NFe.
-*   [ ] **Tratamento de Erro API Focus**: Refinar tratamento de erros em `makeFocusApiCall` (embora já esteja capturando e propagando o erro 404).
+    *   [x] Integração com Google Secret Manager para buscar tokens da API Focus NFe. (**Resolvido problema de nome do secret. Token principal único confirmado.**)
+    *   [x] Salvamento da configuração (`focusCompanyId`, `certificatePath`, `environment`) no Firestore. (**ID da empresa Focus agora é obtido e salvo com sucesso.**)
+*   [x] Implementar a chamada à API da Focus NFe para cadastrar/gerenciar empresas (tenants) - **Estrutura para verificar existência (GET) e criar (POST) / atualizar (PUT) implementada em `setupNFeIntegration`. Empresas cadastradas/atualizadas com SUCESSO usando a URL de produção para esta operação.**
+*   [x] **Testar Efetivamente `setupNFeIntegration`**: Realizar teste end-to-end com dados reais (certificado de teste) no ambiente de homologação Focus NFe. (**SUCESSO! Empresa cadastrada/atualizada na Focus NFe. Descoberto que o cadastro de empresa usa a URL de produção, e a emissão de notas usa a URL de homologação/produção conforme o ambiente.**)
+*   [x] **Investigar erro 404 da API Focus NFe**: Analisar o motivo do erro 404 Not Found ao tentar criar (POST) uma nova empresa em `https://homologacao.focusnfe.com.br/v2/empresas`. Verificar o payload enviado (logar o objeto `focusPayload` completo se necessário), comparar com a documentação da API da Focus NFe para o cadastro de empresas (campos obrigatórios, formatos), e considerar realizar um teste direto da requisição POST usando cURL ou Postman. (**RESOLVIDO! O endpoint correto para cadastro/gerenciamento de empresas é o de PRODUÇÃO (`api.focusnfe.com.br/v2/empresas`). A URL de homologação `/v2/empresas` não é utilizada para esta finalidade.**)
+*   [x] **Revisar/Completar `mapRegimeTributarioToFocusCode`**: Garantir mapeamento correto conforme documentação Focus NFe. (**Ajustes feitos, incluindo `nome` e `regime_tributario` no payload, alinhados com exemplos Focus.**)
+*   [x] **Tratamento de Erro API Focus**: Refinar tratamento de erros em `makeFocusApiCall` (embora já esteja capturando e propagando o erro 404). (**Estrutura de tratamento de erro funcional.**)
 *   [ ] **(Opcional/Recomendado) Senha do Certificado no Secret Manager**: Implementar busca da senha do certificado via Secret Manager.
-*   [ ] Implementar o serviço de configuração de API (incluindo cadastro do tenant na Focus) e certificado para o tenant - (Parcialmente coberto por `setupNFeIntegration`).
-*   [x] Definir e implementar a estratégia de armazenamento seguro de certificados - (Armazenamento no Firebase Storage implementado; senha ainda via request, considerar Secret Manager).
-*   [x] Implementar o módulo de comunicação com a API do provedor (autenticação, headers) - (Função `makeFocusApiCall` implementada).
-*   [ ] Implementar o serviço de emissão de NF-e (incluindo mapeamento de dados).
-*   [ ] Implementar o serviço de emissão de NFS-e (incluindo mapeamento de dados).
+*   [x] Implementar o serviço de configuração de API (incluindo cadastro do tenant na Focus) e certificado para o tenant - (**Parcialmente coberto por `setupNFeIntegration`, que agora cadastra a empresa com sucesso.**)
+*   [x] Definir e implementar a estratégia de armazenamento seguro de certificados - (**Armazenamento no Firebase Storage implementado; senha ainda via request, considerar Secret Manager.**)
+*   [x] Implementar o módulo de comunicação com a API do provedor (autenticação, headers) - (**Função `makeFocusApiCall` implementada e funcional com token principal.**)
+*   [x] **Obter e Armazenar Tokens de Emissão da Empresa (Homologação/Produção)**: Após `setupNFeIntegration` cadastrar a empresa, implementar lógica para buscar (via `GET /v2/empresas/{id}`) e armazenar de forma segura os tokens de `token_homologacao` e `token_producao` específicos da empresa, retornados pela Focus NFe.
+*   [ ] Implementar o serviço de emissão de NF-e (incluindo mapeamento de dados e uso dos tokens de emissão corretos).
+*   [ ] Implementar o serviço de emissão de NFS-e (incluindo mapeamento de dados e uso dos tokens de emissão corretos).
 *   [ ] Implementar o serviço de consulta de status de NF.
 *   [ ] Implementar o serviço de cancelamento de NF.
 *   [ ] Implementar o armazenamento dos arquivos XML e PDF das notas.
@@ -237,7 +238,7 @@ Esta tabela armazenará as configurações fiscais específicas para cada tenant
     *   [x] Coleta/confirmação dos dados da empresa para cadastro na Focus NFe - (Interface exibe dados do `currentTenant` como read-only).
     *   [x] Upload do arquivo de certificado (.pfx) e entrada da senha - (Interface do formulário criada e funcional).
     *   [x] Seleção do ambiente (Homologação/Produção) - (Interface criada).
-*   [ ] **Chamar `setupNFeIntegration`**: Garantir que `NFeSetupPage.jsx` chama a Cloud Function com o payload correto. (Chamada implementada, payload sendo enviado; problema atual no backend/API externa).
+*   [x] **Chamar `setupNFeIntegration`**: Garantir que `NFeSetupPage.jsx` chama a Cloud Function com o payload correto. (**Chamada implementada, payload sendo enviado; função agora cadastra a empresa com sucesso.**)
 *   [ ] **Feedback ao Usuário em `NFeSetupPage.jsx`**: Melhorar feedback durante e após a submissão (loading, sucesso, erros).
 *   [x] Implementar a lógica de upload do arquivo de certificado (.pfx) como base64 e envio da senha para o backend a partir da `NFeSetupPage.jsx`.
 *   [ ] Implementar a funcionalidade de "Testar Conexão" na `NFeSetupPage.jsx`.
@@ -250,7 +251,7 @@ Esta tabela armazenará as configurações fiscais específicas para cada tenant
 *   [ ] Criar testes para os componentes de NF e para a página de configuração.
 
 ### Geral:
-*   [ ] **Certificado de Teste Focus NFe**: Investigar se a Focus NFe fornece um certificado digital de teste ou orientações para criar/obter um para o ambiente de homologação.
+*   [x] **Certificado de Teste Focus NFe**: Investigar se a Focus NFe fornece um certificado digital de teste ou orientações para criar/obter um para o ambiente de homologação. (**Confirmado que se usa certificado A1 real do cliente, mesmo para homologação SEFAZ. O cadastro da empresa na Focus NFe usa URL de produção.**)
 *   [ ] Documentar a configuração e uso do novo módulo.
 *   [ ] Realizar testes end-to-end no ambiente de homologação do provedor de NF.
 
