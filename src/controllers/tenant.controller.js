@@ -21,13 +21,12 @@ export const createTenant = async (req, res) => {
     company_name,
     responsible_name,
     adminEmail, // Email do admin a ser criado
-    access_url,
     // ... outros campos do Tenant
   } = req.body;
 
-  if (!company_name || !responsible_name || !adminEmail || !access_url) {
+  if (!company_name || !responsible_name || !adminEmail) {
     console.error("Validation Error: Missing required fields for tenant creation.");
-    return res.status(400).json({ message: 'Dados incompletos para criação (company_name, responsible_name, adminEmail, access_url são obrigatórios).' });
+    return res.status(400).json({ message: 'Dados incompletos para criação (company_name, responsible_name, adminEmail são obrigatórios).' });
   }
 
   const session = await mongoose.startSession();
@@ -74,7 +73,6 @@ export const createTenant = async (req, res) => {
       // Garante que os campos de referência são os corretos
       company_name,
       responsible_name,
-      access_url,
     });
     await newTenant.save({ session });
     console.log(`Tenant created with ID: ${newTenant._id}`);
@@ -138,7 +136,7 @@ export const createTenant = async (req, res) => {
 
     if (error.code === 11000) {
       return res.status(409).json({
-        message: 'Erro de duplicidade. Verifique a URL de acesso ou outros campos únicos.',
+        message: 'Erro de duplicidade. Verifique campos únicos (ex: email do admin).',
         error: error.keyValue
       });
     }
@@ -302,10 +300,6 @@ export const updateTenant = async (req, res) => {
 
   } catch (error) {
     console.error(`Error updating tenant ${id}:`, error);
-    // Tratar erro de duplicidade de access_url, se ocorrer
-    if (error.code === 11000 && error.keyValue && error.keyValue.access_url) {
-        return res.status(409).json({ message: `A URL de acesso '${error.keyValue.access_url}' já está em uso.` });
-    }
     // Tratar erros de validação
     if (error.name === 'ValidationError') {
         return res.status(400).json({ message: 'Erro de validação ao atualizar tenant.', errors: error.errors });

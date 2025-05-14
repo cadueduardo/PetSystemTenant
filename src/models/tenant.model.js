@@ -20,7 +20,6 @@ const tenantSchema = new mongoose.Schema({
   },
   business_type: { type: String },
   selected_modules: { type: [String], default: [] },
-  access_url: { type: String, required: true, unique: true },
   status: { type: String, default: 'active' },
   subscription_tier: { type: String },
   payment_plan: { type: String },
@@ -48,7 +47,6 @@ const tenantSchema = new mongoose.Schema({
   collection: 'tenants'
 });
 
-tenantSchema.index({ access_url: 1 });
 tenantSchema.index({ admin_user_id: 1 });
 
 tenantSchema.pre('save', function(next) {

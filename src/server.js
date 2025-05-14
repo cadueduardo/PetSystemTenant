@@ -2,6 +2,12 @@
 import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Configurar dotenv para carregar o arquivo .env da raiz do projeto
+const projectRootDir = process.cwd(); // Pega o diretório de onde o processo node foi iniciado
+dotenv.config({ path: path.resolve(projectRootDir, '.env') });
 
 // Import Routes
 import tenantRoutes from './routes/tenant.routes.js';
@@ -20,14 +26,20 @@ import { userSchema } from './models/user.model.js';
 const startServer = async () => {
   try {
     // Tenta desconectar qualquer conexão existente
-    await mongoose.disconnect();
+    // await mongoose.disconnect(); // Comentado temporariamente para evitar problemas se não houver conexão prévia
 
     // 1. Load Environment Variables
     const MONGO_URI = process.env.MONGO_URI;
+    const TEST_VAR_FROM_ENV = process.env.TEST_VAR;
     const PORT = process.env.BACKEND_PORT || 5001;
 
+    console.log('[DEBUG] MONGO_URI from process.env:', MONGO_URI); // Log de debug adicionado aqui
+    console.log('[DEBUG] projectRootDir:', projectRootDir); // Log de debug adicionado aqui
+    console.log('[DEBUG] TEST_VAR_FROM_ENV from process.env:', TEST_VAR_FROM_ENV);
+
     if (!MONGO_URI) {
-      console.error('FATAL ERROR: MONGO_URI is not defined in .env file');
+      console.error('FATAL ERROR: MONGO_URI is not defined. Check .env file and dotenv configuration.');
+      console.error('Attempted to load .env from:', path.resolve(projectRootDir, '.env'));
       process.exit(1);
     }
 

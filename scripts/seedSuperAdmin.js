@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import process from 'node:process';
+import crypto from 'crypto';
 
 // Configure dotenv to find .env in the root directory
 const __filename = fileURLToPath(import.meta.url);
@@ -40,6 +41,7 @@ const seedSuperAdmin = async () => {
       role: 'superAdmin',
       status: 'active',
       tenantId: null,
+      authUid: crypto.randomUUID(),
     });
     await superAdmin.save(); // O hook pre-save fará o hash
     console.log(`Super Admin ${superAdminEmail} created successfully (password hashed by model)!`);

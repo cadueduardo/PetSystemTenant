@@ -197,6 +197,27 @@ A solução envolveu múltiplas camadas de firewall:
 - [PRODUCT CTRL] Controller `Product` (`product.controller.js`) atualizado para refletir mudanças no model (incluindo `type`, `sellingPrice`, `minStockLevel`, `stockQuantity`), e para usar `tenant_id`. Adicionado `handleProductError`.
 - [PRODUCT TEST] Criação de Produto (`POST /api/products`) testada com sucesso. Corrigido bug que causava erro de validação (`NaN`) para `administrationPrice` quando `null` era enviado.
 - [APPOINTMENT TEST] Criação de Agendamento (`POST /api/appointments`) testada com sucesso. Demais operações CRUD (GET, PUT, DELETE) pendentes e documentadas em "Testes Futuros por Coleção".
+- [SEGURANÇA] Servidor MongoDB recuperado após incidente de segurança (ransomware) que resultou em perda de dados. Autenticação (`authorization: enabled`), `bindIp: 127.0.0.1`, e `keyFile` para replica set foram (re)configurados em `/etc/mongod.conf`. Usuário administrador (`superAdminPetFacil`) recriado.
+- [SEGURANÇA VM] Firewall da Oracle Cloud (NSG/SL) ajustado para remover acesso público à porta 27017 e restringir SSH. Fail2Ban instalado e configurado na VM para monitorar logs SSH.
+- [CONEXÃO LOCAL] Túnel SSH (local:27018 -> vm:27017) estabelecido e estabilizado (com `ServerAliveInterval` e `ServerAliveCountMax`) como método principal de conexão para desenvolvimento local ao MongoDB na VM.
+- [ENV FIX] Corrigido carregamento da variável `MONGODB_URI` em `src/config/database.js` (problema de não carregamento inicial). Adicionado `dotenv.config({ path: path.resolve(process.cwd(), '.env') })` em `src/server.js` para garantir que as variáveis de ambiente sejam carregadas.
+- [ENV JWT] Adicionada `JWT_SECRET` ao arquivo `.env` local, resolvendo erro no login do SuperAdmin.
+- [ENV EMAIL] Credenciais SMTP (`EMAIL_USER`, `EMAIL_PASS`) configuradas no `.env`, permitindo o envio real de emails (testado com o fluxo de setup de senha do admin do tenant).
+- [SEED SUPERADMIN] Script `scripts/seedSuperAdmin.js` corrigido:
+    - Senha do `superAdminPetFacil` no MongoDB alterada para `test123` para evitar problemas com caracteres especiais na URI de conexão durante os testes iniciais.
+    - Geração do campo `authUid` implementada usando `crypto.randomUUID()`.
+    - Conexão ajustada para usar `localhost:27018` (túnel SSH) e `directConnection=true`.
+- [SERVER STARTUP] Erro `MongoServerSelectionError: Server selection timed out after 30000 ms` resolvido adicionando `&directConnection=true` à `MONGODB_URI` no arquivo `.env`.
+- [TENANT MODEL FIX] Campo `access_url` removido do `TenantForm.jsx`, `src/models/tenant.model.js` (incluindo seu índice) e `src/controllers/tenant.controller.js`.
+- [DB FIX] Índice duplicado `access_url_1` na coleção `tenants` (que impedia criação de tenant com `access_url: null`) removido manualmente via `mongosh`.
+- [ONBOARDING FLOW] Fluxo de criação de Tenant e Admin de Tenant, incluindo envio de email para setup de senha e a rota `POST /api/auth/setup-password`, totalmente testado e funcional.
+- [CORE DATA CREATION] Criação de Tutor (POST /api/users), Pet (POST /api/pets), e Serviços (POST /api/services - clínico e petshop) testada com sucesso como Admin de Tenant.
+- [APPOINTMENT & EPISODE FLOW - INÍCIO] Criação de Agendamento clínico (POST /api/appointments) e subsequente atualização de status para "Chegou" (PUT /api/appointments/:id) testadas.
+  - A mudança de status para "Chegou" disparou corretamente a criação automática de um Episódio clínico no backend Node.js/MongoDB.
+  - O `prontuarioId` ('PT-7d1b382809') foi gerado e associado ao Pet.
+  - O `_id` (ObjectId('6824e8e6ec6c3e1434047d41')) e `episodeNumber` ('EP-maob646d') do episódio criado foram identificados via acesso direto ao MongoDB.
+- [PERMISSIONS ISSUE] Identificado problema de permissão: Admin de Tenant (Carla) e até mesmo SuperAdmin não conseguem listar dados via `GET /api/episodes` (erro "Acesso proibido para esta função"). Requer investigação no middleware de autenticação/autorização e/ou na lógica do controller de episódio.
+- [ID GENERATION NOTE] Observada divergência na geração de `prontuarioId` e `episodeNumber` no backend Node.js/MongoDB (baseados em timestamp) versus o requisito de serem prefixos seguidos por sequências numéricas aleatórias únicas. Requer ajuste futuro.
 
 ---
 
@@ -808,38 +829,48 @@ Esta seção documenta os testes que ainda precisam ser executados para cada col
 ## Tenants
 - `GET /api/tenants` (Listar todos, SuperAdmin)
 - `GET /api/tenants/:id` (Buscar tenant específico, SuperAdmin)
+- `POST /api/tenants` (Criar tenant, SuperAdmin)
 - `PUT /api/tenants/:id` (Atualizar tenant, SuperAdmin)
 - `DELETE /api/tenants/:id` (Excluir tenant, SuperAdmin) - *Avaliar se será soft delete ou hard delete e as implicações.*
 
 ## Users
 - `GET /api/users` (Listar usuários, testar filtros: `role`, `tenant_id` (para SuperAdmin), `status`)
 - `GET /api/users/:id` (Buscar usuário específico)
+- `POST /api/users` (Criar usuário):
+  - SuperAdmin para Admins: [CONCLUÍDO - Admin de Tenant criado com sucesso como parte do fluxo de criação de Tenant.]
+  - Admin para Collaborators: [PENDENTE]
+  - Admin para Tutores: [CONCLUÍDO - Testado com sucesso pela Admin Carla.]
 - `PUT /api/users/:id` (Atualizar dados do usuário, testar diferentes roles e permissões)
 - `DELETE /api/users/:id` (Inativar/Excluir usuário - definir estratégia)
 - `POST /api/users/:userId/set-password` (Definir/resetar senha, SuperAdmin para Admins, Admin para Collaborators) - *Revalidar após fluxo de setup*
-- `POST /api/auth/setup-password` (Admin de Tenant configura senha via token) - *Revalidar*
+- `POST /api/auth/setup-password` (Admin de Tenant configura senha via token) - [CONCLUÍDO - Testado com sucesso para o admin do novo tenant.]
+- *Observação: Login (`POST /api/auth/login`) do SuperAdmin e Admin de Tenant também testados e funcionando.*
 
 ## Pets
 - `GET /api/pets` (Listar todos os pets do tenant)
 - `GET /api/pets/:id` (Buscar pet específico)
+- `POST /api/pets` (Criar pet)
 - `PUT /api/pets/:id` (Atualizar pet)
 - `DELETE /api/pets/:id` (Inativar pet)
 
 ## Appointments
 - `GET /api/appointments` (Listar agendamentos, testar filtros: `patient_id`, `owner_id`, `associated_vet_id`, `status`, `appointment_date` range)
 - `GET /api/appointments/:id` (Buscar agendamento específico)
+- `POST /api/appointments` (Criar agendamento)
 - `PUT /api/appointments/:id` (Atualizar agendamento, testar mudança de `status` e seus efeitos)
 - `DELETE /api/appointments/:id` (Cancelar/Excluir agendamento)
 
 ## Episodes
 - `GET /api/episodes` (Listar episódios, testar filtros: `patient_id`, `appointmentId`, `collaboratorId`, `status`)
 - `GET /api/episodes/:id` (Buscar episódio específico)
+- `POST /api/episodes` (Criação manual, se necessária)
 - `PUT /api/episodes/:id` (Atualizar episódio, ex: adicionar `diagnosis`, `treatment`, `prescription` items)
 - `DELETE /api/episodes/:id` (Cancelar/Excluir episódio - avaliar se permitido ou se apenas status muda)
 
 ## Services
 - `GET /api/services` (Listar todos os serviços do tenant)
 - `GET /api/services/:id` (Buscar serviço específico)
+- `POST /api/services` (Criar serviço)
 - `PUT /api/services/:id` (Atualizar serviço)
 - `DELETE /api/services/:id` (Inativar serviço)
 
@@ -877,7 +908,7 @@ Esta seção documenta os testes que ainda precisam ser executados para cada col
 
 ## Fortalecimento da Segurança do Servidor MongoDB (Pós-Incidente)
 
-Após a detecção de um acesso não autorizado e um ataque de ransomware à instância MongoDB, foram implementadas as seguintes medidas críticas de segurança na VM Oracle Cloud e na configuração do MongoDB:
+Após a detecção de um acesso não autorizado e um ataque de ransomware à instância MongoDB (que resultou na perda dos dados existentes e exigiu a recriação do usuário administrador e repopulação inicial de dados como o SuperAdmin da aplicação), foram implementadas as seguintes medidas críticas de segurança na VM Oracle Cloud e na configuração do MongoDB:
 
 **1. Configuração do MongoDB (`/etc/mongod.conf`):**
    - **Autenticação Ativada:**
@@ -936,11 +967,11 @@ Após a detecção de um acesso não autorizado e um ataque de ransomware à ins
     *   Autenticação habilitada.
     *   Acesso restrito a `127.0.0.1` (localhost da VM).
     *   Comunicação interna do replica set protegida por `keyFile`.
-    *   Usuário administrador criado.
-*   O firewall da Oracle Cloud (NSG e Security List) foi reconfigurado para bloquear acesso externo direto ao MongoDB (porta 27017) e restringir o acesso SSH.
+    *   Usuário administrador (`superAdminPetFacil`) recriado (senha temporariamente `test123`).
+*   O firewall da Oracle Cloud (NSG e Security List) foi reconfigurado para bloquear acesso externo direto ao MongoDB (porta 27017) e restringir SSH.
 *   Fail2Ban está ativo na VM, protegendo o serviço SSH.
-*   A aplicação Node.js rodando localmente na máquina do desenvolvedor **não consegue** se conectar ao MongoDB na VM devido à restrição do `bindIp` e ao bloqueio da porta 27017 no firewall da nuvem para IPs externos.
-*   O MongoDB Compass rodando localmente também **não consegue** se conectar diretamente pelos mesmos motivos.
+*   A aplicação Node.js rodando localmente na máquina do desenvolvedor **consegue** se conectar ao MongoDB na VM através de um túnel SSH.
+*   O MongoDB Compass rodando localmente também **consegue** se conectar através do túnel SSH.
 
 **Tarefas para Amanhã:**
 
@@ -948,21 +979,21 @@ Após a detecção de um acesso não autorizado e um ataque de ransomware à ins
     *   **Opção Principal (Recomendada para Desenvolvimento): Configurar um Túnel SSH.**
         *   **Instrução:** Criar um túnel SSH da máquina de desenvolvimento local para a VM Oracle Cloud. O comando geralmente é algo como:
           ```bash
-          ssh -i "C:\\path\\to\\your\\ssh-key.key" -L 27018:127.0.0.1:27017 ubuntu@YOUR_VM_PUBLIC_IP
+          ssh -i "C:\path\to\your\ssh-key.key" -L 27018:127.0.0.1:27017 ubuntu@YOUR_VM_PUBLIC_IP -o ServerAliveInterval=60 -o ServerAliveCountMax=3
           ```
           (Substituir `27018` por uma porta local de sua escolha se esta estiver ocupada, e ajustar o caminho da chave e o IP da VM).
         *   **Ação na Aplicação Node.js:** Atualizar a string de conexão no arquivo `.env` (ou onde ela estiver configurada) para apontar para a porta local do túnel:
           ```
-          DATABASE_URL="mongodb://superAdminPetFacil:SUA_SENHA_AQUI@127.0.0.1:27018/petfacil_app?authSource=admin&replicaSet=rs0"
+          DATABASE_URL="mongodb://superAdminPetFacil:test123@127.0.0.1:27018/petfacil_app?authSource=admin&replicaSet=rs0&directConnection=true"
           ```
           (Ajustar a porta se usou uma diferente de `27018`).
         *   **Ação no MongoDB Compass:** Configurar uma nova conexão.
             *   Hostname: `127.0.0.1`
             *   Port: `27018` (ou a porta local do túnel que você escolheu)
-            *   Authentication: `Username / Password` (com as credenciais do `superAdminPetFacil`)
+            *   Authentication: `Username / Password` (com as credenciais do `superAdminPetFacil` / `test123`)
             *   Auth Source: `admin`
             *   Replica Set Name: `rs0`
-            *   Na aba "Advanced Connection Options", se houver problemas, pode ser necessário ajustar "Direct Connection" para `true` ou `false` dependendo da configuração do túnel e do replica set.
+            *   Na aba "Advanced Connection Options", garantir que "Direct Connection" esteja como `True`.
             *   Se o Compass tiver uma opção nativa de "SSH Tunnel", usá-la preenchendo os dados da VM (IP, usuário, chave SSH) e os dados do MongoDB como se estivesse conectando de dentro da VM (host `127.0.0.1`, porta `27017`).
 
 2.  **Testar a Aplicação Node.js:**
@@ -983,3 +1014,61 @@ Após a detecção de um acesso não autorizado e um ataque de ransomware à ins
 
 5.  **(Opcional, mas Recomendado) Criar Usuário MongoDB Dedicado para a Aplicação:**
     *   Atualmente, a aplicação conectará com o `superAdminPetFacil`. Para maior segurança, criar um novo usuário MongoDB no banco `petfacil_app` com permissões mais restritas (ex: `readWrite` apenas para o banco `petfacil_app`) e usar essas credenciais na string de conexão da aplicação.
+
+---
+
+## Estado Atual Detalhado e Próximos Passos Imediatos (Sessão de 14/05/2025)
+
+**Resumo da Sessão:**
+A sessão focou em testar o fluxo de criação de dados dentro de um tenant, utilizando a administradora do tenant "Carla" (`carlass@gmail.com`). Foram criados com sucesso: um Tutor, um Pet (Rex), Serviços (clínico e petshop), e um Agendamento para o Pet Rex para o serviço clínico. A mudança de status do agendamento para "Chegou" disparou corretamente a criação automática de um Episódio clínico no backend Node.js/MongoDB. O `prontuarioId` ('PT-7d1b382809') foi gerado e associado ao Pet Rex. O `_id` (ObjectId('6824e8e6ec6c3e1434047d41')) e `episodeNumber` ('EP-maob646d') do episódio criado foram identificados via acesso direto ao MongoDB.
+
+**Estado Atual do Sistema e Dados de Teste Relevantes:**
+*   **Usuária Admin do Tenant:** Carla (`carlass@gmail.com`, senha definida anteriormente).
+*   **Tutor Criado:** "Nome Completo do Tutor" (`_id: "6824e4caec6c3e1434047d26"`).
+*   **Pet Criado:** "Rex" (`_id: "6824e5e0ec6c3e1434047d2a"`, `prontuarioId: 'PT-7d1b382809'`).
+*   **Serviço Clínico Criado:** "Consulta Clínica Geral" (`_id: "6824e766ec6c3e1434047d2d"`).
+*   **Agendamento Criado:** Para Rex, serviço "Consulta Clínica Geral" (`_id: "6824e840ec6c3e1434047d36"`), status atual "Chegou".
+*   **Episódio Clínico Criado Automaticamente:**
+    *   `_id`: `ObjectId('6824e8e6ec6c3e1434047d41')`
+    *   `appointmentId`: `ObjectId('6824e840ec6c3e1434047d36')`
+    *   `patient_id`: `ObjectId('6824e5e0ec6c3e1434047d2a')` (Rex)
+    *   `episodeNumber`: `'EP-maob646d'`
+    *   `status`: `'Aguardando Atendimento'`
+    *   `collaboratorId`: `null`
+
+**Próximos Passos Imediatos (para o próximo agente):**
+
+1.  **Renovar Autenticação:**
+    *   Obter um novo token JWT para a administradora do tenant, Carla (`carlass@gmail.com`), utilizando a rota `POST /api/auth/login`.
+
+2.  **Continuar Fluxo do Episódio Clínico:**
+    *   Utilizando o token da Carla, preencher os dados clínicos do episódio (`_id: ObjectId('6824e8e6ec6c3e1434047d41')`) através da rota `PUT /api/episodes/6824e8e6ec6c3e1434047d41`.
+    *   **Corpo da Requisição Sugerido (iniciar atendimento):**
+        ```json
+        {
+          "status": "Em Atendimento",
+          // "collaboratorId": "ID_DO_VET_SE_CADASTRADO_E_DISPONIVEL", // Opcional por agora
+          "clinicalSigns": "O pet apresenta tosse seca há 3 dias e apatia.",
+          "anamnesis": "Tutor relata que o pet teve contato com outros cães no parque no último fim de semana. Nenhuma alteração na alimentação ou ambiente. Vacinação e vermifugação em dia."
+        }
+        ```
+        *   Prosseguir com o preenchimento de `physicalExam`, `suspectedDiagnosis`, `diagnosis`, `treatment`, `prescription`, e finalmente mudar o status para `Concluído` (registrando `endTime`).
+
+3.  **Corrigir Problema de Permissão em Listagens (Urgente):**
+    *   Investigar e corrigir a falha "Acesso proibido para esta função" na rota `GET /api/episodes`.
+    *   **Ação:** Revisar o middleware de autenticação/autorização (`src/middlewares/auth.middleware.js` ou similar) e a lógica de checagem de `role` e `tenant_id` no início da função `getEpisodes` em `src/controllers/episode.controller.js`.
+    *   **Objetivo:** Garantir que um Admin de Tenant possa listar APENAS os episódios associados ao seu `tenant_id` (a filtragem por `tenant_id` já parece estar no lugar, o bloqueio ocorre antes). O SuperAdmin deve poder listar todos, opcionalmente com filtros.
+    *   Estender a correção para outras rotas de listagem (`GET /api/pets`, `GET /api/appointments`, `GET /api/services`, etc.) para garantir consistência nas permissões.
+
+4.  **Ajustar Geração de IDs Numéricos Aleatórios:**
+    *   Revisar a lógica de geração de `prontuarioId` em `src/controllers/episode.controller.js` (função `createEpisodeInternal`, ao lidar com o Pet) para que seja `PT-` seguido de uma sequência numérica aleatória (ex: 8 dígitos) única por tenant.
+        *   Considerar ler `functions/src/utils/generators.utils.ts` (se fornecido) para ver a lógica original do Firebase de `generateFormattedId`.
+        *   Implementar um mecanismo de tentativa e erro com verificação de unicidade no banco de dados para evitar colisões.
+    *   Revisar a lógica de geração de `episodeNumber` em `src/controllers/episode.controller.js` (função `createEpisodeInternal`) para que seja `EP-` (ou outro prefixo/sem prefixo) seguido de uma sequência numérica aleatória única por tenant (ou por prontuário). Mesmo princípio de unicidade e tentativa/erro.
+    *   Aplicar lógica similar para IDs de Ordens de Serviço (OS) quando este módulo for implementado.
+
+**Pendências de Médio Prazo (após passos imediatos):**
+*   Cadastrar um usuário Colaborador (Veterinário) e associá-lo a atendimentos.
+*   Testar o fluxo completo de um serviço de petshop, incluindo a criação de Ordem de Serviço (OS) a partir de um agendamento com status "Chegou".
+*   Implementar e testar o módulo de Cobranças (`Charges`), incluindo a criação de uma cobrança ao concluir um episódio ou OS.
+*   Validar todos os endpoints CRUD restantes para todas as coleções, conforme listado em "Testes Futuros por Coleção".

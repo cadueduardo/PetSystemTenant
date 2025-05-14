@@ -69,7 +69,6 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
     incentivador_cultural: false,
     business_type: "both",
     selected_modules: ["clinic_management", "petshop"],
-    access_url: "",
     status: "active",
     subscription_tier: "basic",
     payment_plan: "monthly",
@@ -109,7 +108,6 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
         incentivador_cultural: tenant.incentivador_cultural || false,
         business_type: tenant.business_type || "both",
         selected_modules: tenant.selected_modules || ["clinic_management", "petshop"],
-        access_url: tenant.access_url || "",
         status: tenant.status || "active",
         subscription_tier: tenant.subscription_tier || "basic",
         payment_plan: tenant.payment_plan || "monthly",
@@ -147,7 +145,6 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
         incentivador_cultural: false,
         business_type: "both",
         selected_modules: ["clinic_management", "petshop"],
-        access_url: "",
         status: "active",
         subscription_tier: "basic",
         payment_plan: "monthly",
@@ -162,36 +159,12 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
     }
   }, [tenant]);
 
-  const formatAccessUrl = (name) => {
-    return name
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "");
-  };
-
-  const generateUrl = () => {
-    if (!formData.company_name) return "";
-    
-    let baseUrl = formData.company_name
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]/g, "")
-      .substring(0, 20);
-    
-    return baseUrl;
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
     
     const finalFormData = {
       ...formData,
-      access_url: formData.access_url || generateUrl()
     };
 
     console.log("Dados a serem enviados para a Cloud Function:", finalFormData);
@@ -228,28 +201,20 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
     
-    if (name === "company_name") {
+    if (name.includes('.')) {
+      const [objectName, fieldName] = name.split('.');
       setFormData(prev => ({
         ...prev,
-        [name]: value,
-        access_url: formatAccessUrl(value)
+        [objectName]: {
+          ...prev[objectName],
+          [fieldName]: type === 'checkbox' ? checked : value
+        }
       }));
     } else {
-      if (name.includes('.')) {
-        const [objectName, fieldName] = name.split('.');
-        setFormData(prev => ({
-          ...prev,
-          [objectName]: {
-            ...prev[objectName],
-            [fieldName]: type === 'checkbox' ? checked : value
-          }
-        }));
-      } else {
-        setFormData(prev => ({
-          ...prev,
-          [name]: type === 'checkbox' ? checked : value
-        }));
-      }
+      setFormData(prev => ({
+        ...prev,
+        [name]: type === 'checkbox' ? checked : value
+      }));
     }
   };
 
@@ -594,24 +559,6 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
                     </p>
                   </div>
                   
-                  <div>
-                    <Label htmlFor="access_url">URL de Acesso Personalizada</Label>
-                    <div className="flex items-center">
-                      <span className="text-sm text-muted-foreground p-2 bg-muted rounded-l-md border border-r-0">
-                        app.petgestor.com.br/
-                      </span>
-                      <Input
-                        id="access_url"
-                        name="access_url"
-                        value={formData.access_url}
-                        onChange={handleChange}
-                        placeholder={generateUrl()}
-                        className="rounded-l-none"
-                      />
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">Será usado para o login da loja. Use apenas letras minúsculas e números.</p>
-                  </div>
-                  
                   <div className="flex justify-between mt-6">
                     <div></div>
                     <Button type="button" onClick={nextTab}>Próximo</Button>
@@ -711,32 +658,6 @@ export default function TenantForm({ open, onOpenChange, tenant, onSuccess }) {
                       </div>
                     </div>
                   </div>
-                </div>
-                
-                <div>
-                  <Label htmlFor="access_url">URL da Loja *</Label>
-                  <div className="flex">
-                    <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-300 bg-gray-50 text-gray-500">
-                      petmanager.com/
-                    </span>
-                    <Input
-                      id="access_url"
-                      name="access_url"
-                      value={formData.access_url}
-                      onChange={handleChange}
-                      className="rounded-l-none"
-                      required
-                    />
-                    <Button 
-                      type="button" 
-                      variant="outline" 
-                      onClick={generateUrl}
-                      className="ml-2"
-                    >
-                      Gerar
-                    </Button>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">Esta será a URL de acesso à loja</p>
                 </div>
                 
                 <div className="flex justify-between mt-6">
