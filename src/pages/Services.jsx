@@ -61,7 +61,7 @@ export default function Services() {
   const [services, setServices] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
-  const [selectedModule, setSelectedModule] = useState("all");
+  const [selectedType, setSelectedType] = useState("all");
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [serviceToDelete, setServiceToDelete] = useState(null);
   const [activeTab, setActiveTab] = useState("all");
@@ -89,14 +89,14 @@ export default function Services() {
       return;
     }
 
-    console.log(`[ServicesPage loadServicesPage] Loading. Dir: ${direction}, Size: ${newPageSize}, Page: ${currentPage}, Module: ${selectedModule}, Cat: ${selectedCategory}, Sort: ${sortBy} ${sortOrder}`);
+    console.log(`[ServicesPage loadServicesPage] Loading. Dir: ${direction}, Size: ${newPageSize}, Page: ${currentPage}, Type: ${selectedType}, Cat: ${selectedCategory}, Sort: ${sortBy} ${sortOrder}`);
     setIsLoadingPage(true);
     if (direction === 'current' || forFilters) setIsLoadingInitial(true);
 
     try {
       const filterParams = {
         tenant_id: tenantId,
-        module: selectedModule === 'all' ? null : selectedModule,
+        type: selectedType === 'all' ? null : selectedType,
         category: selectedCategory === 'all' ? null : selectedCategory,
         orderByField: sortBy,
         orderByDirection: sortOrder,
@@ -145,7 +145,7 @@ export default function Services() {
       setIsLoadingInitial(false);
       setIsLoadingPage(false);
     }
-  }, [selectedModule, selectedCategory, sortBy, sortOrder, pageSize, toast]);
+  }, [selectedType, selectedCategory, sortBy, sortOrder, pageSize, toast]);
 
   useEffect(() => {
     const tenantId = localStorage.getItem('current_tenant');
@@ -166,7 +166,7 @@ export default function Services() {
       console.log(`[ServicesPage] Filters/sort changed. Reloading.`);
       loadServicesPage('current', pageSize, true);
     }
-  }, [selectedModule, selectedCategory, activeTab, sortBy, sortOrder]);
+  }, [selectedType, selectedCategory, activeTab, sortBy, sortOrder]);
 
   const handleSearchChange = (e) => {
     setSearchQuery(e.target.value);
@@ -176,8 +176,8 @@ export default function Services() {
     setSelectedCategory(category);
   };
 
-  const handleModuleFilter = (module) => {
-    setSelectedModule(module);
+  const handleTypeFilter = (typeValue) => {
+    setSelectedType(typeValue);
     setSelectedCategory("all");
   };
 
@@ -266,13 +266,13 @@ export default function Services() {
           />
         </div>
         
-        <Select value={selectedModule} onValueChange={handleModuleFilter}>
+        <Select value={selectedType} onValueChange={handleTypeFilter}>
           <SelectTrigger className="w-full sm:w-40">
             <SelectValue placeholder="Módulo" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos Módulos</SelectItem>
-            <SelectItem value="clinica">Clínica</SelectItem>
+            <SelectItem value="clinical">Clínica</SelectItem>
             <SelectItem value="petshop">Petshop</SelectItem>
           </SelectContent>
         </Select>
@@ -283,7 +283,7 @@ export default function Services() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todas Categorias</SelectItem>
-            {(selectedModule === "clinica" || selectedModule === "all") && (
+            {(selectedType === "clinical" || selectedType === "all") && (
               <>
                 <SelectItem value="consultation">Consulta</SelectItem>
                 <SelectItem value="exam">Exame</SelectItem>
@@ -293,12 +293,12 @@ export default function Services() {
                 <SelectItem value="telemedicine">Telemedicina</SelectItem>
               </>
             )}
-            {(selectedModule === "petshop" || selectedModule === "all") && (
+            {(selectedType === "petshop" || selectedType === "all") && (
               <>
                 <SelectItem value="grooming">Banho e Tosa</SelectItem>
               </>
             )}
-             {selectedModule === "all" && (
+             {selectedType === "all" && (
               <>
                 <SelectItem value="consultation">Consulta</SelectItem>
                 <SelectItem value="exam">Exame</SelectItem>
@@ -328,7 +328,7 @@ export default function Services() {
           <DialogHeader>
             <DialogTitle>Confirmar exclusão</DialogTitle>
             <DialogDescription>
-              Tem certeza que deseja excluir o serviço "{serviceToDelete?.name}"?
+              {`Tem certeza que deseja excluir o serviço "${serviceToDelete?.name}"?`}
               Esta ação não pode ser desfeita.
             </DialogDescription>
           </DialogHeader>
@@ -416,13 +416,6 @@ export default function Services() {
                 <TableRow key={service.id}>
                   <TableCell>
                     <div className="flex items-center gap-3">
-                      {service.image_url && (
-                        <img
-                          src={service.image_url}
-                          alt={service.name}
-                          className="w-10 h-10 rounded object-cover"
-                        />
-                      )}
                       <div>
                         <p className="font-medium">{service.name}</p>
                         <p className="text-sm text-gray-500 truncate max-w-[200px]">

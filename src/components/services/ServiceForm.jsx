@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/use-toast";
 import { Loader2 } from "lucide-react";
-import { UploadFile } from "@/api/integrations";
+// import { UploadFile } from "@/api/integrations"; // REMOVED as it's no longer used
 import { collection, query, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebaseConfig";
 
@@ -36,9 +36,8 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
     price: "",
     duration: "",
     points: "",
-    image_url: "",
     tenant_id: localStorage.getItem('current_tenant'),
-    module: "petshop",
+    type: "petshop",
     is_active: true,
     required_specialty: NO_SPECIALTY_VALUE,
   });
@@ -53,12 +52,11 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
       const initialEditData = {
         name: service.name || "",
         description: service.description || "",
-        module: service.module || "petshop",
-        category: service.category || (service.module === 'clinica' ? 'consultation' : 'grooming'),
+        type: service.type || service.module || "petshop",
+        category: service.category || ((service.type || service.module) === 'clinical' || (service.type || service.module) === 'clinica' ? 'consultation' : 'grooming'),
         price: service.price?.toString() || "",
         duration: service.duration?.toString() || "",
         points: service.points?.toString() || "",
-        image_url: service.image_url || "",
         tenant_id: service.tenant_id || localStorage.getItem('current_tenant'),
         is_active: service.is_active !== undefined ? service.is_active : true,
         required_specialty: service.required_specialty || NO_SPECIALTY_VALUE,
@@ -69,12 +67,11 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
       const initialCreateData = {
         name: "",
         description: "",
-        module: "petshop",
+        type: "petshop",
         category: "grooming",
         price: "",
         duration: "",
         points: "",
-        image_url: "",
         tenant_id: localStorage.getItem('current_tenant'),
         is_active: true,
         required_specialty: NO_SPECIALTY_VALUE,
@@ -119,41 +116,17 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
     }));
   };
 
-  const handleImageChange = async (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      try {
-        const { file_url } = await UploadFile({ file });
-        setFormData(prev => ({
-          ...prev,
-          image_url: file_url
-        }));
-        toast({
-          title: "Imagem carregada",
-          description: "A imagem foi carregada com sucesso!"
-        });
-      } catch (error) {
-        console.error("Erro ao fazer upload da imagem:", error);
-        toast({
-          title: "Erro",
-          description: "Não foi possível fazer upload da imagem.",
-          variant: "destructive"
-        });
-      }
-    }
-  };
-
-  const handleModuleChange = (value) => {
-    console.log(`[ServiceForm handleModuleChange] Module changed by user to: ${value}`);
+  const handleTypeChange = (value) => {
+    console.log(`[ServiceForm handleTypeChange] Type changed by user to: ${value}`);
     
     setFormData(prev => {
       const newState = {
       ...prev,
-      module: value,
-        category: value === "clinica" ? "consultation" : "grooming",
-        required_specialty: value === "clinica" ? prev.required_specialty : NO_SPECIALTY_VALUE,
+      type: value,
+        category: value === "clinical" ? "consultation" : "grooming",
+        required_specialty: value === "clinical" ? prev.required_specialty : NO_SPECIALTY_VALUE,
       };
-      console.log("[ServiceForm handleModuleChange] New state calculated:", newState);
+      console.log("[ServiceForm handleTypeChange] New state calculated:", newState);
       return newState;
     });
   };
@@ -165,19 +138,26 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
     try {
       const tenantId = localStorage.getItem('current_tenant');
       const serviceData = {
-        ...formData,
+        name: formData.name,
+        description: formData.description,
+        type: formData.type,
+        category: formData.category,
         price: parseFloat(formData.price),
-        duration: parseInt(formData.duration),
-        points: parseInt(formData.points),
+        durationMinutes: parseInt(formData.duration),
+        points: formData.points ? parseInt(formData.points) : 0,
         tenant_id: tenantId,
-        required_specialty: formData.module === 'clinica' && formData.required_specialty !== NO_SPECIALTY_VALUE 
+        is_active: formData.is_active,
+        required_specialty: formData.type === 'clinical' && formData.required_specialty !== NO_SPECIALTY_VALUE 
                           ? formData.required_specialty 
                           : null,
       };
-
+      
       if (serviceData.required_specialty === null) {
         delete serviceData.required_specialty;
       }
+      if (isNaN(serviceData.price)) serviceData.price = 0;
+      if (isNaN(serviceData.durationMinutes)) serviceData.durationMinutes = 0;
+      if (isNaN(serviceData.points)) serviceData.points = 0;
 
       if (service?.id) {
         await Service.update(service.id, serviceData);
@@ -241,16 +221,16 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="module">Módulo*</Label>
+              <Label htmlFor="type">Módulo*</Label>
               <Select
-                value={formData.module}
-                onValueChange={handleModuleChange}
+                value={formData.type}
+                onValueChange={handleTypeChange}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Selecione o módulo" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="clinica">Clínica</SelectItem>
+                  <SelectItem value="clinical">Clínica</SelectItem>
                   <SelectItem value="petshop">Petshop</SelectItem>
                 </SelectContent>
               </Select>
@@ -267,7 +247,7 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
                   <SelectValue placeholder="Selecione uma categoria" />
                 </SelectTrigger>
                 <SelectContent>
-                  {formData.module === "clinica" ? (
+                  {formData.type === "clinical" ? (
                     <>
                       <SelectItem value="consultation">Consulta</SelectItem>
                       <SelectItem value="exam">Exame</SelectItem>
@@ -331,29 +311,7 @@ const ServiceForm = ({ service, open, onOpenChange, onSuccess }) => {
             />
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="image">Imagem do Serviço</Label>
-            <div className="flex items-center gap-4">
-              {formData.image_url && (
-                <img
-                  src={formData.image_url}
-                  alt="Preview"
-                  className="w-20 h-20 object-cover rounded"
-                />
-              )}
-              <div className="flex-1">
-                <Input
-                  id="image"
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageChange}
-                  className="cursor-pointer"
-                />
-              </div>
-            </div>
-          </div>
-
-          {formData.module === 'clinica' && (
+          {formData.type === 'clinical' && (
             <div className="space-y-2">
               <Label htmlFor="required_specialty">Especialidade Requerida*</Label>
               
